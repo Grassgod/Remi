@@ -235,6 +235,8 @@ export class BackgroundTasksRepo {
       const now = nowIso();
       const closed = payload.state === "closed";
       const parkedUntil = payload.state === "parked" ? payload.parked_until ?? null : null;
+      // The attempt whose process reported the lane: only it confirms the rows at the next hello.
+      const reporter = payload.state === "in_attempt" ? payload.attempt_id ?? null : null;
       const origins = new Map<string, string>();
       const origin = (attemptId: string): string => {
         if (!origins.has(attemptId)) {
@@ -258,17 +260,18 @@ export class BackgroundTasksRepo {
           const id = createId("bgt");
           const columns = ["id", "workspace_id", "session_id", "agent_id", "execution_scope", "runtime_id",
             "provider_session_id", "task_id", "origin_attempt_id", "origin_turn_id", ...VALUE_COLUMNS, "revision",
-            "created_at", "updated_at"];
+            "reported_attempt_id", "created_at", "updated_at"];
           this.ctx.db.run(`INSERT INTO multiremi_background_tasks (${columns.join(", ")})
             VALUES (${columns.map(() => "?").join(", ")})`,
           [id, workspaceId, ...lane, runtimeId, payload.provider_session_id, task.task_id, task.origin_attempt_id, originTurnId,
-            ...VALUE_COLUMNS.map((column) => values[column] ?? null), payload.revision, now, now]);
+            ...VALUE_COLUMNS.map((column) => values[column] ?? null), payload.revision, reporter, now, now]);
           changed.push(this.readRow(id));
         } else if (!sameValues(existing, values)) {
-          this.writeRow(String(existing.id), values, payload.revision, now);
+          this.writeRow(String(existing.id), values, payload.revision, now, reporter);
           changed.push(this.readRow(String(existing.id)));
         } else {
-          this.ctx.db.run("UPDATE multiremi_background_tasks SET revision = ? WHERE id = ?", [payload.revision, existing.id]);
+          this.ctx.db.run("UPDATE multiremi_background_tasks SET revision = ?, reported_attempt_id = ? WHERE id = ?",
+            [payload.revision, reporter, existing.id]);
         }
       }
       // The lane's fields repeat on its rows; a `closed` lane ends the rows it no longer lists.
@@ -284,6 +287,7 @@ export class BackgroundTasksRepo {
             duration_ms: elapsedMs(current.started_at, now), parked_until: null,
             stop_outcome: settledStopOutcome(current.stop_outcome) });
         }
+        // An unlisted row keeps its reporter: a snapshot confirms only the tasks it lists.
         if (sameValues(row, values)) continue;
         this.writeRow(current.id, values, Number(row.revision), now);
         changed.push(this.readRow(current.id));
@@ -295,11 +299,14 @@ export class BackgroundTasksRepo {
   }
 
   /**
-   * `hello`: every row of this runtime the server does not know to have ended
-   * is kept when an active attempt of its lane is on the daemon, or its lane is
-   * parked with the task listed; the rest is stopped as `daemon_restart`. A
-   * kept `unknown` row is live again. A daemon without the cap sends no parked
-   * lanes, so only active attempts keep rows.
+   * `hello`: a row of this runtime the server does not know to have ended is
+   * kept only when the daemon confirms it: its lane, provider session and task
+   * are in `parked_lanes`, or the attempt that last reported it (an
+   * `in_attempt` snapshot's `attempt_id`) is in `active_task_ids`. Another
+   * active attempt of the same lane does not count: after a restart it runs in
+   * a new process that does not hold the old tasks. The rest is stopped as
+   * `daemon_restart`. A kept `unknown` row is live again. A daemon without the
+   * cap sends no parked lanes, so only reporting attempts keep rows.
    */
   reconcileParkedLanes(runtimeId: string, parkedLanes: readonly DaemonParkedLane[], activeTaskIds: readonly string[]): number {
     const changed: Row[] = [];
@@ -307,13 +314,7 @@ export class BackgroundTasksRepo {
       const rows = this.ctx.db.query(`SELECT * FROM multiremi_background_tasks WHERE runtime_id = ? AND ${ALIVE_SQL}`)
         .all(runtimeId) as Row[];
       if (!rows.length) return;
-      const laneKey = (lane: DaemonLaneRef) => JSON.stringify([lane.session_id, lane.agent_id, lane.execution_scope ?? ""]);
-      const active = new Set<string>();
-      for (const id of new Set(activeTaskIds)) {
-        const turn = this.ctx.db.query(`SELECT t.session_id, t.agent_id, t.execution_scope FROM multiremi_turn_attempts a
-          JOIN multiremi_turns t ON t.id = a.turn_id WHERE a.id = ?`).get(id) as DaemonLaneRef | null;
-        if (turn) active.add(laneKey(turn));
-      }
+      const active = new Set(activeTaskIds);
       const parked = new Map<string, Set<string>>();
       for (const lane of parkedLanes) {
         const key = JSON.stringify([lane.session_id, lane.agent_id, lane.execution_scope, lane.provider_session_id]);
@@ -328,7 +329,8 @@ export class BackgroundTasksRepo {
         const parkedTasks = parked.get(JSON.stringify([current.session_id, current.agent_id, current.execution_scope,
           current.provider_session_id]));
         let revision = Number(row.revision);
-        if (active.has(laneKey(current)) || parkedTasks?.has(current.task_id)) {
+        const reporter = row.reported_attempt_id == null ? null : String(row.reported_attempt_id);
+        if ((reporter !== null && active.has(reporter)) || parkedTasks?.has(current.task_id)) {
           if (current.status !== "unknown") continue;
           values.status = "running";
           if (parkedTasks?.has(current.task_id)) values.lane_state = "parked";
@@ -348,20 +350,28 @@ export class BackgroundTasksRepo {
   }
 
   /**
-   * The maintenance sweep: running rows of a runtime without a heartbeat for
-   * {@link BACKGROUND_TASK_OFFLINE_UNKNOWN_MS} become `unknown` (a later
-   * `hello` settles them), and ended rows past the retention are deleted.
+   * The maintenance sweep. A row whose runtime no longer exists ends as
+   * `stopped` / `lost`: no `hello` can settle it. Running rows of a runtime
+   * without a heartbeat for {@link BACKGROUND_TASK_OFFLINE_UNKNOWN_MS} become
+   * `unknown` (a later `hello` settles them). Ended rows past the retention
+   * are deleted.
    */
-  sweep(now: number = Date.now()): { unknown: number; deleted: number } {
+  sweep(now: number = Date.now()): { unknown: number; lost: number; deleted: number } {
     const changed: Row[] = [];
+    let lost = 0;
     let deleted = 0;
     this.ctx.db.transaction(() => {
+      const at = new Date(now).toISOString();
+      const orphans = this.ctx.db.query(`SELECT b.* FROM multiremi_background_tasks b
+        LEFT JOIN multiremi_runtimes r ON r.id = b.runtime_id
+        WHERE b.status IN ('running','paused','unknown') AND r.id IS NULL`).all() as Row[];
+      for (const row of orphans) changed.push(this.endLost(row, at));
+      lost = orphans.length;
       const cutoff = new Date(now - BACKGROUND_TASK_OFFLINE_UNKNOWN_MS).toISOString();
       const rows = this.ctx.db.query(`SELECT b.* FROM multiremi_background_tasks b
-        LEFT JOIN multiremi_runtimes r ON r.id = b.runtime_id
-        WHERE b.status IN ('running','paused') AND (r.id IS NULL OR r.last_heartbeat_at IS NULL OR r.last_heartbeat_at < ?)`)
+        JOIN multiremi_runtimes r ON r.id = b.runtime_id
+        WHERE b.status IN ('running','paused') AND (r.last_heartbeat_at IS NULL OR r.last_heartbeat_at < ?)`)
         .all(cutoff) as Row[];
-      const at = new Date(now).toISOString();
       for (const row of rows) {
         this.writeRow(String(row.id), { ...this.currentValues(row), status: "unknown" }, Number(row.revision), at);
         changed.push(this.readRow(String(row.id)));
@@ -370,7 +380,32 @@ export class BackgroundTasksRepo {
         AND COALESCE(ended_at, updated_at) < ?`, [new Date(now - BACKGROUND_TASK_ENDED_RETENTION_MS).toISOString()]).changes;
     })();
     this.publish(changed);
-    return { unknown: changed.length, deleted };
+    return { unknown: changed.length - lost, lost, deleted };
+  }
+
+  /**
+   * A runtime is being deleted (the Runtime delete or daemon retirement, in
+   * the caller's transaction): every row of it the server does not know to
+   * have ended died with its daemon, so it ends as `stopped` / `lost` now
+   * rather than waiting in `unknown` for a `hello` that will never come.
+   */
+  endRuntimeTasksWithinTransaction(runtimeIds: readonly string[]): number {
+    if (!runtimeIds.length) return 0;
+    const rows = this.ctx.db.query(`SELECT * FROM multiremi_background_tasks
+      WHERE runtime_id IN (${runtimeIds.map(() => "?").join(",")}) AND ${ALIVE_SQL}`).all(...runtimeIds) as Row[];
+    const at = nowIso();
+    const changed = rows.map((row) => this.endLost(row, at));
+    this.publish(changed);
+    return changed.length;
+  }
+
+  /** End a row the server knows is gone: `stopped` / `lost`, its lane closed. */
+  private endLost(row: Row, at: string): Row {
+    const current = toBackgroundTask(row);
+    this.writeRow(current.id, { ...this.currentValues(row), status: "stopped", stop_reason: current.stop_reason ?? "lost",
+      ended_at: at, duration_ms: elapsedMs(current.started_at, at), lane_state: "closed", parked_until: null,
+      stop_outcome: settledStopOutcome(current.stop_outcome) }, Number(row.revision), at);
+    return this.readRow(current.id);
   }
 
   // ── Stop (spec §6) ────────────────────────────────────────────────────────
@@ -485,14 +520,14 @@ export class BackgroundTasksRepo {
    * `now`, deduplicated per task) and let the lane machine create, merge or
    * steer a turn. A created turn whose origin attempt had a Feishu card posts
    * proactively in the origin thread. A repeated call answers the first
-   * outcome, stored on the doorbell. Refusals: `session_closed`, `lane_moved`,
-   * `authority_revoked`.
+   * outcome, stored on the doorbell. Refusals: `session_closed`, `lane_moved`
+   * (also when the Chat has no provider session at all), `authority_revoked`.
    */
   laneBackgroundWake(runtimeId: string, workspaceId: string, payload: DaemonLaneBackgroundWakePayload): DaemonLaneBackgroundWakeReply {
     const events = createCommitEventQueue();
     const reply = this.ctx.db.transaction((): DaemonLaneBackgroundWakeReply => {
       this.ctx.lockWorkspaceRuntimeLifecycle(workspaceId);
-      const chat = this.ctx.db.query("SELECT workspace_id FROM multiremi_chat_sessions WHERE id = ?").get(payload.session_id) as Row | null;
+      const chat = this.ctx.db.query("SELECT workspace_id, session_id FROM multiremi_chat_sessions WHERE id = ?").get(payload.session_id) as Row | null;
       if (!chat) throw new BackgroundTaskError("session_closed", "the Chat no longer exists");
       if (String(chat.workspace_id) !== workspaceId) throw new BackgroundTaskError("authority_revoked", "the Chat belongs to another workspace");
       this.ctx.db.run("UPDATE multiremi_chat_sessions SET updated_at = updated_at WHERE id = ?", [payload.session_id]);
@@ -504,6 +539,9 @@ export class BackgroundTasksRepo {
       const reason = this.laneReleaseReason(payload, runtimeId, payload.provider_session_id);
       if (reason === "session_closed") throw new BackgroundTaskError("session_closed", "the Chat or its agent is closed");
       if (reason) throw new BackgroundTaskError("lane_moved", "the lane no longer runs this provider session here");
+      // No lineage (the lane's first turn was cancelled, or a stale session cleared it): the turn
+      // the doorbell would create starts a fresh session, so it can never attach to this process.
+      if (!chat.session_id) throw new BackgroundTaskError("lane_moved", "the Chat resumes no provider session");
       const origin = this.laneAttempt(payload.task.origin_attempt_id, payload, runtimeId, workspaceId);
       if (!origin) throw new BackgroundTaskError("authority_revoked", "origin attempt is not this lane's on this runtime");
       const active = this.ctx.db.query(`SELECT id, status, current_attempt_id FROM multiremi_turns WHERE ${LANE_SQL}
@@ -620,9 +658,12 @@ export class BackgroundTasksRepo {
     return this.ctx.db.query("SELECT * FROM multiremi_background_tasks WHERE id = ?").get(id) as Row;
   }
 
-  private writeRow(id: string, values: RowValues, revision: number, now: string): void {
+  /** `reporter` undefined keeps the row's reporting attempt. */
+  private writeRow(id: string, values: RowValues, revision: number, now: string, reporter?: string | null): void {
+    const reported = reporter === undefined ? [] : [reporter];
     this.ctx.db.run(`UPDATE multiremi_background_tasks SET ${VALUE_COLUMNS.map((column) => `${column} = ?`).join(", ")},
-      revision = ?, updated_at = ? WHERE id = ?`, [...VALUE_COLUMNS.map((column) => values[column] ?? null), revision, now, id]);
+      revision = ?, ${reporter === undefined ? "" : "reported_attempt_id = ?, "}updated_at = ? WHERE id = ?`,
+    [...VALUE_COLUMNS.map((column) => values[column] ?? null), revision, ...reported, now, id]);
   }
 
   /** At most {@link BACKGROUND_TASK_ENDED_PER_SESSION} ended rows per session, newest kept. */

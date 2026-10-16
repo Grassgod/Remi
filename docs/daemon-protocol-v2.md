@@ -275,16 +275,19 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
   摘要、输出末尾按 trace 条目的上限截断。每行记下写它的快照 `revision`，更旧的快照不覆盖；只有 revision 变化的
   快照只更新 revision，不发事件。`closed` 快照把仍在运行的行（列出与否）写成 `stopped` / `lost`。行有可见变化时
   重算该 runtime 的下行。没有协商能力位的连接发来的此帧被忽略，与旧服务端相同。
-- **`hello` 对账**：对本连接服务的每个 runtime，登记表里尚未知结束的行（`running` / `paused` / `unknown`）若属于
-  hello `active_task_ids` 中某尝试所在的会话线，或其会话线与任务列在 `parked_lanes` 中，则保留（`unknown` 恢复为
-  `running`）；其余写成 `stopped` / `daemon_restart`，revision 归零，以便重启后的 daemon 重新从小 revision 计数、复用任务 id。
-  未声明能力位的 daemon 视为没有保留的会话线。
+- **`hello` 对账**：对本连接服务的每个 runtime，登记表里尚未知结束的行（`running` / `paused` / `unknown`）只有得到
+  daemon 确认才保留（`unknown` 恢复为 `running`）：其会话线、`provider_session_id` 与任务列在 `parked_lanes` 中，或最后
+  上报它的尝试（`in_attempt` 快照的 `attempt_id`，记在行的 `reported_attempt_id`，快照只确认它列出的任务）在
+  `active_task_ids` 中。同一会话线的其他活跃尝试不算：重启后它跑在不持有旧任务的新进程里。其余写成 `stopped` /
+  `daemon_restart`，revision 归零，以便重启后的 daemon 重新从小 revision 计数、复用任务 id。未声明能力位的 daemon
+  视为没有保留的会话线。
 - **离线清扫**：维护清扫（每 60 s，随后台任务开关）把 runtime 超过 10 分钟没有心跳的运行中行写成 `unknown`，
-  下一次 `hello` 对账收口；同一清扫删掉结束超过 7 天的行。
+  下一次 `hello` 对账收口；runtime 已不存在的尚未结束的行（含 `unknown`）直接写成 `stopped` / `lost`；同一清扫删掉结束
+  超过 7 天的行。删除 Runtime 与 daemon 退役在各自事务里就把该 runtime 的这些行写成 `stopped` / `lost`。
 - **`lane.background_wake`**：在一个事务里依次取工作区生命周期锁、Chat 行锁与会话线锁（与写消息的顺序一致）。
   同一任务的重复调用命中去重键 `bg:{agent_id}:{execution_scope}:{task_id}`，原样答第一次的结果（存于门铃消息
   `metadata.background_wake`）。否则校验会话线：Chat 已删除或归档、Agent 已删除或归档答 `session_closed`；Chat 的
-  会话谱系（`session_id`、`session_runtime_id`）指向别的 provider 会话或 runtime，或会话线最新尝试跑在别的 runtime、
+  会话谱系（`session_id`、`session_runtime_id`）为空或指向别的 provider 会话或 runtime，或会话线最新尝试跑在别的 runtime、
   持有别的 provider 会话、是冷替换（无会话且未带触发，与轮输入的判断相同），答 `lane_moved`；来源尝试不属于这条
   会话线与 runtime 答 `authority_revoked`。随后以平台身份写门铃：`message_kind: "status"`、`wake_requested: "now"`、
   正文 `backgroundDoorbellBody`、`metadata.background_task`（`BackgroundTaskDoorbellMetadata`，含来源轮），交给常规
@@ -296,8 +299,8 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
 - **下行推导**：每次下行运行都从登记表重算，只对协商了能力位的连接：`lane.background_stop` 是成员提出且 daemon
   尚未答复（`stop_outcome` 为空或 `pending`）的停止，键为会话线、任务与请求时刻，新的请求是新实体；
   `lane.background_release` 针对驻留（`parked`）会话线中尚未知结束的行，原因 `session_closed` / `lane_reset`
-  的判定与门铃的会话线校验相同（只认正面证据：尚无谱系的会话线与配置变化留给 daemon 在下一次 offer 时判定，后者报
-  `config_changed`）。一个 Chat 任务入队（冷重试、换 runtime）时重算持有其会话行的 runtime 的下行。
+  的判定与门铃的会话线校验相同，只是只认正面证据：尚无谱系的会话线（门铃对它答 `lane_moved`）与配置变化留给 daemon
+  在下一次 offer 时判定，后者报 `config_changed`。一个 Chat 任务入队（冷重试、换 runtime）时重算持有其会话行的 runtime 的下行。
 - **实时事件** `chat:background_tasks`：登记表的可见变化在提交后推给 Chat 创建者，载荷
   `{chat_session_id, session_id, running, rows}`，`rows` 是本次变化的整行（按 `id` 合并），`running` 是该会话运行中与
   暂停的行数（发送时读）；与 `task:subagents` 一样不唤醒 daemon 下行或 offer。
