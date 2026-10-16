@@ -235,6 +235,8 @@ export class BackgroundTasksRepo {
       const now = nowIso();
       const closed = payload.state === "closed";
       const parkedUntil = payload.state === "parked" ? payload.parked_until ?? null : null;
+      // The attempt whose process reported the lane: only it confirms the rows at the next hello.
+      const reporter = payload.state === "in_attempt" ? payload.attempt_id ?? null : null;
       const origins = new Map<string, string>();
       const origin = (attemptId: string): string => {
         if (!origins.has(attemptId)) {
@@ -258,17 +260,18 @@ export class BackgroundTasksRepo {
           const id = createId("bgt");
           const columns = ["id", "workspace_id", "session_id", "agent_id", "execution_scope", "runtime_id",
             "provider_session_id", "task_id", "origin_attempt_id", "origin_turn_id", ...VALUE_COLUMNS, "revision",
-            "created_at", "updated_at"];
+            "reported_attempt_id", "created_at", "updated_at"];
           this.ctx.db.run(`INSERT INTO multiremi_background_tasks (${columns.join(", ")})
             VALUES (${columns.map(() => "?").join(", ")})`,
           [id, workspaceId, ...lane, runtimeId, payload.provider_session_id, task.task_id, task.origin_attempt_id, originTurnId,
-            ...VALUE_COLUMNS.map((column) => values[column] ?? null), payload.revision, now, now]);
+            ...VALUE_COLUMNS.map((column) => values[column] ?? null), payload.revision, reporter, now, now]);
           changed.push(this.readRow(id));
         } else if (!sameValues(existing, values)) {
-          this.writeRow(String(existing.id), values, payload.revision, now);
+          this.writeRow(String(existing.id), values, payload.revision, now, reporter);
           changed.push(this.readRow(String(existing.id)));
         } else {
-          this.ctx.db.run("UPDATE multiremi_background_tasks SET revision = ? WHERE id = ?", [payload.revision, existing.id]);
+          this.ctx.db.run("UPDATE multiremi_background_tasks SET revision = ?, reported_attempt_id = ? WHERE id = ?",
+            [payload.revision, reporter, existing.id]);
         }
       }
       // The lane's fields repeat on its rows; a `closed` lane ends the rows it no longer lists.
@@ -284,6 +287,7 @@ export class BackgroundTasksRepo {
             duration_ms: elapsedMs(current.started_at, now), parked_until: null,
             stop_outcome: settledStopOutcome(current.stop_outcome) });
         }
+        // An unlisted row keeps its reporter: a snapshot confirms only the tasks it lists.
         if (sameValues(row, values)) continue;
         this.writeRow(current.id, values, Number(row.revision), now);
         changed.push(this.readRow(current.id));
@@ -295,11 +299,14 @@ export class BackgroundTasksRepo {
   }
 
   /**
-   * `hello`: every row of this runtime the server does not know to have ended
-   * is kept when an active attempt of its lane is on the daemon, or its lane is
-   * parked with the task listed; the rest is stopped as `daemon_restart`. A
-   * kept `unknown` row is live again. A daemon without the cap sends no parked
-   * lanes, so only active attempts keep rows.
+   * `hello`: a row of this runtime the server does not know to have ended is
+   * kept only when the daemon confirms it: its lane, provider session and task
+   * are in `parked_lanes`, or the attempt that last reported it (an
+   * `in_attempt` snapshot's `attempt_id`) is in `active_task_ids`. Another
+   * active attempt of the same lane does not count: after a restart it runs in
+   * a new process that does not hold the old tasks. The rest is stopped as
+   * `daemon_restart`. A kept `unknown` row is live again. A daemon without the
+   * cap sends no parked lanes, so only reporting attempts keep rows.
    */
   reconcileParkedLanes(runtimeId: string, parkedLanes: readonly DaemonParkedLane[], activeTaskIds: readonly string[]): number {
     const changed: Row[] = [];
@@ -307,13 +314,7 @@ export class BackgroundTasksRepo {
       const rows = this.ctx.db.query(`SELECT * FROM multiremi_background_tasks WHERE runtime_id = ? AND ${ALIVE_SQL}`)
         .all(runtimeId) as Row[];
       if (!rows.length) return;
-      const laneKey = (lane: DaemonLaneRef) => JSON.stringify([lane.session_id, lane.agent_id, lane.execution_scope ?? ""]);
-      const active = new Set<string>();
-      for (const id of new Set(activeTaskIds)) {
-        const turn = this.ctx.db.query(`SELECT t.session_id, t.agent_id, t.execution_scope FROM multiremi_turn_attempts a
-          JOIN multiremi_turns t ON t.id = a.turn_id WHERE a.id = ?`).get(id) as DaemonLaneRef | null;
-        if (turn) active.add(laneKey(turn));
-      }
+      const active = new Set(activeTaskIds);
       const parked = new Map<string, Set<string>>();
       for (const lane of parkedLanes) {
         const key = JSON.stringify([lane.session_id, lane.agent_id, lane.execution_scope, lane.provider_session_id]);
@@ -328,7 +329,8 @@ export class BackgroundTasksRepo {
         const parkedTasks = parked.get(JSON.stringify([current.session_id, current.agent_id, current.execution_scope,
           current.provider_session_id]));
         let revision = Number(row.revision);
-        if (active.has(laneKey(current)) || parkedTasks?.has(current.task_id)) {
+        const reporter = row.reported_attempt_id == null ? null : String(row.reported_attempt_id);
+        if ((reporter !== null && active.has(reporter)) || parkedTasks?.has(current.task_id)) {
           if (current.status !== "unknown") continue;
           values.status = "running";
           if (parkedTasks?.has(current.task_id)) values.lane_state = "parked";
@@ -620,9 +622,12 @@ export class BackgroundTasksRepo {
     return this.ctx.db.query("SELECT * FROM multiremi_background_tasks WHERE id = ?").get(id) as Row;
   }
 
-  private writeRow(id: string, values: RowValues, revision: number, now: string): void {
+  /** `reporter` undefined keeps the row's reporting attempt. */
+  private writeRow(id: string, values: RowValues, revision: number, now: string, reporter?: string | null): void {
+    const reported = reporter === undefined ? [] : [reporter];
     this.ctx.db.run(`UPDATE multiremi_background_tasks SET ${VALUE_COLUMNS.map((column) => `${column} = ?`).join(", ")},
-      revision = ?, updated_at = ? WHERE id = ?`, [...VALUE_COLUMNS.map((column) => values[column] ?? null), revision, now, id]);
+      revision = ?, ${reporter === undefined ? "" : "reported_attempt_id = ?, "}updated_at = ? WHERE id = ?`,
+    [...VALUE_COLUMNS.map((column) => values[column] ?? null), revision, ...reported, now, id]);
   }
 
   /** At most {@link BACKGROUND_TASK_ENDED_PER_SESSION} ended rows per session, newest kept. */

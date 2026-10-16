@@ -275,10 +275,12 @@ daemon 才在尝试结束后保留仍有后台任务的 Chat 会话线进程，�
   摘要、输出末尾按 trace 条目的上限截断。每行记下写它的快照 `revision`，更旧的快照不覆盖；只有 revision 变化的
   快照只更新 revision，不发事件。`closed` 快照把仍在运行的行（列出与否）写成 `stopped` / `lost`。行有可见变化时
   重算该 runtime 的下行。没有协商能力位的连接发来的此帧被忽略，与旧服务端相同。
-- **`hello` 对账**：对本连接服务的每个 runtime，登记表里尚未知结束的行（`running` / `paused` / `unknown`）若属于
-  hello `active_task_ids` 中某尝试所在的会话线，或其会话线与任务列在 `parked_lanes` 中，则保留（`unknown` 恢复为
-  `running`）；其余写成 `stopped` / `daemon_restart`，revision 归零，以便重启后的 daemon 重新从小 revision 计数、复用任务 id。
-  未声明能力位的 daemon 视为没有保留的会话线。
+- **`hello` 对账**：对本连接服务的每个 runtime，登记表里尚未知结束的行（`running` / `paused` / `unknown`）只有得到
+  daemon 确认才保留（`unknown` 恢复为 `running`）：其会话线、`provider_session_id` 与任务列在 `parked_lanes` 中，或最后
+  上报它的尝试（`in_attempt` 快照的 `attempt_id`，记在行的 `reported_attempt_id`，快照只确认它列出的任务）在
+  `active_task_ids` 中。同一会话线的其他活跃尝试不算：重启后它跑在不持有旧任务的新进程里。其余写成 `stopped` /
+  `daemon_restart`，revision 归零，以便重启后的 daemon 重新从小 revision 计数、复用任务 id。未声明能力位的 daemon
+  视为没有保留的会话线。
 - **离线清扫**：维护清扫（每 60 s，随后台任务开关）把 runtime 超过 10 分钟没有心跳的运行中行写成 `unknown`，
   下一次 `hello` 对账收口；同一清扫删掉结束超过 7 天的行。
 - **`lane.background_wake`**：在一个事务里依次取工作区生命周期锁、Chat 行锁与会话线锁（与写消息的顺序一致）。

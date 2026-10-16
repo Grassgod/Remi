@@ -120,7 +120,9 @@ const sqlList = (values: readonly string[]) => values.map(value => `'${value}'`)
  *
  * One row per task of a Chat lane's provider session, fed by the daemon's
  * best-effort `lane.background_tasks` snapshots. `revision` is the snapshot
- * that last wrote the row; an older one never overwrites it. The lane fields
+ * that last wrote the row; an older one never overwrites it, and
+ * `reported_attempt_id` the attempt whose `in_attempt` snapshot wrote it (null
+ * while parked), which alone confirms the row at `hello`. The lane fields
  * (`lane_state`, `parked_until`) repeat on every row of the lane. A person's
  * stop request is `stop_requested_at` / `stop_requested_by` (a member id;
  * NULL when Remi stopped it) and `stop_outcome` the daemon's answer.
@@ -141,7 +143,7 @@ CREATE TABLE IF NOT EXISTS multiremi_background_tasks (
   started_at TEXT NOT NULL, ended_at TEXT, duration_ms BIGINT, summary TEXT, output_tail TEXT,
   output_unreadable INTEGER NOT NULL DEFAULT 0, usage TEXT,
   lane_state TEXT NOT NULL CHECK(lane_state IN (${sqlList(BACKGROUND_LANE_STATES)})), parked_until TEXT,
-  revision BIGINT NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+  revision BIGINT NOT NULL DEFAULT 0, reported_attempt_id TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
   UNIQUE(session_id, agent_id, execution_scope, provider_session_id, task_id)
 );
 CREATE INDEX IF NOT EXISTS idx_multiremi_background_tasks_runtime ON multiremi_background_tasks(runtime_id, status);

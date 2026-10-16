@@ -293,6 +293,35 @@ for (const backend of backends) {
       } finally { await opened.close(); }
     }, TIMEOUT);
 
+    it("keeps no ghost at hello: another active attempt of the lane confirms nothing it did not report", async () => {
+      const opened = await backend.open();
+      try {
+        const { store } = opened;
+        const world = backgroundWorld(store);
+        // Parked after the first attempt; the daemon then restarted and took a new turn on the lane.
+        snapshotFor(world, 1, [laneTask(world, { task_id: "parked-1" })]);
+        const first = runAttempt(store, world.runtimeId, world.chatId, "check the server");
+        const lane = { runtime_id: world.runtimeId, session_id: world.chatId, agent_id: world.agentId, execution_scope: "",
+          provider_session_id: PROVIDER_SESSION, state: "in_attempt" as const, tasks: [] };
+        // The first attempt reported its own task while it ran.
+        store.upsertLaneBackgroundSnapshot(world.runtimeId, "local", { ...lane, revision: 2, attempt_id: first.id,
+          tasks: [laneTask(world, { task_id: "first-1", origin_attempt_id: first.id })] });
+        store.completeTask(first.id, { output: "done", sessionId: PROVIDER_SESSION });
+        const second = runAttempt(store, world.runtimeId, world.chatId, "and the logs");
+        // The second attempt lists only its own task; the unlisted rows keep their reporters.
+        store.upsertLaneBackgroundSnapshot(world.runtimeId, "local", { ...lane, revision: 3, attempt_id: second.id,
+          tasks: [laneTask(world, { task_id: "second-1", origin_attempt_id: second.id })] });
+
+        const harness = await daemonHarness(store, world, { parkedLanes: [], activeTaskIds: [second.id] });
+        harness.close();
+        const byId = new Map(rows(store, world.chatId).map((row) => [row.task_id, row]));
+        expect(byId.get("second-1")).toMatchObject({ status: "running", lane_state: "in_attempt" });
+        for (const id of ["parked-1", "first-1"]) {
+          expect(byId.get(id)).toMatchObject({ status: "stopped", stop_reason: "daemon_restart", lane_state: "closed" });
+        }
+      } finally { await opened.close(); }
+    }, TIMEOUT);
+
     it("sweeps offline runtimes to unknown and keeps ended rows 7 days, at most 50 per session", async () => {
       const opened = await backend.open();
       try {
