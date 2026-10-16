@@ -111,6 +111,8 @@ interface LaneTask {
   /** Remi's own reason when it stopped the task (the lane's, §2.7). */
   stopReason: BackgroundTaskStopReason | null;
   outputTail: string | null;
+  /** The output file is there but cannot be read (`output_unreadable`). */
+  outputUnreadable: boolean;
   /** The doorbell for this task's end went out (one per task). */
   rang: boolean;
 }
@@ -623,7 +625,7 @@ export class ParkedLanes {
     const previous = record.tasks.get(snapshot.id);
     const task: LaneTask = previous ?? {
       snapshot, originAttemptId: record.attemptId ?? record.lastAttemptId,
-      stopReason: null, outputTail: null, rang: false,
+      stopReason: null, outputTail: null, outputUnreadable: false, rang: false,
     };
     const wasLive = previous ? isLive(previous.snapshot.state) : false;
     task.snapshot = snapshot;
@@ -725,6 +727,7 @@ export class ParkedLanes {
         privateTmpDirectory: record.resources.privateTmpPath, intervalMs,
         onTail: (tail: OutputTail) => {
           task.outputTail = tail.tail;
+          task.outputUnreadable = tail.unreadable === true;
           this.internals.get(record)?.hooks?.output(task.snapshot.id, tail.tail, tail.truncated);
           this.scheduleSnapshot(record, false);
         } });
@@ -874,7 +877,7 @@ export class ParkedLanes {
       stop_reason: status === "stopped" ? task.stopReason ?? (snapshot.stop?.by === "user" ? "user" : null) : null,
       started_at: new Date(snapshot.startedAt).toISOString(), ended_at: iso(snapshot.endedAt),
       duration_ms: snapshot.endedAt !== null ? Math.max(0, snapshot.endedAt - snapshot.startedAt) : null,
-      summary: snapshot.summary, output_tail: task.outputTail,
+      summary: snapshot.summary, output_tail: task.outputTail, ...(task.outputUnreadable ? { output_unreadable: true } : {}),
       usage: snapshot.usage ? { total_tokens: snapshot.usage.totalTokens, tool_uses: snapshot.usage.toolUses,
         duration_ms: snapshot.usage.durationMs } : null,
     };

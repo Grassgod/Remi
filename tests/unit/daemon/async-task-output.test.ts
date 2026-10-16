@@ -4,10 +4,10 @@
  * that name, with the Linux private `/tmp` mapped, refreshed when it grew.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { AsyncTaskOutputTailer, isTaskOutputPath, readTaskOutputTail } from "@multiremi/worker/async-task-output.js";
+import { AsyncTaskOutputTailer, isTaskOutputPath, readTaskOutputTail, type OutputTail } from "@multiremi/worker/async-task-output.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -32,7 +32,7 @@ describe("readTaskOutputTail", () => {
   it("keeps the last 4 KiB from a line start", () => {
     const lines = Array.from({ length: 1000 }, (_, index) => `line ${index}`).join("\n") + "\n";
     const { path } = outputFile("bash-1", lines);
-    const read = readTaskOutputTail(path, "bash-1")!;
+    const read = readTaskOutputTail(path, "bash-1") as OutputTail & { size: number };
     expect(read.truncated).toBe(true);
     expect(Buffer.byteLength(read.tail!)).toBeLessThanOrEqual(4096);
     expect(read.tail!.startsWith("line ")).toBe(true);
@@ -48,8 +48,23 @@ describe("readTaskOutputTail", () => {
     writeFileSync(secret, "secret");
     const link = join(dir, "tasks", "bash-9.output");
     symlinkSync(secret, link);
-    expect(readTaskOutputTail(link, "bash-9")).toBeNull();
+    // There, but never followed: unreadable, not absent.
+    expect(readTaskOutputTail(link, "bash-9")).toEqual({ unreadable: true });
+    mkdirSync(join(dir, "tasks", "bash-8.output"));
+    expect(readTaskOutputTail(join(dir, "tasks", "bash-8.output"), "bash-8")).toEqual({ unreadable: true });
+    expect(readTaskOutputTail(join(dir, "tasks", "bash-7.output"), "bash-7")).toBeNull();
+    expect(readTaskOutputTail(join(dir, "nowhere", "tasks", "bash-7.output"), "bash-7")).toBeNull();
     expect(readTaskOutputTail("relative/tasks/bash-1.output", "bash-1")).toBeNull();
+  });
+
+  it.skipIf(process.getuid?.() === 0)("reports a file it has no permission to read as unreadable", () => {
+    const { path } = outputFile("bash-1", "private\n");
+    chmodSync(path, 0o000);
+    try {
+      expect(readTaskOutputTail(path, "bash-1")).toEqual({ unreadable: true });
+    } finally {
+      chmodSync(path, 0o600);
+    }
   });
 
   it("maps /tmp to the lane's private temp dir on Linux", () => {
@@ -72,5 +87,29 @@ describe("AsyncTaskOutputTailer", () => {
     expect(tails).toEqual(["a\n", "a\nb\n"]);
     tailer.stop();
     expect(tailer.size).toBe(0);
+  });
+
+  it("reports an unreadable file once, its tail once readable again, and a null tail once it is gone", async () => {
+    const { dir, path } = outputFile("bash-1", "a\n");
+    const secret = join(dir, "secret.txt");
+    writeFileSync(secret, "secret");
+    rmSync(path);
+    symlinkSync(secret, path);
+    const tailer = new AsyncTaskOutputTailer();
+    const tails: OutputTail[] = [];
+    tailer.watch("lane:bash-1", { path, taskId: "bash-1", intervalMs: 20, onTail: (tail) => tails.push(tail) });
+    await Bun.sleep(80);
+    expect(tails).toEqual([{ tail: null, truncated: false, unreadable: true }]);
+    rmSync(path);
+    writeFileSync(path, "a\n");
+    await Bun.sleep(60);
+    expect(tails.at(-1)).toEqual({ tail: "a\n", truncated: false });
+    rmSync(path);
+    await Bun.sleep(60);
+    // The same size again after a gap is reported again.
+    writeFileSync(path, "b\n");
+    await Bun.sleep(60);
+    tailer.stop();
+    expect(tails.slice(1)).toEqual([{ tail: "a\n", truncated: false }, { tail: null, truncated: false }, { tail: "b\n", truncated: false }]);
   });
 });

@@ -9,8 +9,8 @@
  * Bounded: at most {@link MAX_TAILED_TASKS} tasks per daemon. Only a regular
  * file whose path ends in `/tasks/<asyncTaskId>.output` is read. On Linux the
  * bridge sees a private `/tmp` (`@acp/private-tmp`), so a path under `/tmp/`
- * maps to the lane's private temp directory. A file that cannot be read gives
- * a null tail.
+ * maps to the lane's private temp directory. A missing file gives a null
+ * tail; one that exists but cannot be read is reported as `unreadable`.
  */
 import { closeSync, fstatSync, lstatSync, openSync, readSync } from "node:fs";
 import { constants } from "node:fs";
@@ -27,7 +27,12 @@ export const OUTPUT_TAIL_PARKED_MS = 10_000;
 export interface OutputTail {
   tail: string | null;
   truncated: boolean;
+  /** The output file exists but cannot be read (the tail is then null). */
+  unreadable?: true;
 }
+
+/** A read of a task's output file: its tail, `unreadable` when it exists but cannot be read, null when absent. */
+export type TaskOutputRead = (OutputTail & { size: number }) | { unreadable: true } | null;
 
 /** Whether `path` is a task output file of `taskId` (the bridge's own naming). */
 export function isTaskOutputPath(path: string, taskId: string): boolean {
@@ -37,20 +42,23 @@ export function isTaskOutputPath(path: string, taskId: string): boolean {
 
 /**
  * The last {@link TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES} of a task's
- * output file, from a line start; null when it is not a readable regular
- * output file of `taskId`. `size` is the file size the tail was read at.
+ * output file, from a line start. `size` is the file size the tail was read
+ * at. `{ unreadable: true }` when the file exists but is not a regular file
+ * this can read (a link is never followed); null when the path is not an
+ * output file of `taskId`, or no file is there.
  */
 export function readTaskOutputTail(path: string, taskId: string, privateTmpDirectory?: string | null,
-  platform: NodeJS.Platform = process.platform): (OutputTail & { size: number }) | null {
+  platform: NodeJS.Platform = process.platform): TaskOutputRead {
   if (!isTaskOutputPath(path, taskId)) return null;
   const local = mapPrivateTmpPath(path, privateTmpDirectory ?? undefined, platform);
+  const unreadable = { unreadable: true } as const;
   let fd: number | null = null;
   try {
     // No symlink is followed: the bridge writes the file itself.
-    if (!lstatSync(local).isFile()) return null;
+    if (!lstatSync(local).isFile()) return unreadable;
     fd = openSync(local, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
     const stat = fstatSync(fd);
-    if (!stat.isFile()) return null;
+    if (!stat.isFile()) return unreadable;
     const max = TRACE_BACKGROUND_TASK_OUTPUT_TAIL_MAX_BYTES;
     // One byte more than the cap tells whether the tail was cut.
     const length = Math.min(stat.size, max + 1);
@@ -63,8 +71,9 @@ export function readTaskOutputTail(path: string, taskId: string, privateTmpDirec
     }
     const tail = outputTailFromBytes(buffer.subarray(0, read), max);
     return { tail: tail.value, truncated: tail.truncated || stat.size > read, size: stat.size };
-  } catch {
-    return null;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" || code === "ENOTDIR" ? null : unreadable;
   } finally {
     if (fd !== null) try { closeSync(fd); } catch { /* already closed */ }
   }
@@ -77,8 +86,9 @@ interface Watch {
   intervalMs: number;
   onTail: (tail: OutputTail) => void;
   timer: ReturnType<typeof setTimeout> | null;
+  /** What the last read found; a change is reported once. */
+  state: "unknown" | "missing" | "unreadable" | "read";
   lastSize: number | null;
-  unreadable: boolean;
 }
 
 /** Tails up to {@link MAX_TAILED_TASKS} task output files, each on its own cadence. */
@@ -106,7 +116,7 @@ export class AsyncTaskOutputTailer {
     }
     if (this.watches.size >= (this.options.maxTasks ?? MAX_TAILED_TASKS)) return false;
     const watch: Watch = { path: input.path, taskId: input.taskId, privateTmpDirectory: input.privateTmpDirectory ?? null,
-      intervalMs: input.intervalMs, onTail: input.onTail, timer: null, lastSize: null, unreadable: false };
+      intervalMs: input.intervalMs, onTail: input.onTail, timer: null, state: "unknown", lastSize: null };
     this.watches.set(key, watch);
     this.schedule(key, watch, 0);
     return true;
@@ -148,17 +158,29 @@ export class AsyncTaskOutputTailer {
 
   private poll(watch: Watch): void {
     const read = readTaskOutputTail(watch.path, watch.taskId, watch.privateTmpDirectory, this.options.platform);
-    if (!read) {
-      // Reported once: a null tail until the file can be read.
-      if (!watch.unreadable && watch.lastSize !== null) watch.onTail({ tail: null, truncated: false });
-      watch.unreadable = true;
+    const previous = watch.state;
+    if (read && "size" in read) {
+      if (previous === "read" && read.size === watch.lastSize) return;
+      watch.state = "read";
+      watch.lastSize = read.size;
+      this.report(watch, { tail: read.tail, truncated: read.truncated });
       return;
     }
-    watch.unreadable = false;
-    if (read.size === watch.lastSize) return;
-    watch.lastSize = read.size;
+    watch.lastSize = null;
+    if (read) {
+      // There but unreadable: reported once, until it can be read.
+      watch.state = "unreadable";
+      if (previous !== "unreadable") this.report(watch, { tail: null, truncated: false, unreadable: true });
+      return;
+    }
+    // Gone (or not written yet): a null tail, reported once when there was something before.
+    watch.state = "missing";
+    if (previous === "read" || previous === "unreadable") this.report(watch, { tail: null, truncated: false });
+  }
+
+  private report(watch: Watch, tail: OutputTail): void {
     try {
-      watch.onTail({ tail: read.tail, truncated: read.truncated });
+      watch.onTail(tail);
     } catch {
       // A failing listener never stops the tail.
     }

@@ -6,7 +6,7 @@
  * The provider is a stub with an async-task registry.
  */
 import { afterEach, describe, expect, it } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AsyncTaskSnapshot } from "@shared/contracts/provider-types.js";
@@ -20,6 +20,7 @@ import {
   type ParkableProvider,
   type ParkedLanesOptions,
 } from "@multiremi/worker/parked-lanes.js";
+import { AsyncTaskOutputTailer } from "@multiremi/worker/async-task-output.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -361,6 +362,26 @@ describe("ParkedLanes: snapshots (§5.2)", () => {
     await Bun.sleep(60);
     expect(r.snapshots).toHaveLength(1);
     void record;
+  });
+
+  it("flags an output file that exists but cannot be read (output_unreadable); a readable one carries its tail", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "claude-pr6b-unreadable-"));
+    dirs.push(dir);
+    mkdirSync(join(dir, "tasks"));
+    writeFileSync(join(dir, "tasks", "readable.output"), "line 1\n");
+    writeFileSync(join(dir, "secret.txt"), "secret");
+    // A link where the output should be is there, but is never followed.
+    symlinkSync(join(dir, "secret.txt"), join(dir, "tasks", "linked.output"));
+    const r = registry({ outputTailer: new AsyncTaskOutputTailer({ platform: "darwin" }) });
+    const { provider } = r.begin("chat_a", "tsk_1");
+    provider.change(snapshot("readable", "running", { outputFilePath: join(dir, "tasks", "readable.output") }));
+    provider.change(snapshot("linked", "running", { outputFilePath: join(dir, "tasks", "linked.output") }));
+    provider.change(snapshot("missing", "running", { outputFilePath: join(dir, "tasks", "missing.output") }));
+    const task = (id: string) => r.snapshots.at(-1)?.tasks.find((candidate) => candidate.task_id === id);
+    await waitFor(() => task("readable")?.output_tail === "line 1\n" && task("linked")?.output_unreadable === true, "the tails");
+    expect(task("linked")).toMatchObject({ output_tail: null, output_unreadable: true });
+    expect("output_unreadable" in task("readable")!).toBe(false);
+    expect("output_unreadable" in task("missing")!).toBe(false);
   });
 });
 
