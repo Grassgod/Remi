@@ -343,10 +343,22 @@ describe("Multiremi store — task message ingress, completion, and capacity", (
     expect(waiting.waitReason).toBe("/tmp/worktree");
     expect(store.getRuntime(runtime.id)!.activeTaskCount).toBe(1);
     expect(store.claimTask(runtime.id)).toBeNull();
+    // PR 6 §2.8: a waiting attempt takes a new reason (its folder's holder parked); the same one again is a no-op.
+    const events: string[] = [];
+    const unsubscribe = store.onTaskEvent((event) => { events.push(event.type); });
+    const held = "/tmp/worktree (held by background tasks of chat chat_other)";
+    expect(store.markTaskWaitingLocalDirectory(first.id, held)).toMatchObject({ status: "waiting_local_directory", waitReason: held });
+    const updatedAt = store.getTask(first.id)!.updatedAt;
+    expect(store.markTaskWaitingLocalDirectory(first.id, held).updatedAt).toBe(updatedAt);
+    expect(events.filter((event) => event === "task:waiting_local_directory")).toHaveLength(1);
+    unsubscribe();
+    expect(store.listTurns({ workspace_id: "local", issue_id: issue.id })[0]).toMatchObject({ status: "running", local_directory_wait_reason: held });
 
     const running = store.startTask(first.id);
     expect(running.status).toBe("running");
     expect(running.waitReason).toBeNull();
+    expect(store.listTurns({ workspace_id: "local", issue_id: issue.id })[0]).toMatchObject({ local_directory_wait_reason: null });
+    expect(() => store.markTaskWaitingLocalDirectory(first.id, held)).toThrow("Task not found or not dispatched");
     expect(() => store.startTask(first.id)).toThrow("Task not found or not dispatched");
     store.completeTask(first.id, { output: "done" });
     expect(second.id).toBe(first.id);

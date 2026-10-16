@@ -294,9 +294,11 @@ export interface TaskRunningPayload {
 
 // task:waiting_local_directory fires when the daemon dequeues a task but
 // can't immediately acquire the on-disk path lock — another task on this
-// daemon is already executing in the same local_directory. The optional
-// `wait_reason` mirrors the server-side hint (path / holder task id), but
-// is not yet surfaced end-to-end; the UI today only reads the status.
+// daemon is already executing in the same local_directory, or a parked lane of
+// another Chat keeps it for its background tasks (PR 6 §2.8). It fires again
+// when that reason changes. The optional `wait_reason` mirrors the
+// server-side hint (path, holder task id or holder chat); the Chat reads the
+// holder chat from it.
 export interface TaskWaitingLocalDirectoryPayload {
   task_id: string;
   agent_id: string;

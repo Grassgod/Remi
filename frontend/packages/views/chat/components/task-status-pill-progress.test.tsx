@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatPendingTask } from "@multiremi/core/types";
@@ -8,9 +8,10 @@ import enChat from "../../locales/en/chat.json";
 import { message, permission, userMessage } from "../../test/trace-fixtures";
 import { TaskStatusPill } from "./task-status-pill";
 
-function pill(pendingTask: ChatPendingTask, items: TraceItem[] = [], availability: AgentAvailability = "online") {
+function pill(pendingTask: ChatPendingTask, items: TraceItem[] = [], availability: AgentAvailability = "online",
+  resolveChat?: (sessionId: string) => { title: string; open: () => void } | null) {
   return <I18nProvider locale="en" resources={{ en: { chat: enChat } }}>
-    <TaskStatusPill pendingTask={pendingTask} items={items} availability={availability} />
+    <TaskStatusPill pendingTask={pendingTask} items={items} availability={availability} resolveChat={resolveChat} />
   </I18nProvider>;
 }
 
@@ -95,5 +96,28 @@ describe("Chat preparation status", () => {
       expect(screen.getByText(enChat.status_pill.stages.thinking)).toBeInTheDocument();
       view.unmount();
     }
+  });
+
+  it("names another chat's background tasks holding the local folder, and opens that chat (PR 6 §2.8)", () => {
+    const wait_reason = "local_directory /Users/me/repo (held by background tasks of chat chat_other)";
+    const open = vi.fn();
+    const resolveChat = vi.fn((id: string) => id === "chat_other" ? { title: "Dev server", open } : null);
+    const pending = { task_id: "task-1", status: "waiting_local_directory", wait_reason };
+    const view = render(pill(pending, [], "online", resolveChat));
+    expect(screen.getByText(enChat.bg_tasks.folder_held)).toBeInTheDocument();
+    expect(screen.queryByText(enChat.status_pill.stages.waiting_local_directory)).not.toBeInTheDocument();
+    // Never the raw reason: no path, no ids.
+    expect(screen.queryByText(/Users\/me|chat_other/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Open the background tasks of “Dev server”" }));
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(resolveChat).toHaveBeenCalledWith("chat_other");
+    // Another member's chat is not in the list: the copy stays, with no link.
+    view.rerender(pill(pending, [], "online", () => null));
+    expect(screen.getByText(enChat.bg_tasks.folder_held)).toBeInTheDocument();
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    // A folder held by a running turn keeps the plain label.
+    view.rerender(pill({ ...pending, wait_reason: "local_directory /Users/me/repo (held by task tsk_abcd)" }, [], "online", resolveChat));
+    expect(screen.getByText(enChat.status_pill.stages.waiting_local_directory)).toBeInTheDocument();
+    expect(screen.queryByText(enChat.bg_tasks.folder_held)).not.toBeInTheDocument();
   });
 });

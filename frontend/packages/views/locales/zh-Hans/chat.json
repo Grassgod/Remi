@@ -426,7 +426,9 @@
     "loading": "正在加载…",
     "load_failed": "无法加载后台任务。",
     "retry": "重试",
-    "not_found": "找不到这个后台任务"
+    "not_found": "找不到这个后台任务",
+    "folder_held": "本地文件夹正被另一个对话的后台任务占用",
+    "folder_held_open": "打开「{{title}}」的后台任务"
   },
   "steps": {
     "read_active": "正在读取 {{file}}",

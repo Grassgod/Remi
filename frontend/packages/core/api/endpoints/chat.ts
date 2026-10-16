@@ -103,8 +103,11 @@ export class ChatEndpoints {
   }
   async getPendingChatTask(sessionId: string): Promise<ChatPendingTask> {
     const turn = (await this.activeTurns(sessionId))[0];
+    // A running turn whose attempt waits for its local folder says so, and why (PR 6 §2.8).
+    const folderWait = turn?.status === "running" && typeof turn.local_directory_wait_reason === "string"
+      ? { status: "waiting_local_directory", wait_reason: turn.local_directory_wait_reason || null } : null;
     return turn ? { task_id: turn.current_attempt_id ?? turn.id, turn_id: turn.id,
-      status: turn.status === "pending" ? "queued" : turn.status, created_at: turn.created_at, supports_queue: true }
+      status: turn.status === "pending" ? "queued" : turn.status, created_at: turn.created_at, supports_queue: true, ...folderWait }
       : { supports_queue: true };
   }
   async listPendingChatTasks(): Promise<PendingChatTasksResponse> {

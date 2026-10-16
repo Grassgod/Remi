@@ -126,6 +126,24 @@ describe("ChatEndpoints contracts", () => {
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(fetch).not.toHaveBeenCalledWith(expect.stringContaining("pending-task"), expect.anything());
   });
+  it("reads a running turn whose attempt waits for its local folder as waiting, with the reason (PR 6 §2.8)", async () => {
+    const reason = "local_directory /Users/me/repo (held by background tasks of chat chat_2)";
+    for (const [field, expected] of [
+      [reason, { status: "waiting_local_directory", wait_reason: reason }],
+      ["", { status: "waiting_local_directory", wait_reason: null }],
+      [null, { status: "running" }],
+      [7, { status: "running" }],
+    ] as const) {
+      vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+        const params = new URL(url).searchParams;
+        return response({ turns: params.get("status") === "running" ? [turnFixture({ local_directory_wait_reason: field })] : [], next_cursor: null });
+      }));
+      const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+      const pending = await api.getPendingChatTask("chat_1");
+      expect(pending, String(field)).toMatchObject({ task_id: "attempt_2", ...expected });
+      if (expected.status === "running") expect(pending.wait_reason, String(field)).toBeUndefined();
+    }
+  });
   it("lists in-flight chat turns with both the attempt and the turn the cancel command addresses", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {
       const params = new URL(url).searchParams;

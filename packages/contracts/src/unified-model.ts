@@ -128,6 +128,13 @@ export interface MultiremiTurn {
    * Tasks parked after the attempt are the session registry's, not this.
    */
   running_background_tasks?: number | null;
+  /**
+   * The current attempt waits for its local folder (the turn still reads
+   * `running`): the daemon's reason, empty when it gave none; null otherwise.
+   * A parked lane of another Chat holding the folder is named in it (PR 6
+   * §2.8, `readBackgroundFolderHolder`). Turn lists only.
+   */
+  local_directory_wait_reason?: string | null;
 }
 
 export interface MultiremiTurnAttempt {

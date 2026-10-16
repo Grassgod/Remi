@@ -305,6 +305,12 @@ export class ParkedLanes {
     return this.records.get(key)?.state === "parked";
   }
 
+  /** The parked lane `match` picks (the one holding a folder lock a turn waits for, §2.8); null when none. */
+  findParked(match: (record: LaneRecord) => boolean): LaneRecord | null {
+    for (const record of this.records.values()) if (record.state === "parked" && match(record)) return record;
+    return null;
+  }
+
   get parkedCount(): number {
     let count = 0;
     for (const record of this.records.values()) if (record.state === "parked") count++;

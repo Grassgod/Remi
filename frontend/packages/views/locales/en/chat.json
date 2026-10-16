@@ -443,7 +443,9 @@
     "loading": "Loading…",
     "load_failed": "Couldn't load the background tasks.",
     "retry": "Retry",
-    "not_found": "Background task not found"
+    "not_found": "Background task not found",
+    "folder_held": "The local folder is in use by another chat's background tasks",
+    "folder_held_open": "Open the background tasks of “{{title}}”"
   },
   "steps": {
     "read_active": "Reading {{file}}",

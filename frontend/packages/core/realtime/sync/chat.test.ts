@@ -61,6 +61,17 @@ describe("chat queue realtime", () => {
     });
   });
 
+  it("keeps the reason a local-folder wait carries, so the pill can name the chat holding the folder (PR 6 §2.8)", () => {
+    const reason = "local_directory /Users/me/repo (held by background tasks of chat chat-2)";
+    handlers["task:waiting_local_directory"]?.({ chat_session_id: "chat-1", task_id: "task-1", status: "waiting_local_directory", wait_reason: reason });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ status: "waiting_local_directory", wait_reason: reason });
+    // An event without a reason keeps the one already known.
+    handlers["task:waiting_local_directory"]?.({ chat_session_id: "chat-1", task_id: "task-1", status: "waiting_local_directory" });
+    expect(qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask("chat-1"))?.wait_reason).toBe(reason);
+    handlers["task:running"]?.({ chat_session_id: "chat-1", task_id: "task-1" });
+    expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ status: "running", wait_reason: null });
+  });
+
   it.each(["task:awaiting_human", "task:running"] as const)(
     "invalidates issue decision surfaces when %s changes a subtree human request",
     event => {

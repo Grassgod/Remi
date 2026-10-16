@@ -154,6 +154,8 @@ interface ChatMessageListProps {
   onLoadOlderMessages?: () => void;
   onRetrySend?: (clientId: string) => void;
   initialPositioned?: boolean;
+  /** Another chat of this reader, for a local folder its background tasks hold (`TaskStatusPill`). */
+  resolveChat?: (sessionId: string) => { title: string; open: () => void } | null;
 }
 
 export function ChatMessageList({
@@ -168,6 +170,7 @@ export function ChatMessageList({
   onLoadOlderMessages,
   onRetrySend,
   initialPositioned = false,
+  resolveChat,
 }: ChatMessageListProps) {
   const { t } = useT("chat");
   const namesReady = useAfterFirstScreen();
@@ -363,7 +366,7 @@ export function ChatMessageList({
       {showLiveTimeline && <LiveTurnSteps key={liveTraceId ?? "pending"} trace={liveTrace} sessionId={sessionId} />}
       {showLiveTimeline && liveTrace.error && <div role="alert" className="text-xs text-destructive">{traceT(($) => $.transcript.trace_failed)}</div>}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
-        items={liveTrace.items} availability={availability} />}
+        items={liveTrace.items} availability={availability} resolveChat={resolveChat} />}
     </div>} />;
 }
 

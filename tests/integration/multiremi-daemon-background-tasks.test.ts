@@ -20,7 +20,7 @@ import type { ProviderEvent } from "@shared/contracts/provider-types.js";
 import { AcpProvider, type AcpProviderOptions } from "@acp/provider.js";
 import { DAEMON_MIN_CLI_VERSION, type DaemonLaneBackgroundTasksPayload, type DaemonLaneBackgroundWakePayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { DaemonProtocolConnect, DaemonProtocolSocketLike } from "@multiremi/worker/daemon-protocol-client.js";
-import { backgroundDoorbellBody, backgroundDoorbellDedupeKey } from "@shared/background-tasks.js";
+import { backgroundDoorbellBody, backgroundDoorbellDedupeKey, readBackgroundFolderHolder } from "@shared/background-tasks.js";
 import { traceItems } from "../helpers/turn-trace.js";
 import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 import type { FakeAsyncTaskStep, FakeSubagentConfig, FakeSubagentStep } from "../fixtures/acp/fake-subagent-agent.js";
@@ -603,6 +603,44 @@ describe("Bun Multiremi daemon background tasks (PR 6)", () => {
     expect(agentLog(logPath).filter((entry) => entry.method === "initialize")).toHaveLength(1);
     expect(agentLog(logPath).filter((entry) => entry.kind === "async_task_stop")).toEqual([]);
     expect(d.snapshots.some((snapshot) => snapshot.tasks.some((row) => row.stop_reason === "config_changed"))).toBe(false);
+  }, 60_000);
+
+  it("(17) two Chats on one local folder: the other's turn waits, named after the parked chat's background tasks", async () => {
+    const { store, agent, daemon } = await bed("shared-folder");
+    const folder = join(workDir!, "shared-folder");
+    mkdirSync(folder);
+    const project = store.createProject({ title: "Shared folder project",
+      resources: [{ resourceType: "local_directory", resourceRef: { localPath: folder, daemonId: "daemon-shared-folder" } }] });
+    const logA = join(workDir!, "agent-a.jsonl");
+    const logB = join(workDir!, "agent-b.jsonl");
+    // Chat A's turn starts a server and is still running when Chat B's turn arrives.
+    const processA = scriptedAcp({ prompts: [[...bash("bash-1", "toolu_srv", "python3 -m http.server"),
+      { delayMs: 2_500, ...chunk("Server started.") }, { resolve: "end_turn" }]] }, logA, "claude");
+    const processB = scriptedAcp({ prompts: [[chunk("B is done.")]] }, logB, "claude");
+    let spawned = 0;
+    const run = daemon((options) => (spawned++ === 0 ? processA : processB)(options));
+    const chatA = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const chatB = store.createChatSession({ agentId: agent.id, projectId: project.id });
+    const first = store.sendChatMessage(chatA.id, { body: "Start a server" }).task;
+    await waitFor(() => agentLog(logA).some((entry) => entry.method === "session/prompt"), "chat A's turn running");
+    const second = store.sendChatMessage(chatB.id, { body: "Edit the README" }).task;
+    const waitReason = () => store.getTask(second.id)?.status === "waiting_local_directory" ? store.getTask(second.id)!.waitReason : null;
+    // While A's turn runs, its attempt holds the folder.
+    expect(await waitFor(waitReason, "chat B waiting")).toBe(`local_directory ${folder} (held by task ${first.id.slice(0, 8)})`);
+    await waitFor(() => finished(store, first.id), "chat A's turn");
+    // A's lane parks and keeps the folder: B is told again, now with A's chat.
+    const held = `local_directory ${folder} (held by background tasks of chat ${chatA.id})`;
+    await waitFor(() => waitReason() === held, "chat B's reason naming chat A");
+    expect(readBackgroundFolderHolder(waitReason())).toEqual({ session_id: chatA.id });
+    expect(store.listTurns({ workspace_id: "local", session_id: chatB.id })[0])
+      .toMatchObject({ status: "running", local_directory_wait_reason: held });
+    expect(agentLog(logB)).toEqual([]);
+    // 「全部停止」 in chat A: nothing runs there, its process closes and frees the folder.
+    await (run as unknown as { parkedLanes: { handleStop(payload: unknown): Promise<void> } }).parkedLanes.handleStop({
+      session_id: chatA.id, agent_id: agent.id, execution_scope: "", task_id: "*", requested_at: new Date().toISOString() });
+    await waitFor(() => finished(store, second.id), "chat B's turn");
+    expect(store.getTask(second.id)).toMatchObject({ status: "completed", result: "B is done.", workDir: folder });
+    expect(agentLog(logA).some((entry) => entry.kind === "exited")).toBe(true);
   }, 60_000);
 
   it("(14) a rejected doorbell (session_closed) cancels the cycle and closes the lane", async () => {

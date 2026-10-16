@@ -4475,15 +4475,22 @@ ${placementAfter.sql}
     return task;
   }
 
+  /**
+   * The attempt waits for its local folder. A waiting one only takes a new
+   * reason (what holds the folder changed, PR 6 §2.8); the same reason again
+   * writes and announces nothing.
+   */
   markTaskWaitingLocalDirectory(taskId: string, reason?: string | null): MultiremiTask {
     const cleanReason = cleanOptionalString(reason);
+    const existing = this.getTask(taskId);
+    if (existing?.status === "waiting_local_directory" && (existing.waitReason ?? null) === cleanReason) return existing;
     const now = nowIso();
     const result = runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
        SET status = 'waiting_local_directory',
            wait_reason = ?,
            progress_summary = ?,
            updated_at = ?
-       WHERE id = ? AND status = 'dispatched'`,
+       WHERE id = ? AND status IN ('dispatched', 'waiting_local_directory')`,
       [
         cleanReason,
         cleanReason ? `Waiting for local directory: ${cleanReason}` : "Waiting for local directory",

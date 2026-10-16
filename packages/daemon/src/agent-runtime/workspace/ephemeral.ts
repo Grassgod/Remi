@@ -32,6 +32,8 @@ export interface ResolvedTaskWorkDir {
   release?: () => void;
   /** The real path whose lock `release` gives back: a Runtime workspace or a local folder. */
   lockPath?: string;
+  /** The task the lock is held under; a parked lane keeps holding it after that task ended (PR 6 §2.8). */
+  lockHolderId?: string;
   /** The inherited provider must not resume after its directory was rejected. */
   resetSession?: true;
 }
@@ -56,6 +58,10 @@ interface LocalPathLockWaiter {
   reject: (err: Error) => void;
   signal: AbortSignal;
   abort: () => void;
+  /** Tells the waiting task what holds the path (`onWait`). */
+  notify: (holderId: string | null) => Promise<void> | void;
+  /** The latest notification, so a repeated one follows the one before it. */
+  notice: Promise<void>;
 }
 
 export class LocalPathLocker {
@@ -109,18 +115,37 @@ export class LocalPathLocker {
         reject: fail,
         signal,
         abort: () => fail(new LocalDirectoryError("local_directory: wait cancelled")),
+        notify: onWait,
+        notice: Promise.resolve(),
       };
       signal.addEventListener("abort", waiter.abort, { once: true });
       // Enqueue before any asynchronous wait notification: the holder can
       // release during that notification, and later arrivals must stay FIFO.
       entry.queue.push(waiter);
-      Promise.resolve().then(() => {
+      waiter.notice = Promise.resolve().then(() => {
         if (!settled) return onWait(holderId);
-      }).then(() => {
+      });
+      waiter.notice.then(() => {
         notified = true;
         finish();
       }, fail);
     });
+  }
+
+  /**
+   * Notify every task waiting behind `holderId` again, because what holds its
+   * path changed and its waiting reason with it (PR 6: the holder's Chat lane
+   * parked and keeps the lock for its background tasks). Best effort; each
+   * waiter's notifications stay in order.
+   */
+  renotify(holderId: string): void {
+    for (const entry of this.entries.values()) {
+      if (entry.holderId !== holderId) continue;
+      for (const waiter of entry.queue) {
+        if (waiter.signal.aborted) continue;
+        waiter.notice = waiter.notice.catch(() => {}).then(() => waiter.notify(holderId)).catch(() => {});
+      }
+    }
   }
 
   private releaser(realPath: string, entry: LocalPathLockEntry, taskId: string): () => void {
@@ -153,6 +178,11 @@ export interface ResolveTaskWorkDirOptions {
   signal: AbortSignal;
   /** Invoked while a task waits for a busy local_directory to free up. */
   onWaitLocalDirectory: (taskId: string, reason: string) => Promise<void> | void;
+  /**
+   * Names the task holding a busy folder for the waiting reason (PR 6: a
+   * parked lane's background tasks); null keeps the holder's task id.
+   */
+  describeLockHolder?: (holderId: string) => string | null;
 }
 
 export async function resolveTaskWorkDir(
@@ -176,7 +206,8 @@ export async function resolveTaskWorkDir(
       throw new LocalDirectoryError("Runtime workspace cwd escapes its root");
     }
     const releaseLocal = await opts.locker.acquire(workReal, task.id,
-      holder => opts.onWaitLocalDirectory(task.id, `Runtime workspace is busy${holder ? ` (${holder})` : ""}`), opts.signal);
+      holder => opts.onWaitLocalDirectory(task.id,
+        `Runtime workspace is busy${holder ? ` (${opts.describeLockHolder?.(holder) ?? holder})` : ""}`), opts.signal);
     try {
       while (true) {
         opts.signal.throwIfAborted();
@@ -187,7 +218,7 @@ export async function resolveTaskWorkDir(
               ?? multiremiSharedLockPath(join(homedir(), ".multiremi", "runtime-workspace-leases")),
           });
           return {
-            workDir, runtimeWorkspaceRoot: rootReal, localDirectory: true, ensureDir: false, lockPath: workReal,
+            workDir, runtimeWorkspaceRoot: rootReal, localDirectory: true, ensureDir: false, lockPath: workReal, lockHolderId: task.id,
             release: () => { try { lease.release(); } finally { releaseLocal(); } },
           };
         } catch (error) {
@@ -234,7 +265,7 @@ export async function resolveTaskWorkDir(
   validateLocalDirectoryPath(assignment.absPath);
   const release = await opts.locker.acquire(assignment.realPath, task.id, async (holder) => {
     const reason = holder
-      ? `local_directory ${assignment.absPath} (held by task ${shortTaskId(holder)})`
+      ? `local_directory ${assignment.absPath} (${opts.describeLockHolder?.(holder) ?? `held by task ${shortTaskId(holder)}`})`
       : `local_directory ${assignment.absPath}`;
     await opts.onWaitLocalDirectory(task.id, reason);
   }, opts.signal);
@@ -244,6 +275,7 @@ export async function resolveTaskWorkDir(
     ensureDir: false,
     release,
     lockPath: assignment.realPath,
+    lockHolderId: task.id,
   };
 }
 

@@ -260,9 +260,12 @@ export class InboxOperations {
     const runningSubagents='(SELECT a.running_subagents FROM multiremi_turn_attempts a WHERE a.id=multiremi_turns.current_attempt_id AND a.status IN (\'accepted\',\'running\')) AS running_subagents';
     // PR 6: the same attempt's running background tasks, under the same rule.
     const runningBackgroundTasks='(SELECT a.running_background_tasks FROM multiremi_turn_attempts a WHERE a.id=multiremi_turns.current_attempt_id AND a.status IN (\'accepted\',\'running\')) AS running_background_tasks';
-    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT ${fields},NULL AS legacy_prompt,${runningSubagents},${runningBackgroundTasks} FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>({...row,holds_workspace:!!row.holds_workspace,
+    // PR 6 §2.8: the turn reads `running` while its attempt waits for a local folder; the Chat says why.
+    const localDirectoryWait='(SELECT COALESCE(a.wait_reason,\'\') FROM multiremi_turn_attempts a WHERE a.id=multiremi_turns.current_attempt_id AND a.status=\'waiting_local_directory\') AS local_directory_wait_reason';
+    params.push(Math.min(input.limit??100,1000));return this.ctx.db.query(`SELECT ${fields},NULL AS legacy_prompt,${runningSubagents},${runningBackgroundTasks},${localDirectoryWait} FROM multiremi_turns WHERE ${conditions.join(' AND ')} ORDER BY created_at DESC,id DESC LIMIT ?`).all(...params).map(row=>({...row,holds_workspace:!!row.holds_workspace,
       running_subagents:row.running_subagents==null?null:Number(row.running_subagents),
-      running_background_tasks:row.running_background_tasks==null?null:Number(row.running_background_tasks)} as MultiremiTurn));
+      running_background_tasks:row.running_background_tasks==null?null:Number(row.running_background_tasks),
+      local_directory_wait_reason:row.local_directory_wait_reason==null?null:String(row.local_directory_wait_reason)} as MultiremiTurn));
   }
   listTurnAttempts(id:string):MultiremiTurnAttempt[]{
     return this.ctx.db.query('SELECT * FROM multiremi_turn_attempts WHERE turn_id=? ORDER BY attempt_no').all(id).map(row=>({...row,

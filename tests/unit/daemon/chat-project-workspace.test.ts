@@ -172,6 +172,39 @@ describe("Project-bound Chat workspaces", () => {
     }
   });
 
+  it("names a parked lane holding the folder in the waiting reason, else the holder's task id (PR 6)", async () => {
+    const { root, task, options } = fixture();
+    const userPath = join(root, "user-directory");
+    mkdirSync(userPath);
+    task.projectResources = [{ id: "directory", resourceType: "local_directory", label: null,
+      resourceRef: { local_path: userPath, daemon_id: "daemon_owner" } }];
+    const reasons: string[] = [];
+    let parked = false;
+    options.onWaitLocalDirectory = (_id, reason) => { reasons.push(reason); };
+    const describe = (holder: string) => parked && holder === "task_first" ? "held by background tasks of chat chat_project" : null;
+    const first = await resolveTaskWorkDir(task, { ...options, describeLockHolder: describe });
+    expect(first.lockHolderId).toBe("task_first");
+    const controller = new AbortController();
+    try {
+      const second = resolveTaskWorkDir({ ...task, id: "task_second", chatSessionId: "chat_second" },
+        { ...options, describeLockHolder: describe, signal: controller.signal });
+      await Bun.sleep(0);
+      expect(reasons).toEqual([`local_directory ${userPath} (held by task task_fir)`]);
+      // The holder's lane parks: the waiter is told again, with the chat that holds the folder.
+      parked = true;
+      options.locker.renotify("task_first");
+      await Bun.sleep(0);
+      expect(reasons.at(-1)).toBe(`local_directory ${userPath} (held by background tasks of chat chat_project)`);
+      first.release!();
+      const resolved = await second;
+      expect(resolved.lockHolderId).toBe("task_second");
+      resolved.release!();
+    } finally {
+      controller.abort();
+      first.release!();
+    }
+  });
+
   it("does not adopt a user directory just because it lies below the daemon root", async () => {
     const { root, task, options } = fixture();
     const userPath = join(root, "user-directory");

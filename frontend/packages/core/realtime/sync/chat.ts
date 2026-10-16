@@ -259,7 +259,9 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {
             if (!old || old.task_id !== payload.task_id) return old;
-            return { ...old, status: "waiting_local_directory" };
+            // The reason may name a parked lane of another Chat holding the folder (PR 6 §2.8).
+            return { ...old, status: "waiting_local_directory",
+              ...(typeof payload.wait_reason === "string" ? { wait_reason: payload.wait_reason } : {}) };
           },
         );
       },

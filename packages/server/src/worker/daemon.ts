@@ -57,6 +57,7 @@ import { finalReplyBody } from "@shared/turn-trace.js";
 import {
   BACKGROUND_DOORBELL_PREFIX,
   BACKGROUND_KEEPALIVE_ENV,
+  backgroundFolderHolderNote,
   parksBackgroundTasks,
   resolveBackgroundKeepAliveMs,
 } from "@shared/background-tasks.js";
@@ -3908,7 +3909,19 @@ export class MultiremiDaemon {
           log.warn(`Failed to mark task ${taskId} waiting_local_directory: ${err instanceof Error ? err.message : String(err)}`);
         });
       },
+      describeLockHolder: (holderId) => this.backgroundFolderHolder(holderId),
     });
+  }
+
+  /**
+   * PR 6 §2.8: a parked lane keeps its shared folder's lock up to the
+   * keep-alive cap, so a turn of another Chat on that folder waits. Its reason
+   * then names that Chat's background tasks, not the ended attempt's id.
+   */
+  private backgroundFolderHolder(holderId: string): string | null {
+    const lane = this.parkedLanes.findParked((record) => record.resources instanceof DaemonLaneResources
+      && record.resources.resolvedWorkDir?.lockHolderId === holderId);
+    return lane ? backgroundFolderHolderNote(lane.lane.session_id) : null;
   }
 
   /**
@@ -5339,8 +5352,12 @@ export class MultiremiDaemon {
           laneRecord.resources.writeTaskContext({ token: null, turnId: null, attemptId: null });
         }
         const outcome = backgroundDecisionOf() === "park" ? await this.parkedLanes.park(laneRecord) : null;
-        if (outcome?.parked) log.info(`Task ${task.id} parked its lane's process`, { event: "background_lane_parked" });
-        else await this.parkedLanes.endAttempt(laneRecord, outcome && !outcome.parked ? outcome.reason : null);
+        if (outcome?.parked) {
+          log.info(`Task ${task.id} parked its lane's process`, { event: "background_lane_parked" });
+          // Turns of other Chats waiting for the folder it keeps now wait for its background tasks: say so.
+          const holder = laneRecord.resources instanceof DaemonLaneResources ? laneRecord.resources.resolvedWorkDir?.lockHolderId : undefined;
+          if (holder) this.localPathLocks.renotify(holder);
+        } else await this.parkedLanes.endAttempt(laneRecord, outcome && !outcome.parked ? outcome.reason : null);
       } else {
         await provider.close?.();
       }

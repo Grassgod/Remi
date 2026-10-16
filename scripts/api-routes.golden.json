@@ -21556,7 +21556,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           },
           {
             "id": "tsk_8rcx9z88woyu",
@@ -21592,7 +21593,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           },
           {
             "id": "tsk_1ut6x0i244sp",
@@ -21628,7 +21630,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           },
           {
             "id": "tsk_lnktpkuv95wd",
@@ -21664,7 +21667,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           },
           {
             "id": "tsk_snapshot",
@@ -21700,7 +21704,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           }
         ],
         "next_cursor": null
@@ -29699,7 +29704,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           },
           {
             "id": "tsk_snapshot",
@@ -29735,7 +29741,8 @@
             "ended_reason": null,
             "legacy_prompt": null,
             "running_subagents": null,
-            "running_background_tasks": null
+            "running_background_tasks": null,
+            "local_directory_wait_reason": null
           }
         ],
         "next_cursor": null

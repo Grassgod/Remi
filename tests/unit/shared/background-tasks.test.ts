@@ -14,6 +14,7 @@ import {
   BACKGROUND_STOP_ALL_CONFIRM_MIN,
   backgroundDoorbellBody,
   backgroundDoorbellDedupeKey,
+  backgroundFolderHolderNote,
   backgroundParkedUntil,
   confirmsBackgroundStop,
   formatBackgroundDuration,
@@ -21,6 +22,7 @@ import {
   isLiveBackgroundTaskStatus,
   parksBackgroundTasks,
   readBackgroundDoorbell,
+  readBackgroundFolderHolder,
   resolveBackgroundKeepAliveMs,
   ringsBackgroundDoorbell,
 } from "@shared/background-tasks.js";
@@ -132,5 +134,28 @@ describe("doorbell (§2.5)", () => {
       { background_task: { ...doorbell, provider_session_id: "" } },
       { background_task: { ...doorbell, origin_turn_id: 7 } },
     ]) expect(readBackgroundDoorbell(metadata), JSON.stringify(metadata)).toBeNull();
+  });
+});
+
+describe("shared local folders (§2.8)", () => {
+  it("names a parked lane's chat in the waiting reason, and reads it back", () => {
+    const note = backgroundFolderHolderNote("chat_ab12cd34");
+    expect(note).toBe("held by background tasks of chat chat_ab12cd34");
+    for (const reason of [
+      `local_directory /Users/me/repo (${note})`,
+      `Runtime workspace is busy (${note})`,
+      note,
+    ]) expect(readBackgroundFolderHolder(reason), reason).toEqual({ session_id: "chat_ab12cd34" });
+    // Only the note that closes the reason counts, not words in the folder's path.
+    expect(readBackgroundFolderHolder(`local_directory /tmp/held by background tasks of chat x (${note})`))
+      .toEqual({ session_id: "chat_ab12cd34" });
+    expect(readBackgroundFolderHolder("local_directory /tmp/(held by background tasks of chat x) (held by task tsk_abcd)")).toBeNull();
+  });
+
+  it("reads nothing from any other reason", () => {
+    for (const reason of [
+      null, undefined, 3, {}, "", "local_directory /Users/me/repo", "local_directory /Users/me/repo (held by task tsk_abcd)",
+      "Runtime workspace is busy (process 4242)", "held by background tasks of chat ", "held by background tasks of chat (x)",
+    ]) expect(readBackgroundFolderHolder(reason), String(reason)).toBeNull();
   });
 });

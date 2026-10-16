@@ -2,7 +2,8 @@
  * Background tasks (PR 6, keep-alive on demand): the rules the daemon, the
  * server, the web and Feishu share. How long a parked lane keeps its process
  * (U1), which lanes park and which ring the doorbell (U2), when a stop asks
- * first (U3), and the doorbell message itself (§2.5).
+ * first (U3), the doorbell message itself (§2.5), and how a waiting turn names
+ * the parked lane that holds its shared local folder.
  *
  * Each open user decision is one constant below, so a different answer is a
  * one-line change:
@@ -153,4 +154,35 @@ export function readBackgroundDoorbell(metadata: unknown): BackgroundTaskDoorbel
     origin_turn_id: (row.origin_turn_id as string | null) ?? null,
     provider_session_id: row.provider_session_id as string,
   };
+}
+
+// ── Shared local folders (§2.8) ─────────────────────────────────────────────
+
+/**
+ * How a waiting attempt's reason names a parked lane holding its folder.
+ * Default Chat work dirs are the daemon's and never shared. Several Chats on
+ * one local folder (a Project's `local_directory`, a Runtime workspace) share
+ * its lock, and a parked lane keeps it up to the keep-alive cap: its Claude
+ * wakes on its own when a task ends and may edit files. The other Chat's turn
+ * then waits, and its reason says `held by background tasks of chat <id>`,
+ * which the web reads back to name that chat, where 「全部停止」 frees the folder.
+ * The attempt's reason is free text (`wait_reason`); this note is its
+ * structured part.
+ */
+const BACKGROUND_FOLDER_HOLDER_PREFIX = "held by background tasks of chat ";
+
+/** The note for the lock holder: a parked lane of the chat `sessionId`. */
+export function backgroundFolderHolderNote(sessionId: string): string {
+  return `${BACKGROUND_FOLDER_HOLDER_PREFIX}${sessionId}`;
+}
+
+/** The note alone, or closing a reason in parentheses: `local_directory <path> (<note>)`. */
+const BACKGROUND_FOLDER_HOLDER_PATTERN = new RegExp(
+  `(?:^|\\()${BACKGROUND_FOLDER_HOLDER_PREFIX}([^\\s()]+)(?:\\))?$`);
+
+/** The chat whose parked background tasks hold the folder a reason waits for; null for any other reason. */
+export function readBackgroundFolderHolder(reason: unknown): { session_id: string } | null {
+  if (typeof reason !== "string") return null;
+  const match = BACKGROUND_FOLDER_HOLDER_PATTERN.exec(reason.trim());
+  return match ? { session_id: match[1]! } : null;
 }

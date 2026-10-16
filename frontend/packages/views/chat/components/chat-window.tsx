@@ -640,6 +640,21 @@ export function ChatWindow({
     [activeAgent, setSelectedAgentId, setActiveSession],
   );
 
+  // PR 6 §2.8: a turn waiting for a local folder that another chat's parked
+  // background tasks hold links to that chat's 后台任务 view (「全部停止」 there).
+  const openSubagentPanel = useChatStore((s) => s.openSubagentPanel);
+  const resolveChat = useCallback((sessionId: string) => {
+    const session = sessions.find((candidate) => candidate.id === sessionId);
+    if (!session) return null;
+    return {
+      title: session.title?.trim() || t(($) => $.session_history.untitled),
+      open: () => {
+        handleSelectSession(session);
+        openSubagentPanel({ sessionId: session.id, view: "tasks", attemptId: null, live: false, path: [], task: null });
+      },
+    };
+  }, [sessions, t, handleSelectSession, openSubagentPanel]);
+
   const handleMinimize = useCallback(() => {
     uiLogger.info("minimize (close)", {
       activeSessionId,
@@ -866,6 +881,7 @@ export function ChatWindow({
             void replica.earlier().finally(() => setIsFetchingOlderMessages(false));
           }}
           onRetrySend={retrySend}
+          resolveChat={resolveChat}
         />
       ) : (
         <EmptyState
