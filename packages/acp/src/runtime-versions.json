@@ -1,16 +1,16 @@
 {
   "schema": 1,
   "preparedFor": "0.2.90",
-  "checkedAt": "2026-10-15T03:34:19.350Z",
+  "checkedAt": "2026-10-16T07:19:19.858Z",
   "claude": {
-    "acp": "0.90.0",
-    "sdk": "0.3.300",
-    "executable": "2.1.300"
+    "acp": "0.91.0",
+    "sdk": "0.3.301",
+    "executable": "2.1.301"
   },
   "codex": {
     "acp": "2.2.2",
-    "sdk": "0.162.1",
-    "executable": "0.162.1"
+    "sdk": "0.163.0",
+    "executable": "0.163.0"
   },
   "antigravity": {
     "server": "1.4.0",
