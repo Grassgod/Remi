@@ -252,9 +252,10 @@ describe("MUL-473 first-screen hotspot query counts", () => {
     const baseline = await getJson(harness, "/api/turns?status=pending&limit=500");
     // Each fixture Agent carries a 64 KB Skill file. A hydrated Agent load would
     // pull all 20 across the bridge; the lite projection keeps it to the row.
-    // PR 5 and PR 6 each added one nullable count per turn row (~30 bytes);
+    // Native subagents, background tasks and local-folder waits add nullable fields.
+    // Account for the local wait reason across at most 50 returned rows;
     // one hydrated Agent alone would add 64 KB.
-    expect(baseline.bytes).toBeLessThan(42_000);
+    expect(baseline.bytes).toBeLessThan(42_000 + 50 * Buffer.byteLength('"local_directory_wait_reason":null,'));
     expect([...harness.probe.bySql.keys()].filter((statement) =>
       /multiremi_chat_messages/i.test(statement))).toEqual([]);
     const skillSql = [...harness.probe.bySql.keys()].filter((statement) =>

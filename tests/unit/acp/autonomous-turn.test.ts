@@ -8,7 +8,7 @@
  * result, so the bridge does not hold the prompt).
  */
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AcpProvider, type AcpProviderOptions } from "@acp/provider.js";
@@ -26,9 +26,11 @@ afterEach(async () => {
 function fakeAgent(agentType: "claude" | "codex", config: FakeSubagentConfig, options: Partial<AcpProviderOptions> = {}) {
   const dir = mkdtempSync(join(tmpdir(), "acp-autonomous-"));
   const logPath = join(dir, "frames.jsonl");
+  const configPath = join(dir, "config.json");
+  writeFileSync(configPath, JSON.stringify(config));
   const provider = new AcpProvider({
     agentType, executable: process.execPath, args: [AGENT], cwd: dir, getMcpServers: () => [],
-    env: { FAKE_SUBAGENT_CONFIG: JSON.stringify(config), FAKE_SUBAGENT_LOG: logPath },
+    env: { FAKE_SUBAGENT_CONFIG_FILE: configPath, FAKE_SUBAGENT_LOG: logPath },
     nativeSubagentSessions: true, captureAutonomousRounds: true,
     ...options,
   });

@@ -250,15 +250,15 @@ describe("Feishu bot standard Task bridge", () => {
       expect(wire.runtime_id).toBe(""); // Existing wire representation for an unassigned runtime.
       expect(wire.work_dir).toBeUndefined();
       expect(wire.prior_work_dir).toBeUndefined();
-      // The private task cannot consume the retained topic's directory affinity.
+      // Storage cutover invalidates the old native session and directory generation.
       expect(store.getChatSession(chatId)).toMatchObject({
         sessionId: null, sessionProvider: null, sessionExecutionFingerprint: null,
-        workDir: "/work/issue-A", sessionRuntimeId: "rt_legacy",
+        workDir: null, sessionRuntimeId: null,
       });
       const topic = sentTask(store, store.sendMessage({ session_id: chatId,
         sender: { type: "platform", id: null }, to: { type: "agent", ref: "agt_chat_migration" },
         message_kind: "request", wake_requested: "now", execution_scope: "retained-group-fixture", body_md: "Group continuation" }));
-      expect(topic).toMatchObject({ runtimeId: "rt_legacy", workDir: "/work/issue-A" });
+      expect(topic).toMatchObject({ runtimeId: null, workDir: null });
       store.cancelTask(topic.id);
       // Claim refresh must not restore the shared topic's affinity either.
       const claimed = store.claimTask("rt_bot")!;

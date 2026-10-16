@@ -44,6 +44,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -80,6 +81,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -116,6 +118,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -152,6 +155,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -188,6 +192,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -224,6 +229,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -260,6 +266,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -296,6 +303,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -332,6 +340,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -368,6 +377,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -404,6 +414,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -440,6 +451,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -476,6 +488,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -512,6 +525,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -548,6 +562,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -584,6 +599,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -620,6 +636,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -656,6 +673,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -692,6 +710,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -728,6 +747,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -764,6 +784,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -800,6 +821,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -836,6 +858,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -872,6 +895,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -908,6 +932,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -944,6 +969,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -980,6 +1006,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1016,6 +1043,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1052,6 +1080,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1088,6 +1117,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1124,6 +1154,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1160,6 +1191,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1196,6 +1228,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1232,6 +1265,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1268,6 +1302,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1304,6 +1339,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1340,6 +1376,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1376,6 +1413,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1412,6 +1450,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1448,6 +1487,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1484,6 +1524,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1520,6 +1561,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1556,6 +1598,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1592,6 +1635,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1628,6 +1672,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       },
@@ -1664,6 +1709,7 @@
         "ended_at": null,
         "ended_reason": null,
         "legacy_prompt": null,
+        "local_directory_wait_reason": null,
         "running_background_tasks": null,
         "running_subagents": null
       }

@@ -100,6 +100,9 @@ for (const provider of ["claude", "codex"] as const) test(`real daemon running $
   const injected = f.send("MUL-493/PROBE/running-injected");
   expect(injected.turn_id).toBe(first.turn_id);
   await waitFor(() => f.h.store.getTask(attemptId)!.projectionToSeq! >= injected.message.seq, "offered injected head", 10_000);
+  // Keep the first prompt paused until the daemon actually interrupts it.
+  // Releasing on projection alone races its input pump and can end the prompt normally.
+  await waitFor(() => f.records(attemptId).some(row => row.event === "provider_cancelled"), "provider interrupted for injected input", 10_000);
   writeFileSync(paused.control_file, "after-read");
   await waitFor(() => {
     for (const row of f.records(attemptId).filter(row => row.event === "paused")) writeFileSync(row.control_file, row.stage);

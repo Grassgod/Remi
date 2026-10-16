@@ -62,7 +62,7 @@ describe("DiskUsage", () => {
     usage.refresh(false);
     await usage.settled();
 
-    expect(recorder.calls.map((call) => call.paths)).toEqual([
+    expect(recorder.calls.map((call) => [...call.paths].sort())).toEqual([
       [workRoot(root)], [envRoot(root)], [tracesRoot(root)], [sharedRoot(root)],
       [join(root, "legacy-20261001"), join(root, "legacy-20261002")],
     ]);

@@ -303,6 +303,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         ? request.params.prompt.filter((block: any) => block.type === "text").map((block: any) => String(block.text ?? "")).join("\n") : "";
       const probe: Probe = { sessionId, cancelled: false, stage: null, release: false };
       active.set(sessionId, probe);
+      // Real bridges announce activity before tools/read boundaries. Let the
+      // daemon's steering pump observe a live turn while this probe is paused.
+      send({ jsonrpc: "2.0", method: "session/update", params: { sessionId,
+        update: { sessionUpdate: "agent_thought_chunk", content: { type: "text", text: "Reading the task input." } } } });
       void (async () => {
         try {
           const text = responsibilityMarker(prompt) ? await responsibilityProbe(prompt, { cli,

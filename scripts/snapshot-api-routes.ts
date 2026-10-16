@@ -68,7 +68,7 @@ export const SNAPSHOT_STATUS_ONLY_ROUTES = new Set([
 const NORMALIZER_RULES = [
   "ISO-8601 timestamps (anywhere in a string) -> \"<timestamp>\"",
   "local timestamp ids (local[-contact|-lark]-<epoch>) -> \"<timestamp>\" suffix",
-  "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency numeric keys -> 0",
+  "epoch-millisecond numbers (1.5e12..4e12) and *_ms/duration/elapsed/uptime/latency/total_seconds numeric keys -> 0",
   "absolute machine paths (repo root, $HOME, $TMPDIR, upload dir) -> \"<repo>\"/\"<home>\"/\"<tmp>\"/\"<uploads>\"",
   "hostname in URL/UNC authorities -> \"<hostname>\"; username in Unix/Windows home paths -> \"<user>\"",
   "package VERSION -> \"<version>\"",
@@ -361,7 +361,7 @@ export function scrubString(value: string, identity: SnapshotMachineIdentity = {
 function normalize(value: unknown, key = ""): unknown {
   if (typeof value === "string") return scrubString(value);
   if (typeof value === "number") {
-    if (TIME_KEY_RE.test(key) || MS_KEY_RE.test(key)) return 0;
+    if (TIME_KEY_RE.test(key) || MS_KEY_RE.test(key) || key === "total_seconds") return 0;
     if (Number.isFinite(value) && value >= 1_500_000_000_000 && value <= 4_000_000_000_000) return 0;
     return value;
   }
