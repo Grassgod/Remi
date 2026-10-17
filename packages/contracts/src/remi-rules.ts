@@ -4,7 +4,7 @@
  * are now part of the Remi notes the daemon writes into every session's
  * `AGENTS.md`, and the workspace prompt holds only the workspace's own text.
  */
-import { ARTIFACT_DELIVERY_CONTRACT } from "./artifact-delivery.js";
+import { LEGACY_WORKSPACE_DEFAULTS, WORKSPACE_DEFAULT_V3 } from "./legacy-workspace-prompts.js";
 
 export const CODE_DELIVERY_CONTRACT = `When a task changes code:
 - Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.
@@ -17,23 +17,17 @@ export const CODE_DELIVERY_CONTRACT = `When a task changes code:
 export const REMI_CLI_COMMUNICATION = "Use `remi message` for communication, `remi inbox` to read addressed messages, and `remi turn` to inspect or control execution.";
 
 /**
- * The workspace bootstrap prompt's built-in default before ADR 0023. Older
- * daemons still receive it in `workspace_bootstrap_prompt`; stored values that
- * begin with it hold only what follows.
+ * The workspace bootstrap prompt's built-in default before ADR 0023, frozen.
+ * Older daemons still receive it in `workspace_bootstrap_prompt`, and the
+ * legacy settings key keeps it in front of the workspace's text.
  */
-export const LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT = `## Code Delivery Contract
+export const LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT = WORKSPACE_DEFAULT_V3;
 
-${CODE_DELIVERY_CONTRACT}
-
-${REMI_CLI_COMMUNICATION}
-
-${ARTIFACT_DELIVERY_CONTRACT}`;
-
-/** A stored workspace prompt without the legacy default it may begin with. */
+/** A stored workspace prompt without whichever former default it begins with (the longest that matches). */
 export function customWorkspacePrompt(value: string | null | undefined): string {
   const text = (value ?? "").replace(/\r\n?/g, "\n").trim();
-  const legacy = LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT.trim();
-  return text.startsWith(legacy) ? text.slice(legacy.length).trim() : text;
+  const legacy = LEGACY_WORKSPACE_DEFAULTS.map(entry => entry.trim()).find(entry => text === entry || text.startsWith(`${entry}\n`));
+  return legacy ? text.slice(legacy.length).trim() : text;
 }
 
 /** Bootstrap and delta workspace prompts as one, the way ADR 0023 stores them. */

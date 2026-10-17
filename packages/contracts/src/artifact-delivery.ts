@@ -10,9 +10,3 @@ export const CHAT_ARTIFACT_DELIVERY_CONTRACT = `Chat supports attachment deliver
 export const ISSUE_ARTIFACT_DELIVERY_CONTRACT = `When a task produces a viewable artifact (HTML page, chart, diagram, rendered report):
 - In an Issue, attach it to the reply message with \`remi message send <issue> --content <summary> --attachment <path>\`. Report the message ID and attachment filename.
 - Never deliver by workspace path alone. Short diagrams may go in the comment body as fenced Mermaid or HTML; use attachments for full pages and shareable reports.`;
-
-export const ARTIFACT_DELIVERY_CONTRACT = `## Artifact Delivery Contract
-
-${ISSUE_ARTIFACT_DELIVERY_CONTRACT}
-
-${CHAT_ARTIFACT_DELIVERY_CONTRACT}`;
