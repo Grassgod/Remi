@@ -93,6 +93,7 @@
 - 绑定 Issue 的新日志条数沿用服务端的未读定义，不计 agent 自己写的条目。话题协调者同时是 Issue 执行者时，一轮只有它自己的条目就不会出现这一行；转述通知（`<KEY> 有新日志：…`）仍会到达。
 - 升级之前创建的 provider 会话历史里还留着当时的 bootstrap 提示词，内容与 `AGENTS.md` 有重叠，不影响正确性。
 - 回滚：撤销实现提交即可。新列可以保留，旧镜像会忽略。工作区的两个旧提示词键一直保持更新，所以旧镜像仍看到原来的值。Project 已合并的说明在旧镜像里只作为 bootstrap 说明出现。
+- 回滚后在旧镜像里改过、再升级：工作区设置记下 `prompt_appendix` 是在哪个修订写入的（`prompt_appendix_revision`），旧镜像只会改两个旧键并增加 `prompt_revision`，修订更新时就重新从旧键合并。Project 读取时把旧镜像写下的 `delta_instructions` 并入 `instructions`，下一次保存写成一份并清空它，不计为一次说明修改。
 
 ## 实现
 

@@ -234,7 +234,7 @@ export class ProjectsRepo {
       : input.deltaInstructions;
     // ADR 0023: one instructions field. A client from before may still send the delta half; it is appended.
     const instructions = joinProjectInstructions(input.instructions === undefined
-      ? joinProjectInstructions(current.instructions, current.deltaInstructions)
+      ? current.instructions
       : normalizeProjectInstructions(input.instructions), normalizeProjectInstructions(deltaInstructionsInput));
     const deltaInstructions = "";
     if (deltaInstructionsInput?.trim()) assertMergedInstructionsLength(instructions);
@@ -266,6 +266,13 @@ export class ProjectsRepo {
     };
     if (input.title !== undefined) assign("title", input.title);
     if (input.description !== undefined) assign("description", input.description);
+    // `current` already reads a leftover delta as part of the instructions; any save stores that as the one field.
+    const storedDelta = (this.ctx.db.query("SELECT delta_instructions FROM multiremi_projects WHERE id = ?").get(id) as
+      { delta_instructions?: string | null } | null)?.delta_instructions ?? "";
+    if (!writesInstructions && storedDelta) {
+      assign("instructions", current.instructions);
+      assign("delta_instructions", "");
+    }
     if (writesInstructions) {
       assign("instructions", instructions);
       assign("delta_instructions", deltaInstructions);
@@ -1477,8 +1484,10 @@ function toProject(row: Row): MultiremiProject {
     workspaceId: String(row.workspace_id ?? "local"),
     title: String(row.title),
     description: nullableString(row.description),
-    instructions: String(row.instructions ?? ""),
-    deltaInstructions: String(row.delta_instructions ?? ""),
+    // ADR 0023: one field. A delta an older image wrote after a rollback reads as part of it; the next save
+    // clears the half (`updateProject`).
+    instructions: joinProjectInstructions(String(row.instructions ?? ""), String(row.delta_instructions ?? "")),
+    deltaInstructions: "",
     instructionsRevision: Number(row.instructions_revision ?? 0),
     instructionsUpdatedAt: nullableString(row.instructions_updated_at),
     instructionsUpdatedBy: nullableString(row.instructions_updated_by),

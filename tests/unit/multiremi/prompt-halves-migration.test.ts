@@ -28,6 +28,8 @@ describe("20261019_merge_prompt_halves (ADR 0023)", () => {
       prompt_bootstrap_appendix: `${LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nWorkspace rule`,
       prompt_delta_appendix: "Every turn rule",
       prompt_revision: 3,
+      // The revision the prompt was folded at: a later edit on an older image is newer and is read instead.
+      prompt_appendix_revision: 3,
       other: true,
     });
     expect(readWorkspacePromptSettings(store.getWorkspace("local")!).prompt).toBe("Workspace rule\n\nEvery turn rule");
@@ -36,6 +38,22 @@ describe("20261019_merge_prompt_halves (ADR 0023)", () => {
     // Applied once: a later run does not append again.
     db!.run("UPDATE multiremi_projects SET delta_instructions = 'Late delta' WHERE id = ?", [project.id]);
     runMigrations(db! as never);
-    expect(store.getProject(project.id)).toMatchObject({ instructions: "Bootstrap rule\n\nDelta rule" });
+    expect(db!.query("SELECT instructions FROM multiremi_projects WHERE id = ?").get(project.id))
+      .toEqual({ instructions: "Bootstrap rule\n\nDelta rule" });
+  });
+
+  it("reads a delta an older image wrote after the migration as part of the instructions, and clears it on the next save", () => {
+    const store = createLocalStore();
+    const project = store.createProject({ title: "Rolled back", instructions: "Bootstrap rule" });
+    // A rollback to an image from before ADR 0023 edits the delta half again.
+    db!.run("UPDATE multiremi_projects SET delta_instructions = ?, instructions_revision = 2 WHERE id = ?", ["Edited on the old image", project.id]);
+    expect(store.getProject(project.id)).toMatchObject({
+      instructions: "Bootstrap rule\n\nEdited on the old image", deltaInstructions: "", instructionsRevision: 2 });
+
+    // Any later save writes the one field and clears the half, without counting as an instructions edit.
+    store.updateProject(project.id, { title: "Rolled back and up" });
+    expect(db!.query("SELECT instructions, delta_instructions, instructions_revision FROM multiremi_projects WHERE id = ?").get(project.id))
+      .toEqual({ instructions: "Bootstrap rule\n\nEdited on the old image", delta_instructions: "", instructions_revision: 2 });
+    expect(store.getProject(project.id)).toMatchObject({ title: "Rolled back and up", instructions: "Bootstrap rule\n\nEdited on the old image" });
   });
 });

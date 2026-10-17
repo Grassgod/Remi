@@ -18,6 +18,8 @@ export const DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT = LEGACY_DEFAULT_WORKSPACE_BOOTS
 /** `prompt_appendix` holds the workspace's own text only; the two legacy keys are folded into it. */
 export const WORKSPACE_PROMPT_KEYS = {
   prompt: "prompt_appendix",
+  /** The revision `prompt_appendix` was written or folded at; an older image bumps only `prompt_revision`. */
+  promptRevision: "prompt_appendix_revision",
   legacyBootstrap: "prompt_bootstrap_appendix",
   legacyDelta: "prompt_delta_appendix",
   revision: "prompt_revision",
@@ -26,11 +28,15 @@ export const WORKSPACE_PROMPT_KEYS = {
 } as const;
 const KEYS = WORKSPACE_PROMPT_KEYS;
 
-/** The stored workspace prompt; settings saved before ADR 0023 read as their two prompts merged. */
+/**
+ * The stored workspace prompt. Settings saved before ADR 0023, or edited on an
+ * older image after a rollback (it bumps `prompt_revision` and writes only the
+ * two legacy keys), read as their two prompts merged.
+ */
 export function readWorkspacePromptSettings(workspace: MultiremiWorkspace): MultiremiPromptSettings {
   const settings = workspace.settings ?? {};
   return {
-    prompt: readString(settings[KEYS.prompt])
+    prompt: currentPrompt(settings)
       ?? mergedWorkspacePrompt(readString(settings[KEYS.legacyBootstrap]), readString(settings[KEYS.legacyDelta])),
     revision: readRevision(settings[KEYS.revision]),
     updatedAt: readString(settings[KEYS.updatedAt]),
@@ -45,9 +51,20 @@ export function readWorkspacePromptSettings(workspace: MultiremiWorkspace): Mult
  * so an image from before reads what it always read.
  */
 export function foldLegacyWorkspacePrompts(settings: Record<string, unknown>): Record<string, unknown> | null {
-  if (readString(settings[KEYS.prompt]) !== null) return null;
+  if (currentPrompt(settings) !== null) return null;
   if (!(KEYS.legacyBootstrap in settings) && !(KEYS.legacyDelta in settings)) return null;
-  return { ...settings, [KEYS.prompt]: mergedWorkspacePrompt(readString(settings[KEYS.legacyBootstrap]), readString(settings[KEYS.legacyDelta])) };
+  return { ...settings,
+    [KEYS.prompt]: mergedWorkspacePrompt(readString(settings[KEYS.legacyBootstrap]), readString(settings[KEYS.legacyDelta])),
+    [KEYS.promptRevision]: readRevision(settings[KEYS.revision]) };
+}
+
+/** `prompt_appendix`, unless an older image changed the legacy keys after it was written. */
+function currentPrompt(settings: Record<string, unknown>): string | null {
+  const prompt = readString(settings[KEYS.prompt]);
+  if (prompt === null) return null;
+  const derivedAt = settings[KEYS.promptRevision];
+  // Without the mark it was written before the mark existed, by this image: it is current.
+  return derivedAt === undefined || readRevision(derivedAt) >= readRevision(settings[KEYS.revision]) ? prompt : null;
 }
 
 /** What an image from before ADR 0023 reads: Remi's former default with the workspace's text after it. */
@@ -106,6 +123,7 @@ export function mergeWorkspacePromptSettings(
       // Kept in step for a rollback to an image from before ADR 0023.
       ...legacyPromptKeys(prompts.prompt),
       [KEYS.prompt]: prompts.prompt,
+      [KEYS.promptRevision]: prompts.revision,
       [KEYS.revision]: prompts.revision,
       [KEYS.updatedAt]: prompts.updatedAt,
       [KEYS.updatedBy]: prompts.updatedBy,

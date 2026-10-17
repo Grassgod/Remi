@@ -102,8 +102,31 @@ describe("workspace prompt settings", () => {
     store.updateWorkspace("local", { settings: { prompt_bootstrap_appendix: DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT } });
     expect(readWorkspacePromptSettings(store.getWorkspace("local")!).prompt).toBe("");
     const folded = foldLegacyWorkspacePrompts({ prompt_bootstrap_appendix: "Own rule", prompt_delta_appendix: "", other: 1 });
-    expect(folded).toEqual({ prompt_bootstrap_appendix: "Own rule", prompt_delta_appendix: "", other: 1, prompt_appendix: "Own rule" });
+    expect(folded).toEqual({ prompt_bootstrap_appendix: "Own rule", prompt_delta_appendix: "", other: 1, prompt_appendix: "Own rule", prompt_appendix_revision: 0 });
     expect(foldLegacyWorkspacePrompts({ prompt_appendix: "Already one" })).toBeNull();
+  });
+
+  it("reads an edit made on an older image after a rollback, then keeps the new prompt again", async () => {
+    const store = createLocalStore();
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    await app.request("/api/workspaces/local/prompts", { method: "PUT", headers: MASTER,
+      body: JSON.stringify({ prompt: "Written by the new image.", expectedRevision: 0 }) });
+    expect(store.getWorkspace("local")!.settings).toMatchObject({ prompt_appendix_revision: 1, prompt_revision: 1 });
+
+    // Rolled back: the old image edits its two keys and bumps the revision, keeping the keys it does not know.
+    const settings = store.getWorkspace("local")!.settings;
+    store.updateWorkspace("local", { settings: { ...settings,
+      prompt_bootstrap_appendix: `${DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nEdited on the old image.`,
+      prompt_delta_appendix: "Old delta.", prompt_revision: 2 } });
+    // Upgraded again: the newer legacy keys win over the stale prompt_appendix.
+    expect(readWorkspacePromptSettings(store.getWorkspace("local")!)).toMatchObject({
+      prompt: "Edited on the old image.\n\nOld delta.", revision: 2 });
+    const next = await app.request("/api/workspaces/local/prompts", { method: "PUT", headers: MASTER,
+      body: JSON.stringify({ prompt: "Edited on the old image.\n\nOld delta.\n\nAnd again.", expectedRevision: 2 }) });
+    expect(await next.json()).toMatchObject({ revision: 3 });
+    expect(store.getWorkspace("local")!.settings).toMatchObject({ prompt_appendix_revision: 3, prompt_revision: 3 });
+    expect(foldLegacyWorkspacePrompts({ prompt_bootstrap_appendix: "Own", prompt_revision: 4 }))
+      .toMatchObject({ prompt_appendix: "Own", prompt_appendix_revision: 4 });
   });
 
   it("rejects stale writes and non-admin members", async () => {
