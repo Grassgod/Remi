@@ -104,7 +104,7 @@ export class PeerHubTransport implements HubTransport {
     for (const frame of input.frames) {
       if (frame.kind === "trace") continue;
       this.send({ kind: "head", key: input.key, head: input.head ?? frame.seq, log_version: null,
-        ...(frame.kind === "patch" ? { changed_seq: frame.seq } : {}) });
+        ...(frame.kind === "patch" || input.changed ? { changed_seq: frame.seq } : {}) });
     }
   }
 

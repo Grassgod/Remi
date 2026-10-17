@@ -12,7 +12,10 @@
  *
  * The hub assigns no sequence: a frame carries the sequence its owner gave it,
  * `<= head` is a replay (dropped and counted), and `!= head + 1` is a hole that
- * waits {@link HUB_HOLE_WAIT_MS} before the reader fills it.
+ * waits {@link HUB_HOLE_WAIT_MS} before the reader fills it. On a `log:` stream a
+ * patch, or an `entry` at a passed sequence with a higher revision (a whole row
+ * written again, like a Chat turn card), is a live change to that position
+ * rather than a replay.
  *
  * ## Why the fan-out is shaped this way
  *
@@ -270,6 +273,12 @@ function isConversationLogPatch(
   entry: B0ConversationLogEntry | ConversationLogPatch,
 ): entry is ConversationLogPatch {
   return "target_seq" in entry;
+}
+
+/** A `log:` frame's row revision; 0 when the producer sent none. */
+function frameRevision(frame: HubFrame): number {
+  const revision = (frame.payload as { revision?: unknown } | null)?.revision;
+  return typeof revision === "number" && Number.isFinite(revision) ? revision : 0;
 }
 
 /**
@@ -779,6 +788,19 @@ export class HubImpl implements ObservableLiveHub {
         if (origin === "local" && stream.kind === "log") this.transport.publish({ key, frames: [frame], head: Math.max(stream.headSeq, frame.seq) });
         continue;
       }
+      if (stream.kind === "log" && frame.kind === "entry" && frame.seq <= stream.headSeq) {
+        // A whole row re-emitted at a sequence the stream already passed: a Chat
+        // turn card is written when its turn starts and re-sent as an entry each
+        // time the turn changes. A higher revision is news for whoever already
+        // holds that position; an equal or older one is a replay.
+        if (this.acceptRevisedEntry(stream, frame)) {
+          dirty = true;
+          if (origin === "local") this.transport.publish({ key, frames: [frame], head: stream.headSeq, changed: true });
+        } else {
+          dropped += 1;
+        }
+        continue;
+      }
       if (frame.seq <= stream.headSeq) {
         // Replay: everything at or below the head is already retained.
         dropped += 1;
@@ -807,7 +829,33 @@ export class HubImpl implements ObservableLiveHub {
     this.evictOverBudget();
   }
 
+  /**
+   * Take a higher revision of a whole row at a sequence the stream already passed.
+   *
+   * False is a replay: the retained copy is at least as new. Without a retained
+   * copy (trimmed, or never held after a warm-up) only each subscriber's own
+   * delivered revision can tell, so the change is queued and the flush decides.
+   */
+  private acceptRevisedEntry(stream: HubRingStream, frame: HubFrame): boolean {
+    const revision = frameRevision(frame);
+    const retained = stream.entries.find((entry) => entry.frame.seq === frame.seq);
+    if (retained ? !stream.staleSeqs.has(frame.seq) && revision <= frameRevision(retained.frame) : revision <= 1) return false;
+    if (retained) this.ring.replace(stream, frame);
+    this.queueLiveChange(stream.key, frame);
+    return true;
+  }
+
   private queueLiveChange(key: HubStreamKey, frame: HubFrame): void {
+    if (frame.kind === "entry") {
+      // A whole row supersedes every queued change it is at least as new as.
+      const revision = frameRevision(frame);
+      const kept = (this.liveChanges.get(key) ?? [])
+        .filter((existing) => existing.frame.seq !== frame.seq || frameRevision(existing.frame) > revision);
+      kept.push({ frame, fieldRevisions: new Map() });
+      kept.sort((a, b) => a.frame.seq - b.frame.seq || frameRevision(a.frame) - frameRevision(b.frame));
+      this.liveChanges.set(key, kept);
+      return;
+    }
     const incoming = frame.payload as ConversationLogPatch;
     const change: LiveChange = {
       frame,
@@ -818,7 +866,7 @@ export class HubImpl implements ObservableLiveHub {
       this.liveChanges.set(key, [change]);
       return;
     }
-    const index = list.findIndex((existing) => existing.frame.seq === frame.seq);
+    const index = list.findIndex((existing) => existing.frame.seq === frame.seq && existing.frame.kind === "patch");
     if (index >= 0) {
       const existing = list[index]!;
       const previous = existing.frame.payload as ConversationLogPatch;
@@ -837,7 +885,7 @@ export class HubImpl implements ObservableLiveHub {
       };
     } else {
       list.push(change);
-      list.sort((a, b) => a.frame.seq - b.frame.seq);
+      list.sort((a, b) => a.frame.seq - b.frame.seq || frameRevision(a.frame) - frameRevision(b.frame));
     }
   }
 
@@ -847,7 +895,14 @@ export class HubImpl implements ObservableLiveHub {
       list = [];
       this.pending.set(key, list);
     }
-    if (list.some((entry) => entry.frame.seq === frame.seq)) {
+    const waiting = list.findIndex((entry) => entry.frame.seq === frame.seq);
+    if (waiting >= 0 && frame.kind === "entry" && list[waiting]!.frame.kind === "entry"
+      && key.startsWith("log:") && frameRevision(frame) > frameRevision(list[waiting]!.frame)) {
+      // A newer whole row for a position still waiting behind a hole replaces it.
+      list[waiting] = { frame, at: list[waiting]!.at };
+      return;
+    }
+    if (waiting >= 0) {
       const stream = this.ring.get(key);
       if (stream) stream.droppedFrames += 1;
       this.droppedFrames += 1;
@@ -1060,9 +1115,11 @@ export class HubImpl implements ObservableLiveHub {
         if (changes) {
           for (const change of changes) {
             const frame = change.frame;
-            if (frame.seq <= subscriber.cursor &&
-              (subscriber.lagging || !this.hasDelivered(subscriber, frame.seq)
-                || !this.advancesRevision(subscriber, change))) {
+            if (frame.seq > subscriber.cursor) continue;
+            // A whole row needs no base; only a paused subscriber must reread it.
+            if (frame.kind === "entry" ? subscriber.lagging
+              : subscriber.lagging || !this.hasDelivered(subscriber, frame.seq)
+                || !this.advancesRevision(subscriber, change)) {
               this.deferChangeGap(subscriber, frame.seq);
             }
           }
@@ -1074,8 +1131,13 @@ export class HubImpl implements ObservableLiveHub {
         }
         if (!subscriber.active) continue;
         if (changes && changes.length > 0 && !subscriber.lagging) {
-          // A gap advances the replay cursor without delivering a patch base.
-          const applicable = changes.filter((change) => this.hasDelivered(subscriber, change.frame.seq))
+          // A gap advances the replay cursor without delivering a patch base. A
+          // revised whole row goes to whoever already passed its position and does
+          // not hold that revision; the others replay it from the ring.
+          const applicable = changes.filter((change) => change.frame.kind === "entry"
+            ? change.frame.seq <= subscriber.cursor
+              && frameRevision(change.frame) > (subscriber.deliveredRevisions.get(change.frame.seq) ?? 1)
+            : this.hasDelivered(subscriber, change.frame.seq))
             .map((change) => change.frame);
           if (applicable.length > 0) this.send(subscriber, applicable);
         }
@@ -1148,12 +1210,7 @@ export class HubImpl implements ObservableLiveHub {
       }
       if (!subscriber.active) return;
       for (const frame of frames) {
-        if (frame.kind !== "patch") {
-          const last = subscriber.delivered.at(-1);
-          if (last && last.to + 1 === frame.seq) last.to = frame.seq;
-          else subscriber.delivered.push({ from: frame.seq, to: frame.seq });
-          this.trimDelivered(subscriber);
-        }
+        if (frame.kind !== "patch") this.markDelivered(subscriber, frame.seq);
         if (frame.kind !== "trace") {
           this.rememberDeliveredRevision(subscriber, frame.seq, (frame.payload as B0ConversationLogEntry).revision);
         }
@@ -1173,6 +1230,20 @@ export class HubImpl implements ObservableLiveHub {
 
   private hasDelivered(subscriber: HubSubscriber, seq: number): boolean {
     return subscriber.delivered.some((range) => range.from <= seq && seq <= range.to);
+  }
+
+  /** Record a delivered whole row; the islands stay ordered for trimming. */
+  private markDelivered(subscriber: HubSubscriber, seq: number): void {
+    const ranges = subscriber.delivered;
+    const last = ranges.at(-1);
+    if (!last || seq > last.to + 1) ranges.push({ from: seq, to: seq });
+    else if (seq === last.to + 1) last.to = seq;
+    else if (!this.hasDelivered(subscriber, seq)) {
+      // An older row delivered again as a whole (a revised entry) after a gap.
+      const index = ranges.findIndex((range) => range.from > seq);
+      ranges.splice(index < 0 ? ranges.length : index, 0, { from: seq, to: seq });
+    }
+    this.trimDelivered(subscriber);
   }
 
   private advancesRevision(subscriber: HubSubscriber, change: LiveChange): boolean {

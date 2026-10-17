@@ -6,6 +6,8 @@ import type { HubFrame } from "@multiremi/contracts/live-hub";
 import type { StreamSubscriptionHandlers } from "@multiremi/core/api/ws-client";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
+import { sharedTabsEnv } from "@multiremi/core/replica/test-tabs";
+import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
 import { createChatStore, registerChatStore } from "@multiremi/core/chat";
 import {
   SessionLogEntrySchema, type IssueLogBootstrap, type LogWindowParams, type SessionLogRow, type SessionLogWindow,
@@ -143,6 +145,8 @@ function chatLog() {
   let version = 0;
   return {
     write(row: SessionLogRow) { rows.push(row); version += 1; },
+    /** An in-place write: the same position at a higher revision. */
+    replace(row: SessionLogRow) { rows.splice(rows.findIndex(existing => existing.seq === row.seq), 1, row); version += 1; },
     /** A write that changes no shown row, such as a turn status patch. */
     touch() { version += 1; },
     read(params: LogWindowParams): SessionLogWindow {
@@ -232,5 +236,98 @@ it("shows a new chat's first message as sent and its reply without a reload", as
     await act(async () => { publish([entry(3, "message")]); });
     await waitFor(() => expect(main()).toHaveTextContent("Reply from Alpha"));
     expect(socket.subscribeStream.mock.calls.filter(([, id]) => id === chatId)).toHaveLength(1);
+  } finally { view.unmount(); client.clear(); }
+});
+
+/**
+ * The floating chat over an Issue detail: two session logs on one page share
+ * the replica lock. The Issue log connected first, so it leads and its socket
+ * carries the chat's stream; the chat follows. The leader used to refuse the
+ * chat's frames, so a second turn's reply never appeared until a remount.
+ */
+it.each(["without", "with"])("shows a second turn's reply and finished fold live in a following chat, %s a released queued message", async (queue) => {
+  const issueLog = chatLog();
+  const log = chatLog();
+  const chatRow = (seq: number, fields: Record<string, unknown>) => SessionLogEntrySchema.parse({
+    session_id: session.id, seq, id: `row-${seq}`, revision: 1, body_html: null, render_version: null,
+    visibility: "shown", metadata: { attachments: [], reactions: [] }, ...fields,
+  });
+  issueLog.write(SessionLogEntrySchema.parse({ session_id: "ises_issue", seq: 0, id: "issue-head", revision: 1, kind: "head",
+    body_md: "Issue", body_html: null, render_version: null, metadata: { attachments: [] } }));
+  log.write(chatRow(0, { kind: "head", body_md: session.title }));
+  log.write(chatRow(1, { kind: "message", sender_type: "member", sender_id: "member-a", to_type: "agent", to_agent_id: "agent-a",
+    message_kind: "request", body_md: "First question" }));
+  log.write(chatRow(2, { kind: "message", sender_type: "agent", sender_id: "agent-a", to_type: "member", message_kind: "final",
+    task_id: "turn-1", body_md: "First answer" }));
+  backend.read.mockImplementation(async (id: string, params: LogWindowParams) => (id === session.id ? log : issueLog).read(params));
+  backend.getChatSession.mockResolvedValue(session);
+  backend.listMessages.mockResolvedValue({ messages: [], next_cursor: null });
+  backend.getChatQueue.mockResolvedValue({ items: [], paused: null });
+  backend.sendChatMessage.mockImplementation(async (_id: string, body: string, _attachments: unknown, clientId: string) => {
+    log.write(chatRow(3, { kind: "message", sender_type: "member", sender_id: "member-a", to_type: "agent",
+      to_agent_id: "agent-a", message_kind: "request", body_md: body, dedupe_key: clientId }));
+    // The turn's card takes its position now and stays hidden while it runs.
+    log.write(chatRow(4, { kind: "turn", visibility: "hidden", task_id: "attempt-2", body_md: "" }));
+    return { message_id: "row-3", task_id: "attempt-2", turn_id: "turn-2", created_at: "2026-10-17", supports_queue: true, queued: false };
+  });
+  const streams = new Map<string, StreamSubscriptionHandlers[]>();
+  socket.subscribeStream.mockImplementation((_stream, id: string, handlers: StreamSubscriptionHandlers) => {
+    streams.set(id, [...(streams.get(id) ?? []), handlers]);
+    return { unsubscribe: vi.fn() };
+  });
+  const publish = (frames: HubFrame[]) => { for (const handlers of streams.get(session.id) ?? []) handlers.onFrames?.(frames); };
+  const entry = (seq: number, kind: string, revision = 1): HubFrame =>
+    ({ seq, kind: "entry", payload: { session_id: session.id, seq, id: `row-${seq}`, kind, revision } });
+  function IssueDetailLog() {
+    useIssueLog("ises_issue", undefined, undefined, false, true);
+    return null;
+  }
+  let showChat!: (shown: boolean) => void;
+  function Page() {
+    const [shown, setShown] = useState(false);
+    showChat = setShown;
+    return <><IssueDetailLog />{shown && <ChatWindow presentation="page" initialSessionId={session.id} />}</>;
+  }
+  const store = createChatStore({ storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} } });
+  registerChatStore(store);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const view = render(<QueryClientProvider client={client}>
+    <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, messages: enMessages } }}>
+      <ReplicaEnvProvider env={sharedTabsEnv()}><Page /></ReplicaEnvProvider>
+    </I18nProvider>
+  </QueryClientProvider>);
+  const main = () => view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]');
+  try {
+    // The Issue log leads.
+    await waitFor(() => expect(streams.has("ises_issue")).toBe(true));
+    await act(async () => { showChat(true); });
+    await waitFor(() => expect(main()).toHaveTextContent("First answer"));
+    // The chat follows: the leader's socket subscribes for it, once.
+    await waitFor(() => expect(streams.get(session.id)).toHaveLength(1));
+    await waitFor(() => expect(composer.props?.agentName).toBe("Alpha"));
+
+    await act(async () => { await composer.props!.onSend("Second question"); });
+    await act(async () => { publish([entry(3, "message"), { seq: 4, kind: "entry", payload: { session_id: session.id, seq: 4, revision: 1, visibility: "hidden" } }]); });
+    await waitFor(() => expect(main()).toHaveTextContent("Second question"));
+
+    // The turn ends: the reply, the card re-sent finished at its old position
+    // (a higher revision), and a queued follow-up the lane released.
+    log.write(chatRow(5, { kind: "message", sender_type: "agent", sender_id: "agent-a", to_type: "member", message_kind: "final",
+      task_id: "turn-2", body_md: "Second answer" }));
+    const finished = chatRow(4, { kind: "turn", task_id: "attempt-2", revision: 3, body_md: "",
+      metadata: { attachments: [], turn_id: "turn-2", status: "completed", final_entry_id: "row-5", process_item_count: 2, worked_ms: 9000 } });
+    log.replace(finished);
+    if (queue === "with") log.write(chatRow(6, { kind: "message", sender_type: "member", sender_id: "member-a", to_type: "agent",
+      to_agent_id: "agent-a", message_kind: "request", body_md: "Queued follow-up" }));
+    await act(async () => { publish([entry(5, "message"), entry(4, "turn", 3), ...(queue === "with" ? [entry(6, "message")] : [])]); });
+
+    await waitFor(() => expect(main()).toHaveTextContent("Second answer"));
+    const reply = () => main()!.querySelector<HTMLElement>('[data-perf-key="row-5"]');
+    await waitFor(() => expect(reply()?.querySelector('[data-chat-steps="finished"]')).not.toBeNull());
+    if (queue === "with") {
+      await waitFor(() => expect(main()).toHaveTextContent("Queued follow-up"));
+      expect(main()!.textContent!.indexOf("Second answer")).toBeLessThan(main()!.textContent!.indexOf("Queued follow-up"));
+    }
+    expect(streams.get(session.id)).toHaveLength(1);
   } finally { view.unmount(); client.clear(); }
 });

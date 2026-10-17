@@ -164,6 +164,24 @@ describe("Hub peer transport", () => {
     expect(JSON.stringify(f.posts)).not.toContain("never-send");
   });
 
+  it("turns a revised whole row (a finished Chat turn card) into the same reread gap", async () => {
+    const f = pair(); fixtures.push(f);
+    const seen: number[] = [];
+    const gaps: [number, number][] = [];
+    f.db.add(0);
+    f.hub.subscribeWithSink("log:s", 0, {
+      getBufferedAmount: () => 0,
+      send: (frames) => seen.push(...frames.map((frame) => frame.seq)),
+      gap: (from, to) => gaps.push([from, to]),
+    });
+    f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "entry", payload: {} }], head: 0 });
+    await waitFor(() => seen.length === 1, "base row");
+    f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "entry", payload: { secret: "never-send", revision: 4 } }], head: 0, changed: true });
+    await waitFor(() => gaps.length === 1, "revision gap");
+    expect(gaps).toEqual([[0, 0]]);
+    expect(JSON.stringify(f.posts)).not.toContain("never-send");
+  });
+
   it("detects queue eviction from pre-enqueue sequence numbers and reconciles once", async () => {
     const f = pair({ queueLimit: 3 }); fixtures.push(f);
     const seen: number[] = [];

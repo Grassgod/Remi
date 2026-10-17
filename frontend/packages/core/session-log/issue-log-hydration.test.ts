@@ -101,10 +101,25 @@ describe("read window subscription and hydration", () => {
     expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(row(10));
   });
 
-  it("rejects another session without reading or forwarding its rows", async () => {
+  it("hydrates another session's frames (the leader serves other tabs and logs) from the read route only", async () => {
+    const replica = seed(windowOf([row(10)]));
+    const other = row(10, { session_id: "other", id: "r10" });
+    reads.get.mockResolvedValue(windowOf([other]));
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    await replica.hydratedFrames("other", [frame(10, { session_id: "other" })]);
+    // This page's window holds a row at the same seq and id; it is never reused.
+    expect(reads.get).toHaveBeenCalledExactlyOnceWith("other", { anchor: 9, after: 1 });
+    expect(delivered).toHaveBeenCalledExactlyOnceWith("other", [{ ...frame(10, { session_id: "other" }), payload: other }]);
+    // Nor does the other session's read become a window this session hydrates from.
+    reads.get.mockClear();
+    reads.get.mockResolvedValue(windowOf([row(11)]));
+    await replica.hydratedFrames("s", [frame(11)]);
+    expect(reads.get).toHaveBeenCalledExactlyOnceWith("s", { anchor: 10, after: 1 });
+  });
+
+  it("rejects a payload that names another session than its stream", async () => {
     const replica = seed(windowOf([row(10)]));
     const delivered = vi.spyOn(replica, "frames");
-    await expect(replica.hydratedFrames("other", [frame(10)])).rejects.toThrow("another session");
     await expect(replica.hydratedFrames("s", [frame(10, { session_id: "other" })])).rejects.toThrow("another session");
     expect(reads.get).not.toHaveBeenCalled(); expect(delivered).not.toHaveBeenCalled();
   });
