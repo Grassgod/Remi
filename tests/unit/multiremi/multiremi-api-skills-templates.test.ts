@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { createStore, jsonResponse, metricValue, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
+import { receiveTaskOffer } from "../../fixtures/task-offer.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -117,6 +118,56 @@ describe("Multiremi API — skills and agent templates", () => {
     expect(deleted.status).toBe(204);
     const afterDelete = await app.request(`/api/multiremi/agents/${agent.id}/skills`);
     expect((await afterDelete.json()).skills).toHaveLength(0);
+  });
+
+  it("makes PUT /api/agents/:id/skills replace the inline skills the daemon also reads", async () => {
+    const store = createStore();
+    const runtime = store.registerRuntime({ name: "Skills runtime", provider: "claude" });
+    const agent = store.createAgent({ name: "Skill holder", provider: "claude", runtimeId: runtime.id });
+    const first = store.createSkill({ id: "skl_first", workspaceId: "local", name: "First", content: "# First" });
+    const second = store.createSkill({ id: "skl_second", workspaceId: "local", name: "Second", content: "# Second" });
+    const app = createMultiremiApp({ store });
+    const send = (method: string, path: string, body: unknown) => app.request(path, {
+      method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const names = async (response: Response) => {
+      expect(response.status).toBe(200);
+      return ((await response.json()) as Array<{ name: string }>).map((skill) => skill.name);
+    };
+    const putSkills = (skillIds: string[]) => send("PUT", `/api/agents/${agent.id}/skills`, { skill_ids: skillIds });
+    const inlineColumn = () => store.getAgentLite(agent.id)!.skills.map((skill) => skill.name);
+    // Inline entries as the old agent update wrote them: a copy of an attached skill, plus one
+    // that only ever lived on the agent.
+    const writeInlineSkills = () => store.updateAgent(agent.id, {
+      skills: [store.getSkill(first.id!)!, { name: "Inline only", content: "# Inline" }],
+    });
+
+    expect(await names(await putSkills([first.id!]))).toEqual(["First"]);
+    expect((await send("PUT", `/api/agents/${agent.id}`, { name: "Renamed holder" })).status).toBe(200);
+    expect((await send("PUT", `/api/agents/${agent.id}/env`, { custom_env: { MODE: "test" } })).status).toBe(200);
+    expect(inlineColumn()).toEqual([]);
+
+    writeInlineSkills();
+    expect(await names(await send("POST", `/api/agents/${agent.id}/skills/add`, { skill_ids: [second.id] })))
+      .toEqual(["First", "Second", "Inline only"]);
+    expect(inlineColumn()).toEqual(["First", "Inline only"]);
+
+    expect(await names(await putSkills([second.id!]))).toEqual(["Second"]);
+    expect(inlineColumn()).toEqual([]);
+    expect(await names(await app.request(`/api/agents/${agent.id}/skills`))).toEqual(["Second"]);
+
+    writeInlineSkills();
+    expect(await names(await putSkills([]))).toEqual([]);
+    expect(inlineColumn()).toEqual([]);
+    expect(await names(await app.request(`/api/agents/${agent.id}/skills`))).toEqual([]);
+    expect((await (await app.request(`/api/agents/${agent.id}`)).json()).skills).toEqual([]);
+
+    const task = store.createTask({ agentId: agent.id, prompt: "Run without skills" });
+    const offer = await receiveTaskOffer(store, runtime.id);
+    expect(offer?.attempt_id).toBe(task.id);
+    expect(offer?.agent.skills).toEqual([]);
   });
 
   it("gates Go-compatible skill mutations by creator/admin and emits workspace events", async () => {

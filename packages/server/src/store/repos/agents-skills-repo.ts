@@ -139,7 +139,10 @@ export class AgentsSkillsRepo {
   }
 
   private updateAgentWithinPluginLock(id: string, input: UpdateAgentInput): MultiremiAgent {
-    const current = this.getAgent(id);
+    // The row, not the hydrated Agent: `skills` below writes back the inline column, and the
+    // hydrated list also holds the attached workspace skills. Writing those back made a copy
+    // that a later `PUT /api/agents/:id/skills` could not remove.
+    const current = this.getAgentLite(id);
     if (!current) throw new Error(`Agent not found: ${id}`);
     const now = nowIso();
     const workspaceId = hasAnyField(input, "workspaceId", "workspace_id")
@@ -666,16 +669,31 @@ export class AgentsSkillsRepo {
     const now = nowIso();
     this.ctx.db.transaction(() => {
       this.ctx.db.run("DELETE FROM multiremi_agent_skills WHERE agent_id = ?", [agentId]);
-      for (const skillId of skillIds) {
-        const skill = this.getSkill(skillId);
-        if (!skill) throw new Error(`Skill not found: ${skillId}`);
-        this.ctx.db.run(
-          "INSERT OR IGNORE INTO multiremi_agent_skills (agent_id, skill_id, created_at) VALUES (?, ?, ?)",
-          [agentId, skillId, now],
-        );
-      }
+      // Replace means the result is exactly `skillIds`. Reads merge the inline `skills` column
+      // back in, so it has to be cleared here too.
+      this.ctx.db.run("UPDATE multiremi_agents SET skills = ? WHERE id = ?", [toJson([]), agentId]);
+      this.insertAgentSkillLinks(agentId, skillIds, now);
     })();
     return this.listAgentSkills(agentId);
+  }
+
+  /** Attach skills without touching the ones already present, inline or linked. */
+  addAgentSkills(agentId: string, skillIds: readonly string[]): MultiremiSkill[] {
+    if (!this.ctx.db.query("SELECT id FROM multiremi_agents WHERE id = ?").get(agentId)) throw new Error(`Agent not found: ${agentId}`);
+    const now = nowIso();
+    this.ctx.db.transaction(() => this.insertAgentSkillLinks(agentId, skillIds, now))();
+    return this.listAgentSkills(agentId);
+  }
+
+  private insertAgentSkillLinks(agentId: string, skillIds: readonly string[], now: string): void {
+    for (const skillId of skillIds) {
+      const skill = this.getSkill(skillId);
+      if (!skill) throw new Error(`Skill not found: ${skillId}`);
+      this.ctx.db.run(
+        "INSERT OR IGNORE INTO multiremi_agent_skills (agent_id, skill_id, created_at) VALUES (?, ?, ?)",
+        [agentId, skillId, now],
+      );
+    }
   }
 
   ensureDefaultAgent(
