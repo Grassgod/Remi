@@ -91,7 +91,11 @@ interface ChatInputProps {
   noAgent?: boolean;
   /** Name of the currently selected agent, used in the placeholder. */
   agentName?: string;
-  /** Rendered at the bottom-left of the input bar — typically the agent picker. */
+  /**
+   * Rendered at the bottom-left of the input bar: the agent and work-location
+   * pickers. It shares one row with the actions and yields space to them; the
+   * box is an `@container`, so its items can collapse when it is narrow.
+   */
   leftAdornment?: ReactNode;
   /** Rendered before the action buttons at the bottom-right — the context ring. */
   rightAdornment?: ReactNode;
@@ -454,71 +458,73 @@ export function ChatInput({
             // Mod+Shift+Enter sends with the other follow-up mode.
           />
         </div>
-        {leftAdornment && (
-          <div className="absolute bottom-1.5 left-2 flex items-center">
+        {/* One footer row: the pickers take what the actions leave, so they
+         *  never run under the send controls at any width. */}
+        <div data-chat-composer-footer="" className="absolute inset-x-1.5 bottom-1 flex items-center gap-2">
+          <div data-chat-composer-footer-start="" className="@container flex min-w-0 flex-1 items-center gap-1 pl-0.5">
             {leftAdornment}
           </div>
-        )}
-        <div className="absolute bottom-1 right-1.5 flex items-center gap-1">
-          {rightAdornment}
-          {uploadEnabled && (
-            <FileUploadButton
-              size="sm"
-              onSelect={(file) => editorRef.current?.uploadFile(file)}
-            />
-          )}
-          {isRunning && (
-            <Button
-              size="icon-sm"
-              aria-label={stopLabel ?? t(($) => $.input.stop_tooltip)}
-              title={stopLabel ?? t(($) => $.input.stop_tooltip)}
-              onClick={onStop}
-            >
-              <Square className="size-3.5 fill-current" />
-            </Button>
-          )}
-          {queueEdit ? (
-            <Button
-              size="sm"
-              onClick={() => void handleSend()}
-              disabled={submitDisabled}
-              title={`${t(($) => $.input.save)} · ${submitShortcut}`}
-            >
-              {isSending && <Loader2 className="size-3.5 animate-spin" />}
-              {t(($) => $.input.save)}
-            </Button>
-          ) : isRunning ? (
-            <Button
-              size="icon-sm"
-              onClick={() => void handleSend()}
-              disabled={submitDisabled}
-              aria-label={runningLabel}
-              title={`${runningLabel} · ${submitShortcut}\n${modeLabel(otherMode(followUpMode))} · ${invertShortcut}`}
-              data-follow-up-mode={followUpMode}
-            >
-              {isSending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : followUpMode === "queue" ? (
-                <ListPlus className="size-4" />
-              ) : (
-                <ArrowUp className="size-4" />
-              )}
-            </Button>
-          ) : (
-            <Button
-              size="icon-sm"
-              onClick={() => void handleSend()}
-              disabled={submitDisabled}
-              aria-label={t(($) => $.input.send_tooltip)}
-              title={`${t(($) => $.input.send_tooltip)} · ${submitShortcut}`}
-            >
-              {isSending ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : (
-                <ArrowUp className="size-4" />
-              )}
-            </Button>
-          )}
+          <div className="flex shrink-0 items-center gap-1">
+            {rightAdornment}
+            {uploadEnabled && (
+              <FileUploadButton
+                size="sm"
+                onSelect={(file) => editorRef.current?.uploadFile(file)}
+              />
+            )}
+            {isRunning && (
+              <Button
+                size="icon-sm"
+                aria-label={stopLabel ?? t(($) => $.input.stop_tooltip)}
+                title={stopLabel ?? t(($) => $.input.stop_tooltip)}
+                onClick={onStop}
+              >
+                <Square className="size-3.5 fill-current" />
+              </Button>
+            )}
+            {queueEdit ? (
+              <Button
+                size="sm"
+                onClick={() => void handleSend()}
+                disabled={submitDisabled}
+                title={`${t(($) => $.input.save)} · ${submitShortcut}`}
+              >
+                {isSending && <Loader2 className="size-3.5 animate-spin" />}
+                {t(($) => $.input.save)}
+              </Button>
+            ) : isRunning ? (
+              <Button
+                size="icon-sm"
+                onClick={() => void handleSend()}
+                disabled={submitDisabled}
+                aria-label={runningLabel}
+                title={`${runningLabel} · ${submitShortcut}\n${modeLabel(otherMode(followUpMode))} · ${invertShortcut}`}
+                data-follow-up-mode={followUpMode}
+              >
+                {isSending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : followUpMode === "queue" ? (
+                  <ListPlus className="size-4" />
+                ) : (
+                  <ArrowUp className="size-4" />
+                )}
+              </Button>
+            ) : (
+              <Button
+                size="icon-sm"
+                onClick={() => void handleSend()}
+                disabled={submitDisabled}
+                aria-label={t(($) => $.input.send_tooltip)}
+                title={`${t(($) => $.input.send_tooltip)} · ${submitShortcut}`}
+              >
+                {isSending ? (
+                  <Loader2 className="size-4 animate-spin" />
+                ) : (
+                  <ArrowUp className="size-4" />
+                )}
+              </Button>
+            )}
+          </div>
         </div>
         {uploadEnabled && isDragOver && <FileDropOverlay />}
       </div>

@@ -166,3 +166,49 @@ it("keeps project choices usable when directory loading fails", async () => {
   await user.click(await screen.findByRole("menuitem", { name: "Remi" }));
   expect(onChange).toHaveBeenCalledWith({ project_id: "project-1", runtime_workspace_id: null });
 });
+
+it("names Chat's unbound choice by what it does and opens from the keyboard", async () => {
+  const user = userEvent.setup();
+  const onChange = vi.fn();
+  show(<WorkLocationPicker wsId="ws-1" value={null} onChange={onChange} surface="chat" />);
+  const trigger = screen.getByRole("button", { name: "Work location: Don't pull code" });
+  // The whole short label shows; the tooltip also says what it means.
+  expect(trigger).toHaveTextContent("Don't pull code");
+  expect(trigger).toHaveAttribute("title", "Don't pull code\nUses this chat's own folder");
+  expect(trigger.parentElement?.className).toContain("shrink-0");
+  expect(trigger.className).not.toContain("-mx-1");
+  trigger.focus();
+  await user.keyboard("{Enter}");
+  expect(await screen.findByText(/^No code is pulled by default\./)).toBeInTheDocument();
+  expect(screen.queryByText("Choose a project or a local directory for this task.")).not.toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: /Don't pull code/ })).toHaveTextContent("Uses this chat's own folder");
+  expect(screen.queryByRole("menuitem", { name: "Automatic" })).not.toBeInTheDocument();
+  await user.click(await screen.findByRole("menuitem", { name: "Remi" }));
+  expect(onChange).toHaveBeenCalledWith({ project_id: "project-1", runtime_workspace_id: null });
+});
+
+it("caps a long Chat location name and keeps the full name in its tooltip", async () => {
+  const title = "A project with a very long name that cannot fit beside the agent";
+  api.listProjects.mockResolvedValue({ projects: [{ id: "project-1", title, icon: null, color: null }] });
+  show(<WorkLocationPicker wsId="ws-1" projectId="project-1" value={null} onChange={vi.fn()} surface="chat" />);
+  const trigger = await screen.findByRole("button", { name: `Work location: ${title}` });
+  expect(trigger).toHaveAttribute("title", title);
+  expect(trigger.parentElement?.className).toMatch(/min-w-0 max-w-48/);
+  expect(screen.getByText(title).className).toContain("truncate");
+});
+
+it("shows a started Chat's location as a read-only chip with the locked hint", async () => {
+  show(<WorkLocationPicker wsId="ws-1" projectId="project-1" value={null} onChange={vi.fn()} surface="chat" readOnly />);
+  const chip = await screen.findByRole("group", { name: "Work location: Remi" });
+  expect(chip).toHaveAttribute("title", "Remi\nThe work location is fixed after the session starts. Start a new task or chat to change it.");
+  expect(screen.queryByRole("button")).not.toBeInTheDocument();
+});
+
+it("keeps the Issue surface's Automatic choice unchanged", async () => {
+  const user = userEvent.setup();
+  show(<WorkLocationPicker wsId="ws-1" value={null} onChange={vi.fn()} />);
+  await user.click(screen.getByRole("button", { name: "Work location: Automatic" }));
+  expect(await screen.findByText("Choose a project or a local directory for this task.")).toBeInTheDocument();
+  expect(screen.getByRole("menuitem", { name: "Automatic" })).toBeInTheDocument();
+  expect(screen.queryByText("Uses this chat's own folder")).not.toBeInTheDocument();
+});

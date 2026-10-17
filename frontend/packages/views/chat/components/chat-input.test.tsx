@@ -352,6 +352,22 @@ describe("ChatInput attachment wiring", () => {
     // in this test (no leftAdornment passed). So a single button = submit.
     expect(buttons.length).toBe(1);
   });
+
+  it("lays the pickers and the actions out in one footer row", () => {
+    renderInput({ leftAdornment: <button type="button">Agent</button>, rightAdornment: <span>Ring</span> });
+    const footer = document.querySelector<HTMLElement>("[data-chat-composer-footer]")!;
+    const start = footer.querySelector<HTMLElement>("[data-chat-composer-footer-start]")!;
+    // The pickers shrink into what the actions leave instead of sliding under
+    // them, and their box is the container the location label collapses in.
+    expect(start).toContainElement(screen.getByRole("button", { name: "Agent" }));
+    expect(start.className).toMatch(/(^|\s)@container(\s|$)/);
+    expect(start.className).toContain("min-w-0");
+    expect(start.className).toContain("flex-1");
+    const actions = start.nextElementSibling as HTMLElement;
+    expect(actions.className).toContain("shrink-0");
+    expect(actions).toContainElement(screen.getByRole("button", { name: "Send" }));
+    expect(actions).toHaveTextContent("Ring");
+  });
 });
 
 describe("ChatInput sending and queue", () => {
