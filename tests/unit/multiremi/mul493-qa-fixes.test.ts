@@ -215,7 +215,7 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
       const prompt = buildTaskPrompt(normalizeDaemonClaimTask(offered)!);
       const readCommand = `remi message list ${target.session.id} --from ${from} --to ${to}`;
       if (unreadCount) {
-        expect(prompt).toContain(`(Issue ${target.issue.key} has ${unreadCount} new log entr${unreadCount === 1 ? 'y' : 'ies'}`
+        expect(prompt).toContain(`(Issue ${target.issue.key} (${(offered as any).bound_issue.status}) has ${unreadCount} new log entr${unreadCount === 1 ? 'y' : 'ies'}`
           + ` since you last read it: \`${readCommand}\`)`);
       } else {
         expect(prompt).not.toContain(`remi message list ${target.session.id}`);

@@ -32,10 +32,10 @@
      - 身份和输入方式，包括标签与未读说明的含义。
      - `remi` CLI：`remi context`、`remi message list <会话>`，以及 Chat 的项目、仓库检出说明。
      - 交付契约：有代码工作时加代码交付契约；附件交付契约 Chat 用 Chat 版，Issue 用 Issue 版。它们原是工作区提示词的默认值，现在是 Remi 的规则。
-     - 工作区提示词、工作区背景、请求人、Runtime 工作区、自动化。
+     - 工作区提示词、工作区背景、会话所有者（Chat 的创建人，否则是 Runtime 的所有者；offer 新增 `session_owner_name` 和 `session_owner_profile_description`）、Runtime 工作区、自动化。
      - Issue 会话加入：Issue 标题、描述、附件和元数据；回复评论的配方（模板，评论 id 由每轮输入给出）；结果分享；历史目录；后续 Issue；执行与升级规则；共享工作区与小队协作。绑定 Issue 的飞书话题、旁支会话（继承范围的读取命令和边界）、只读快照各加对应的段落。
      - Project、知识与仓库的警告，可用仓库。
-   - `AGENTS.md` 不放任何 Skill，既没有全文也没有索引。
+   - `AGENTS.md` 不放任何 Skill，既没有全文也没有索引；也不放每轮会变的事实（本轮发送人、仓库和知识的可用性、绑定 Issue 的状态），否则驻留的 PR 6 进程会因文件哈希变化被释放。
    - Runtime 工作区的本地上下文（工作区根到工作目录的指令文件、登记的上下文路径、工作区自带的 Skill 目录）只在本机拼在 Remi 部分之后，从不上传服务端。不再读取用户级的 `~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md` 和个人 Skill 目录：Agent 的定义不应取决于在谁的机器上跑。
    - PM 等依赖 Issue 模式的 agent：内容与原来相同，只是从每轮提示词移到了 `AGENTS.md`。
 
@@ -44,8 +44,10 @@
    - **未读说明。** 未读部分没有全部内联（有消息只列出没给正文、正文被折叠、来自更早的历史）时，加一句话：`(N earlier unread messages aren't shown here. Read them before you answer: \`remi message list …\`)`。服务端的输入回执要求读过这些消息，所以这一句不能省。
    - **每轮变化的事实，各占一行：**
      - Issue 评论：`(Reply to comment <id>: …)`。
-     - 绑定 Issue 的新日志条数和读取命令。
+     - 绑定 Issue 的新日志条数、本轮开始时的状态和读取命令。
      - 自动化的触发载荷。
+     - 发送人不是会话所有者时（飞书群里的其他成员），消息带发送人标签，需要时再加一行发送人简介 `(About <name>: …)`。
+     - 仓库准备失败、缓存过期或用了回退分支时一行 `(Repository warnings, diagnostic only: …)`；知识不可用时一行 `(Knowledge warnings: …)`。
    - **附件。** 每个文件一行，写本地路径或下载命令。图片在 bridge 声明 `promptCapabilities.image` 时另以 ACP image block 随首个 prompt 发送，pinned 的 Claude 与 Codex bridge 都支持。
    - **插话**用同样的规则：只是消息正文和标签，原来的「[Mid-run user steering]…」框架去掉。「立即交付」仍保留它的控制说明。
 

@@ -381,6 +381,15 @@ export interface AgentTask {
   requesting_user_name?: string | null;
   requestingUserProfileDescription?: string | null;
   requesting_user_profile_description?: string | null;
+  /**
+   * The person the session belongs to (a Chat's creator, else the runtime's
+   * owner). It holds for the session, so it is what `AGENTS.md` names; the
+   * requester fields above are this turn's sender (ADR 0023).
+   */
+  sessionOwnerName?: string | null;
+  session_owner_name?: string | null;
+  sessionOwnerProfileDescription?: string | null;
+  session_owner_profile_description?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
   boundIssueLog?: MultiremiBoundIssueLog;

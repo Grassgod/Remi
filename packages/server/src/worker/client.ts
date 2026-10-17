@@ -1436,6 +1436,8 @@ export function normalizeDaemonClaimTask(raw: any | null): (MultiremiTaskWithAge
     workspaceEnv: objectOrDefault(raw.workspace_env ?? raw.workspaceEnv),
     requestingUserName: stringOrNull(raw.requesting_user_name ?? raw.requestingUserName),
     requestingUserProfileDescription: stringOrNull(raw.requesting_user_profile_description ?? raw.requestingUserProfileDescription),
+    sessionOwnerName: stringOrNull(raw.session_owner_name ?? raw.sessionOwnerName),
+    sessionOwnerProfileDescription: stringOrNull(raw.session_owner_profile_description ?? raw.sessionOwnerProfileDescription),
     progressSummary: stringOrNull(raw.progress_summary ?? raw.progressSummary),
     progressStep: numberOrNull(raw.progress_step ?? raw.progressStep),
     progressTotal: numberOrNull(raw.progress_total ?? raw.progressTotal),

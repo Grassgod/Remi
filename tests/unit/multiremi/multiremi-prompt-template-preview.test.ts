@@ -12,13 +12,13 @@ describe("platform prompt template preview (ADR 0023)", () => {
       "## Delivery\nWhen a task changes code:",
       "## Workspace Instructions\n{{workspace_prompt}}",
       "## Workspace Context\n{{workspace_context}}",
-      "## Requesting User\nName: {{requesting_user_name}}\n{{requesting_user_profile}}",
+      "## Session Owner\nName: {{session_owner_name}}\n{{session_owner_profile}}",
       "## Autopilot Context",
       "## Quick Create Request\n{{quick_create_prompt}}",
       "## Issue\nKey: {{issue_key}}",
       "{{issue_description}}",
       "## Issue Metadata",
-      "## Bound Issue\nThis Feishu topic is bound to {{issue_key}} — {{issue_title}} (status when this turn started: {{issue_status}}).",
+      "## Bound Issue\nThis Feishu topic is bound to {{issue_key}} — {{issue_title}}.",
       "remi issue get {{issue_id}} --output json",
       "## Replying to Comments",
       "--reply-to <comment-id> --content-stdin",
@@ -26,7 +26,6 @@ describe("platform prompt template preview (ADR 0023)", () => {
       "## Issue Workspace Session History",
       "## Issue Execution and Escalation",
       "## Squad Coordination",
-      "## Repository Availability Warnings",
       "## Project Context",
       "## Project Instructions\n{{project_instructions}}",
       "## Project Knowledge",
@@ -45,6 +44,11 @@ describe("platform prompt template preview (ADR 0023)", () => {
     expect(preview.input).toContain("Trigger payload:");
     expect(preview.input).toContain("- {{chat_attachment_filename}}: run `remi attachment download {{chat_attachment_id}} --output-dir <dir>`");
     expect(preview.input).not.toContain("{{agent_instructions}}");
+    // What changes between turns is input, so AGENTS.md stays the same for the session.
+    expect(preview.input).toContain("(Repository warnings, diagnostic only: `{{stale_repository_url}}` may be stale");
+    for (const perTurn of ["Repository Availability Warnings", "{{stale_repository_url}}", "{{issue_status}}", "{{sender_name}}", "{{sender_profile}}"]) {
+      expect(preview.instructions).not.toContain(perTurn);
+    }
     // The preview is a Feishu topic: a Chat, so it has no Issue-round finishing note.
     expect(preview.instructions).not.toContain("## Finishing");
     expect(preview.sha256.instructions).toMatch(/^[a-f0-9]{64}$/);

@@ -22,7 +22,7 @@ function fixture() {
 }
 
 describe("claim knowledge budget", () => {
-  it("bounds stalled hydration, cancels requests, and warns in the instructions of new and resumed sessions", async () => {
+  it("bounds stalled hydration, cancels requests, and warns in the turn input of new and resumed sessions", async () => {
     const { task, project, repository } = fixture();
     let signal: AbortSignal | undefined;
     project.hydrateTaskKnowledge = async (_, s) => { signal = s; return new Promise(() => {}); };
@@ -32,13 +32,14 @@ describe("claim knowledge budget", () => {
     expect(signal?.aborted).toBe(true);
     expect(hydrated.knowledgeWarnings).toHaveLength(2);
     expect(hydrated.projectWikiDocs).toEqual([]);
-    // The warning is session context (AGENTS.md), identical whether the provider session is new or resumed.
-    const instructions = (["bootstrap", "delta"] as const).map(mode =>
-      buildTaskPromptArtifact({ ...hydrated, sessionProjection: { mode, jsonl: "" } } as any).instructions);
-    expect(instructions[1]).toBe(instructions[0]!);
-    const text = instructions[0]!;
-    expect(text).toContain("## Knowledge Availability Warnings");
-    expect(text).toContain("Wiki暂不可用，用 remi wiki 取");
+    // ADR 0023: the warning is this turn's, so it is input, the same whether the provider session is new or
+    // resumed; AGENTS.md does not change with it.
+    const artifacts = (["bootstrap", "delta"] as const).map(mode =>
+      buildTaskPromptArtifact({ ...hydrated, sessionProjection: { mode, jsonl: "" } } as any));
+    expect(artifacts[1]!.prompt).toBe(artifacts[0]!.prompt);
+    expect(artifacts[0]!.instructions).not.toContain("暂不可用");
+    const text = artifacts[0]!.prompt;
+    expect(text).toContain("(Knowledge warnings: Wiki暂不可用，用 remi wiki 取");
     expect(text.match(/暂不可用/g)).toHaveLength(1);
     expect(text).not.toContain("Project Wiki loading failed");
     expect(text).not.toContain("Repository Wiki loading failed");

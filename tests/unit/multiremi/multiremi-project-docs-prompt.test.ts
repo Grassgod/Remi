@@ -150,7 +150,9 @@ describe("task instructions and turn input", () => {
     });
 
     expect(instructions).toContain(`Key: ${issue.key}`);
-    expect(instructions).toContain(`## Bound Issue\nThis Feishu topic is bound to ${issue.key} — ${issue.title} (status when this turn started: ${issue.status}).`);
+    // The status moves between turns: the turn input's log line carries it, not AGENTS.md.
+    expect(instructions).toContain(`## Bound Issue\nThis Feishu topic is bound to ${issue.key} — ${issue.title}.\n`);
+    expect(instructions).not.toContain(`(${issue.status})`);
     expect(instructions).toContain("## Bound Issue Follow-up");
     expect(instructions).toContain("## Project Context");
     expect(instructions).not.toContain("## Bound Issue Log");
@@ -158,7 +160,7 @@ describe("task instructions and turn input", () => {
     expect(instructions).not.toContain("`remi project list|get|search`");
     expect(instructions).not.toContain("## Available Repositories");
     // The log itself is not inlined; the turn input names the new entries and the read.
-    expect(prompt).toContain(`(Issue ${issue.key} has 1 new log entry since you last read it: \`remi message list session_issue --from 0 --to 1\`)`);
+    expect(prompt).toContain(`(Issue ${issue.key} (${issue.status}) has 1 new log entry since you last read it: \`remi message list session_issue --from 0 --to 1\`)`);
   });
 
   it("builds session instructions with stable execution context", () => {
@@ -507,7 +509,7 @@ describe("task instructions and turn input", () => {
     expect(instructions).toContain("at `/tmp/work/knowledge` on branch `agent/codex/REMI-1`");
   });
 
-  it("injects bounded repository failure diagnostics into the instructions", () => {
+  it("puts bounded repository failure diagnostics in the turn input, not the instructions", () => {
     const store = createSnapshotStore();
     const { task } = createProjectTask(store);
     const { prompt, instructions } = buildTaskPromptArtifact(task, {
@@ -525,15 +527,16 @@ describe("task instructions and turn input", () => {
       ],
     });
 
-    expect(prompt).not.toContain("Repository Availability Warnings");
-    expect(instructions).toContain("## Repository Availability Warnings");
-    expect(instructions).toContain("may use stale cached data");
-    expect(instructions).toContain("Do not assume it contains the latest remote changes");
-    expect(instructions).toContain("checkout is unavailable");
-    expect(instructions).toContain("Do not claim that you inspected its source code");
-    expect(instructions).toContain("git fetch timed out after retries");
-    expect(instructions).not.toContain("\nafter retries");
-    expect(instructions).not.toContain("x".repeat(501));
+    // ADR 0023: they change between turns, so AGENTS.md stays the same and the turn says them in one line.
+    expect(instructions).toBe(buildTaskPromptArtifact(task).instructions);
+    expect(instructions).not.toContain("git@github.com:example/stale.git");
+    expect(prompt).toContain("(Repository warnings, diagnostic only: `git@github.com:example/stale.git` may be stale, remote refresh failed");
+    expect(prompt).toContain("or that a stale checkout has the latest remote changes");
+    expect(prompt).toContain("`git@github.com:example/missing.git` is unavailable, preparation failed");
+    expect(prompt).toContain("Don't claim to have inspected code that isn't available");
+    expect(prompt).toContain("`git fetch timed out after retries`");
+    expect(prompt).not.toContain("\nafter retries");
+    expect(prompt).not.toContain("x".repeat(201));
   });
 
   it("does not add a repository warning section to healthy instructions", () => {
@@ -545,15 +548,15 @@ describe("task instructions and turn input", () => {
 
   it("reports default branch fallback without claiming checkout or fetch failed", () => {
     const { task } = createProjectTask(createSnapshotStore());
-    const { instructions } = buildTaskPromptArtifact(task, { repoWarnings: [{
+    const { prompt } = buildTaskPromptArtifact(task, { repoWarnings: [{
       repoUrl: "https://example.test/repo.git", kind: "default_branch_fallback",
       message: "workflow-dev could not be resolved; fell back to refs/remotes/origin/main",
     }] });
-    expect(instructions).toContain("configured default branch could not be resolved");
-    expect(instructions).toContain("workflow-dev");
-    expect(instructions).toContain("refs/remotes/origin/main");
-    expect(instructions).not.toContain("checkout is unavailable");
-    expect(instructions).not.toContain("remote refresh failed after retries");
+    expect(prompt).toContain("`https://example.test/repo.git` is on a fallback base, the default branch could not be resolved");
+    expect(prompt).toContain("workflow-dev");
+    expect(prompt).toContain("refs/remotes/origin/main");
+    expect(prompt).not.toContain("is unavailable");
+    expect(prompt).not.toContain("remote refresh failed");
   });
 
   it("keeps a checkout command for repositories the daemon did not materialize", () => {

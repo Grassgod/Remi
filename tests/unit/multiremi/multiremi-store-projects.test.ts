@@ -264,7 +264,8 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
 
     // Session context goes to the instructions.
     expect(instructions).toContain("## Workspace Context\nUse the shared release checklist.");
-    expect(instructions).toContain("## Requesting User\nName: Alice\nLikes concrete dates and verification output.");
+    // With no session owner from the server (an older one), the requester is who the notes name.
+    expect(instructions).toContain("## Session Owner\nName: Alice\nLikes concrete dates and verification output.");
     expect(instructions).toContain("## Autopilot Context\nTitle: Webhook triage\nSource: webhook\nInvestigate the incoming push.");
     expect(instructions).toContain("## Quick Create Request\nCreate onboarding screenshot follow-up");
     // This turn's input: an older server's chat_message, the trigger payload and one line per attachment.

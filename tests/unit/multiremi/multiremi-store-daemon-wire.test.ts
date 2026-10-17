@@ -726,6 +726,9 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       workspace_context: "Use the workspace TypeScript conventions.",
       requesting_user_name: "Local Alice",
       requesting_user_profile_description: "Prefers concise updates with verification notes.",
+      // ADR 0023: who the Chat belongs to, for AGENTS.md; the requester above is this turn's sender.
+      session_owner_name: "Local Alice",
+      session_owner_profile_description: "Prefers concise updates with verification notes.",
     });
     expect(byId.get(firstChat.task.id).chatMessage).toBeUndefined();
     expect(byId.get(firstChat.task.id).chat_message).toBeUndefined();
@@ -1028,7 +1031,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       boundIssue: boundWire.bound_issue,
     } as any);
     expect(boundPrompt).toContain("## Bound Issue");
-    expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title} (status when this turn started: ${issue.status}).`);
+    // The status moves between turns: the turn input's log line carries it, so AGENTS.md stays the same.
+    expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title}.\n`);
     expect(boundPrompt).not.toContain("Write the summary from the log");
     expect(boundPrompt).toContain(`remi issue get ${issue.id} --output json`);
     expect(boundPrompt).toContain("remi message list <issue-session-id> --output json");

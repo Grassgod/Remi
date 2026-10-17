@@ -1,4 +1,5 @@
 import { describe, expect, it } from "bun:test";
+import { createHash } from "node:crypto";
 import { buildAgentInstructions, buildTaskPrompt, buildTaskPromptArtifact } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { buildSteerInjectionPrompt, steerMessageText } from "@multiremi/worker/steer.js";
@@ -195,6 +196,38 @@ describe("turn input (ADR 0023)", () => {
     expect(resumed.instructions).toBe(fresh.instructions);
     expect(fresh.mode).toBe("bootstrap");
     expect(resumed.mode).toBe("delta");
+  });
+
+  it("keeps AGENTS.md the same when the sender, warnings or bound status change, and says them in the turn", () => {
+    const sha = (text: string) => createHash("sha256").update(text).digest("hex");
+    const input = offered(range("chat_1", 0, 2, 1, true), [hello]);
+    const projection = [range("chat_1", 0, 2, 1, true), triggering(hello)];
+    const project = { id: "prj_1", title: "Live", description: null, instructions: "", workspaceId: "local" };
+    const base = { sessionOwnerName: "Alice", sessionOwnerProfileDescription: "Owns this Chat.", project, chatProjectId: "prj_1",
+      projectResources: [], repos: [{ url: "https://example.com/r.git" }] } as unknown as Partial<AgentTask>;
+    const owner = buildTaskPromptArtifact(chatTurn(input, projection, base));
+    // A Feishu group member who is not the owner sends the turn; Wiki and a repository are unavailable for it.
+    const other = buildTaskPromptArtifact(chatTurn(input, projection, { ...base, requestingUserName: "Bob",
+      requestingUserProfileDescription: "Infra on-call.", knowledgeWarnings: ["1 页暂不可用，用 remi wiki 取；保留上次成功的本地版本。"] } as Partial<AgentTask>),
+    { repoWarnings: [{ repoUrl: "https://example.com/r.git", kind: "unavailable", message: "fetch timed out" }] });
+    expect(sha(other.instructions)).toBe(sha(owner.instructions));
+    expect(owner.instructions).toContain("talking with Alice in a Remi Chat");
+    expect(owner.instructions).toContain("## Session Owner\nName: Alice\nOwns this Chat.");
+    expect(owner.instructions).not.toMatch(/Bob|Infra on-call|Availability Warnings|fetch timed out|页暂不可用/);
+    expect(owner.prompt).toBe("你好");
+    expect(other.prompt).toBe([
+      "[Bob] 你好",
+      "(About Bob: Infra on-call.)",
+      "(Repository warnings, diagnostic only: `https://example.com/r.git` is unavailable, preparation failed: `fetch timed out`. Don't claim to have inspected code that isn't available, or that a stale checkout has the latest remote changes; `remi repo checkout <repo-id>` retries a failed checkout, and an existing worktree with uncommitted changes must be preserved.)",
+      "(Knowledge warnings: 1 页暂不可用，用 remi wiki 取；已有本地副本仅代表上次成功版本。)",
+    ].join("\n\n"));
+
+    // A bound topic's Issue status moves between turns: the file does not name it, the log line does.
+    const bound = (status: string) => buildTaskPromptArtifact(chatTurn(input, projection, { sessionOwnerName: "Alice",
+      boundIssue: { id: "iss_1", key: "MUL-1", title: "Bound", status },
+      bound_issue_log: { session_id: "ises_1", from_seq: 0, to_seq: 3, content_jsonl: range("ises_1", 0, 3, 2) } } as unknown as Partial<AgentTask>));
+    expect(sha(bound("todo").instructions)).toBe(sha(bound("in_review").instructions));
+    expect(bound("in_review").prompt).toContain("(Issue MUL-1 (in_review) has 2 new log entries since you last read it: `remi message list ises_1 --from 0 --to 3`)");
   });
 
   it("shortens user-written parts to the budget, each with a pointer to the rest", () => {

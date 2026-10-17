@@ -666,6 +666,12 @@ function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: Multirem
   const requestingUserProfile = task.requestingUserProfileDescription?.trim() || owner?.profileDescription?.trim();
   if (requestingUserName) response.requesting_user_name = requestingUserName;
   if (requestingUserProfile) response.requesting_user_profile_description = requestingUserProfile;
+  // ADR 0023: who the session belongs to holds for the session, so AGENTS.md can name it and stay unchanged
+  // when a Feishu group member who is not its owner sends a turn: a Chat's creator, else the runtime's owner.
+  const chat = task.chatSessionId ? store.getChatSession(task.chatSessionId) : null;
+  const sessionOwner = (chat?.creatorId ? store.getUser(chat.creatorId) : null) ?? owner;
+  if (sessionOwner?.name?.trim()) response.session_owner_name = sessionOwner.name.trim();
+  if (sessionOwner?.profileDescription?.trim()) response.session_owner_profile_description = sessionOwner.profileDescription.trim();
 }
 
 function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTaskWithAgent, response: Record<string, unknown>): void {

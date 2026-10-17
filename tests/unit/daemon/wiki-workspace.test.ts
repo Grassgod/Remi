@@ -316,7 +316,9 @@ describe("Issue Wiki workspace", () => {
     expect(manifest.docs).toMatchObject([{ id: "rwdoc_prior", version: 1 }]);
     expect(manifest.docs.some((doc: { id: string }) => doc.id === "rwdoc_missing")).toBeFalse();
 
-    const prompt = buildAgentInstructions(value);
+    // ADR 0023: what this turn could not provide is turn input; AGENTS.md does not change with it.
+    expect(buildAgentInstructions(value)).not.toContain("暂不可用");
+    const prompt = buildTaskPrompt(value);
     expect(prompt).toContain("2 页暂不可用，用 remi wiki 取");
     expect(prompt.match(/暂不可用/g)).toHaveLength(1);
     expect(prompt).not.toContain("checksum mismatch");

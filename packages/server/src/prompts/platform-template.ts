@@ -117,8 +117,11 @@ function buildPreviewArtifact() {
     runtimeId: placeholder("runtime_id"),
     workspaceContext: placeholder("workspace_context"),
     workspacePrompt: placeholder("workspace_prompt"),
-    requestingUserName: placeholder("requesting_user_name"),
-    requestingUserProfileDescription: placeholder("requesting_user_profile"),
+    // AGENTS.md names who the session belongs to; a turn from someone else names its sender in the input.
+    sessionOwnerName: placeholder("session_owner_name"),
+    sessionOwnerProfileDescription: placeholder("session_owner_profile"),
+    requestingUserName: placeholder("sender_name"),
+    requestingUserProfileDescription: placeholder("sender_profile"),
     chatMessageAttachments: [{
       id: placeholder("chat_attachment_id"),
       filename: placeholder("chat_attachment_filename"),

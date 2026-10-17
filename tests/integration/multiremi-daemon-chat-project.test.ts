@@ -123,15 +123,16 @@ describe("Project-bound Chat daemon startup", () => {
           expect(sync.mock.calls[0]![0]).toBe("local");
           expect(sync.mock.calls[0]![1]).toEqual([{ url: repoUrl }]);
           expect(checkout).not.toHaveBeenCalled();
-          expect(instructions).toContain("## Repository Availability Warnings");
-          expect(instructions).toContain("Authentication failed for Project repository");
-          expect(instructions).toContain("Chat can continue without these repositories");
-          expect(instructions).toContain("run `remi repo checkout <repo-id>` explicitly");
+          // ADR 0023: the failure is this turn's, so the turn input says it and AGENTS.md does not.
+          expect(instructions).not.toContain("Authentication failed for Project repository");
+          expect(prompt).toStartWith("Read this Project context.\n\n(Repository warnings, diagnostic only: ");
+          expect(prompt).toContain("Authentication failed for Project repository");
+          expect(prompt).toContain("`remi repo checkout <repo-id>` retries a failed checkout");
         }
         expect(envProject).toBe(project.id);
         expect(cwd).toBe(localDirectory ? localPath : workDirectory(join(root, "workspaces"), { kind: "chat", id: chat.id }));
         // ADR 0023: the turn is the user's text; the Project notes are in the provider home's AGENTS.md.
-        expect(prompt).toBe("Read this Project context.");
+        if (localDirectory) expect(prompt).toBe("Read this Project context.");
         expect(instructions).toContain("This Chat is bound to project: Selected Chat Project");
         expect(instructions).toContain("Follow these Chat Project instructions.");
         expect(instructions).toContain("## Available Repositories");

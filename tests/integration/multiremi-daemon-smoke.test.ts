@@ -1987,6 +1987,7 @@ describe("Bun Multiremi daemon smoke", () => {
       hostname: "127.0.0.1",
       port: 0,
     });
+    const prompts: string[] = [];
     const instructions: string[] = [];
 
     try {
@@ -2005,19 +2006,18 @@ describe("Bun Multiremi daemon smoke", () => {
           text: "reported unavailable repo",
           sessionId: "sess-repo-warning",
           requestId: "req-repo-warning",
-          onSend: (_message, options) => { instructions.push(providerInstructions(options)); },
+          onSend: (message, options) => { prompts.push(message); instructions.push(providerInstructions(options)); },
         }),
       });
 
       await daemon.start();
 
       expect(store.getTask(task.id)?.status).toBe("completed");
-      expect(instructions[0]).toContain("## Repository Availability Warnings");
-      expect(instructions[0]).toContain(sourceRepo);
-      expect(instructions[0]).toContain(unavailableRepo);
-      expect(instructions[0]).toContain("may use stale cached data");
-      expect(instructions[0]).toContain("checkout is unavailable");
-      expect(instructions[0]).toContain("Do not claim that you inspected its source code");
+      // ADR 0023: what this turn's preparation could not provide is turn input; AGENTS.md does not change with it.
+      expect(instructions[0]).not.toContain("Repository warnings");
+      expect(prompts[0]).toContain(`\`${sourceRepo}\` may be stale, remote refresh failed`);
+      expect(prompts[0]).toContain(`\`${unavailableRepo}\` is unavailable, preparation failed`);
+      expect(prompts[0]).toContain("Don't claim to have inspected code that isn't available");
     } finally {
       server.stop(true);
     }
@@ -2069,6 +2069,7 @@ describe("Bun Multiremi daemon smoke", () => {
       hostname: "127.0.0.1",
       port: 0,
     });
+    const prompts: string[] = [];
     const instructions: string[] = [];
 
     try {
@@ -2087,7 +2088,7 @@ describe("Bun Multiremi daemon smoke", () => {
           text: "triaged with degraded repos",
           sessionId: "sess-intake-degraded",
           requestId: "req-intake-degraded",
-          onSend: (_message, options) => { instructions.push(providerInstructions(options)); },
+          onSend: (message, options) => { prompts.push(message); instructions.push(providerInstructions(options)); },
         }),
       });
 
@@ -2095,9 +2096,9 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // The intake round completes on the cached snapshot instead of failing.
       expect(store.getTask(task.id)?.status).toBe("completed");
-      expect(instructions[0]).toContain("## Repository Availability Warnings");
-      expect(instructions[0]).toContain("may use stale cached data");
-      expect(instructions[0]).toContain("checkout is unavailable");
+      expect(instructions[0]).not.toContain("Repository warnings");
+      expect(prompts[0]).toContain("may be stale, remote refresh failed");
+      expect(prompts[0]).toContain("is unavailable, preparation failed");
       const workspace = store.getIssueWorkspace(issue.id);
       expect(workspace?.status).toBe("error");
       const statusByUrl = new Map((workspace?.repos ?? []).map((repo) => [repo.repoUrl, repo.status]));

@@ -3,8 +3,11 @@
  * messages that woke it, a short author label where that matters, one plain
  * sentence when unread messages are not shown, and the few per-turn facts it
  * needs (the comment to reply to, a bound Issue's new log entries, an
- * automation's trigger payload). Everything that holds for the session lives
- * in the provider home's `AGENTS.md` instead (`buildAgentInstructions`).
+ * automation's trigger payload, a sender who is not the session's owner, what
+ * this turn's repository and knowledge preparation could not provide).
+ * Everything that holds for the session lives in the provider home's
+ * `AGENTS.md` instead (`buildAgentInstructions`), so that file stays the same
+ * from turn to turn.
  */
 import { readFileSync, statSync } from "node:fs";
 import type { MediaAttachment } from "@multiremi/contracts/acp-protocol.js";
@@ -155,9 +158,16 @@ function text(task: AgentTask, camel: keyof AgentTask, snake: keyof AgentTask): 
  * otherwise one sentence names the unread messages that are not shown and the
  * read the server's input receipt requires.
  */
-export function buildTurnInput(task: AgentTask, options: { attachments?: readonly unknown[] } = {}): string {
+/** A repository this turn's preparation could not provide as asked. */
+export interface TurnRepoWarning { repoUrl: string; kind: string; message: string }
+
+export function buildTurnInput(task: AgentTask, options: { attachments?: readonly unknown[]; repoWarnings?: readonly TurnRepoWarning[] } = {}): string {
   const agentId = task.agent?.id ?? null;
-  const always = !isPrivateChatTask(task);
+  const owner = text(task, "sessionOwnerName", "session_owner_name")?.trim() ?? null;
+  const requesterName = text(task, "requestingUserName", "requesting_user_name")?.trim() ?? null;
+  // A Chat turn sent by someone other than the session's owner (a Feishu group member) names its sender.
+  const otherSender = Boolean(task.chatSessionId && owner && requesterName && requesterName !== owner);
+  const always = !isPrivateChatTask(task) || otherSender;
   const input = task.input_messages ?? [];
   let range: UnreadRangeRecord | null = null;
   let replay = false;
@@ -198,6 +208,11 @@ export function buildTurnInput(task: AgentTask, options: { attachments?: readonl
   ].sort((left, right) => left.seq - right.seq);
   const label = speakerLabeler(entries.map(entry => entry.speaker), agentId, always);
   const parts = entries.map(entry => labelled(label(entry.speaker), entry.body.trim() ? entry.body : "")).filter(Boolean);
+  const senderProfile = otherSender ? text(task, "requestingUserProfileDescription", "requesting_user_profile_description")?.trim() : null;
+  if (senderProfile && senderProfile !== text(task, "sessionOwnerProfileDescription", "session_owner_profile_description")?.trim()
+    && entries.some(entry => entry.speaker.type === "member" && entry.speaker.name === requester)) {
+    parts.push(`(About ${requesterName}: ${clip(senderProfile, SENDER_PROFILE_MAX_CHARS)})`);
+  }
   if (!input.length && !entries.length) {
     const legacy = (text(task, "chatMessage", "chat_message") ?? "").trim() || (task.prompt ?? "").trim();
     parts.push(legacy || (task.chatSessionId ? "" : "Handle the current issue update."));
@@ -219,7 +234,57 @@ export function buildTurnInput(task: AgentTask, options: { attachments?: readonl
   if (payload !== undefined && payload !== null) parts.push(`Trigger payload:\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``);
   const attachments = attachmentLines(options.attachments);
   if (attachments.length) parts.push(attachments.join("\n"));
+  const repositories = repositoryWarningLine(options.repoWarnings ?? []);
+  if (repositories) parts.push(repositories);
+  const knowledge = knowledgeWarningLine(task);
+  if (knowledge) parts.push(knowledge);
   return parts.filter(Boolean).join("\n\n") || "(The message is empty.)";
+}
+
+const SENDER_PROFILE_MAX_CHARS = 300;
+const WARNING_DIAGNOSTIC_MAX_CHARS = 200;
+
+function clip(value: string, max: number): string {
+  const flat = value.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function inlineCode(value: string): string {
+  return `\`${value.replaceAll("`", "'")}\``;
+}
+
+/** Diagnostic data, not instructions: what the agent must not claim it inspected. */
+function repositoryWarningLine(warnings: readonly TurnRepoWarning[]): string | null {
+  if (!warnings.length) return null;
+  const entries = warnings.map((warning) => {
+    const diagnostic = inlineCode(clip(warning.message, WARNING_DIAGNOSTIC_MAX_CHARS) || "repository preparation failed");
+    const state = warning.kind === "stale_cache" ? "may be stale, remote refresh failed"
+      : warning.kind === "default_branch_fallback" ? "is on a fallback base, the default branch could not be resolved"
+        : "is unavailable, preparation failed";
+    return `${inlineCode(warning.repoUrl.trim())} ${state}: ${diagnostic}`;
+  });
+  return `(Repository warnings, diagnostic only: ${entries.join("; ")}. Don't claim to have inspected code that isn't available, or that a stale checkout has the latest remote changes; \`remi repo checkout <repo-id>\` retries a failed checkout, and an existing worktree with uncommitted changes must be preserved.)`;
+}
+
+function knowledgeWarningLine(task: AgentTask): string | null {
+  const contexts = task.repositoryWikiContexts ?? task.repository_wiki_contexts ?? [];
+  const unavailable = new Set(contexts.flatMap((context) => context.docs.filter(repositoryWikiDocUnavailable).map((doc) => doc.id)));
+  const warnings = task.knowledgeWarnings ?? [];
+  const wikiWarnings = warnings.filter(warning => /wiki.*(?:failed|unavailable|omitted)|页暂不可用/i.test(warning));
+  const otherWarnings = warnings.filter(warning => !wikiWarnings.includes(warning));
+  const reportedCount = wikiWarnings.reduce((total, warning) => total + Number(warning.match(/^(\d+) 页暂不可用/)?.[1] ?? 0), 0);
+  const count = Math.max(unavailable.size, reportedCount);
+  const lines = [
+    ...(count || wikiWarnings.length ? [`${count ? `${count} 页` : "Wiki"}暂不可用，用 remi wiki 取；已有本地副本仅代表上次成功版本。`] : []),
+    ...otherWarnings.map(warning => clip(warning, WARNING_DIAGNOSTIC_MAX_CHARS)),
+  ];
+  return lines.length ? `(Knowledge warnings: ${lines.join(" ")})` : null;
+}
+
+function repositoryWikiDocUnavailable(doc: NonNullable<AgentTask["repositoryWikiContexts"]>[number]["docs"][number]): boolean {
+  const status = String(doc.status ?? "").trim().toLowerCase();
+  const syncStatus = String(doc.syncStatus ?? doc.sync_status ?? "").trim().toLowerCase();
+  return status === "failed" || status === "unavailable" || syncStatus === "failed" || syncStatus === "unavailable";
 }
 
 /** A bound topic's Issue: what was logged there since the coordinator last read it. */
@@ -227,13 +292,15 @@ function boundIssueLogLine(task: AgentTask): string | null {
   const bound = task.chatSessionId ? task.boundIssue ?? task.bound_issue ?? null : null;
   const log = task.boundIssueLog ?? task.bound_issue_log ?? null;
   if (!bound || !log) return null;
+  // The status when this turn started; it moves between turns, so AGENTS.md does not carry it.
+  const status = bound.status ? ` (${bound.status})` : "";
   const range = parseUnreadRange(log.content_jsonl?.split("\n", 1)[0]);
   if (range) {
     if (!range.unread_count) return null;
-    return `(Issue ${bound.key} has ${range.unread_count} new log entr${range.unread_count === 1 ? "y" : "ies"} since you last read it: ${readCommand(range)})`;
+    return `(Issue ${bound.key}${status} has ${range.unread_count} new log entr${range.unread_count === 1 ? "y" : "ies"} since you last read it: ${readCommand(range)})`;
   }
   return log.to_seq > log.from_seq
-    ? `(Issue ${bound.key} has new log entries: \`remi message list ${log.session_id} --from ${log.from_seq} --to ${log.to_seq}\`)`
+    ? `(Issue ${bound.key}${status} has new log entries: \`remi message list ${log.session_id} --from ${log.from_seq} --to ${log.to_seq}\`)`
     : null;
 }
 

@@ -26,7 +26,7 @@ Chat supports attachment delivery through \`remi message send --attachment <path
 - Report the attachment IDs and filenames returned by the command. A workspace path alone is not a delivered attachment.
 - Incoming Chat attachments are listed with local paths when available. Read those files directly; otherwise use the listed \`remi attachment download\` command. Use lark-cli download only as a fallback when platform attachment access is unavailable.
 
-## Requesting User
+## Session Owner
 Name: Alice
 "
 `;
@@ -60,7 +60,7 @@ When a task produces a viewable artifact (HTML page, chart, diagram, rendered re
 - In an Issue, attach it to the reply message with \`remi message send <issue> --content <summary> --attachment <path>\`. Report the message ID and attachment filename.
 - Never deliver by workspace path alone. Short diagrams may go in the comment body as fenced Mermaid or HTML; use attachments for full pages and shareable reports.
 
-## Requesting User
+## Session Owner
 Name: Alice
 
 ## Issue

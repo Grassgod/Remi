@@ -790,7 +790,7 @@ describe("Feishu bot standard Task bridge", () => {
     // The turn input is the new request and the bound Issue's new log entry, nothing else.
     const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
     expect(second.prompt).toContain(
-      `(Issue ${issue.key} has 1 new log entry since you last read it: \`remi message list ${issueSession.id} --from 0 --to 1\`)`);
+      `(Issue ${issue.key} (${store.getIssue(issue.id)!.status}) has 1 new log entry since you last read it: \`remi message list ${issueSession.id} --from 0 --to 1\`)`);
     expect(store.listMessages(issueSession.id).map(message => message.body_md))
       .toEqual(["The Feishu reviewer approved the bound Issue."]);
     expect(second.prompt.match(/second Feishu request/g)).toHaveLength(1);
