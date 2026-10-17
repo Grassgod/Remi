@@ -33,6 +33,11 @@ export interface BuildSessionProjectionInput {
   /** Seq values whose displayed bodies can be recovered verbatim through /log/entry. */
   expandableSeqs?: ReadonlySet<number>;
   resolveAuthorName?: (authorType: string, authorId: string | null) => string | null;
+  /**
+   * Only the bounds and mode, without the JSONL (ADR 0023): a task offer's input
+   * is the unread range record that replaces it, so the history is never assembled.
+   */
+  boundsOnly?: boolean;
 }
 
 /**
@@ -68,6 +73,9 @@ export function buildSessionProjection(input: BuildSessionProjectionInput): Mult
     return true;
   });
 
+  if (input.boundsOnly) {
+    return projectionResult(input, mode, fromSeq, toSeq, { jsonl: "", truncated: false, omittedEvents: 0, estimatedTokens: 0 } as AssembledProjection);
+  }
   const header = {
     type: "session_projection",
     version: 1,

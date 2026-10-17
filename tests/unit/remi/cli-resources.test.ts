@@ -408,6 +408,12 @@ describe("native CLI resource contracts", () => {
     };
     const prompts = specById("workspace.prompt.update");
     globalThis.fetch = mockFetch(prompts.id, [], handler);
+    await execute(prompts, ["ws_1", "--prompt", "Workspace rules", "--expected-revision", "3", "--output", "json"]);
+    expect(bodies.get("/api/workspaces/ws_1/prompts")).toEqual({
+      prompt: "Workspace rules",
+      expected_revision: 3,
+    });
+    // The deprecated halves still pass through unchanged; the server merges them into the one prompt.
     await execute(prompts, ["ws_1", "--bootstrap-prompt", "Bootstrap", "--delta-prompt=", "--expected-revision", "3", "--output", "json"]);
     expect(bodies.get("/api/workspaces/ws_1/prompts")).toEqual({
       bootstrap_prompt: "Bootstrap",
@@ -474,9 +480,9 @@ describe("native CLI resource contracts", () => {
       }
       if (path === "/api/workspaces/ws_1/prompt-template") {
         return Response.json({
-          bootstrap: "# Bootstrap Prompt",
-          delta: "# Delta Prompt",
-          sha256: { bootstrap: "a".repeat(64), delta: "b".repeat(64) },
+          instructions: "# Remi",
+          input: "Hello",
+          sha256: { instructions: "a".repeat(64), input: "b".repeat(64) },
         });
       }
       throw new Error(`unexpected request ${request.method} ${path}`);

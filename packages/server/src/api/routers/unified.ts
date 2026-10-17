@@ -493,7 +493,12 @@ export function registerUnifiedRoutes(app: Hono, deps: RouterDeps): void {
       for (const key of ["input", "attempts"]) if (c.req.query(key) != null && !["true", "false"].includes(c.req.query(key)!)) throw new InputError(`invalid ${key}`);
       const source = turn.current_attempt_id ? store.getTask(turn.current_attempt_id) : null;
       if (c.req.query("input") === "true" && source && !canAccessConversationTask(c, store, source)) return c.json({error:"forbidden"},403);
-      const input = c.req.query("input") === "true" ? store.getTurnInput(turn.id) : null;
+      // ADR 0023: `attempt` picks whose recorded prompt and AGENTS.md notes come back (the current attempt's by default).
+      const attempt = c.req.query("attempt");
+      if (attempt != null && (!/^[A-Za-z0-9_-]{1,128}$/.test(attempt) || !store.listTurnAttempts(turn.id).some(entry => entry.id === attempt))) {
+        throw new InputError("attempt does not belong to this turn");
+      }
+      const input = c.req.query("input") === "true" ? store.getTurnInput(turn.id, attempt) : null;
       return { turn, ...(input ? { input: { ...input, messages: publicMessages(input.messages.filter(conversationEntryVisibility(c, store))) } } : {}),
         ...(c.req.query("attempts") === "true" ? { attempts: store.listTurnAttempts(turn.id) } : {}) };
     });

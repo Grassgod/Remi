@@ -1403,12 +1403,15 @@ export interface MultiremiTaskPromptArtifact {
   prompt: string;
   sha256: string;
   assembledAt: string;
+  /** ADR 0023: the Remi Chat block of the provider instruction file in effect; null outside native Chat or on older daemons. */
+  instructions: string | null;
 }
 
 export interface RecordTaskPromptInput {
   mode: MultiremiTaskPromptMode;
   prompt: string;
   sha256: string;
+  instructions?: string | null;
 }
 
 export interface CreateTaskHumanRequestInput {
@@ -4963,17 +4966,20 @@ export interface MultiremiFeishuBotAuditEntry {
   createdAt: string;
 }
 
+/** ADR 0023: the workspace's own prompt text, one setting; Remi's rules are not part of it. */
 export interface MultiremiPromptSettings {
-  bootstrapPrompt: string;
-  deltaPrompt: string;
+  prompt: string;
   revision: number;
   updatedAt: string | null;
   updatedBy: string | null;
 }
 
 export interface UpdateMultiremiPromptSettingsInput {
+  prompt?: string;
+  /** Deprecated: clients from before ADR 0023; stored merged with `delta_prompt` into `prompt`. */
   bootstrapPrompt?: string;
   bootstrap_prompt?: string;
+  /** Deprecated: see `bootstrap_prompt`. */
   deltaPrompt?: string;
   delta_prompt?: string;
   expectedRevision?: number;

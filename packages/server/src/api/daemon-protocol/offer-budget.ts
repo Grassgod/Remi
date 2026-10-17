@@ -93,10 +93,7 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   projection.jsonl = taskSessionInput({ sessionId: projection.session_id, agentId: task.agentId,
     fromSeq, toSeq: projection.to_seq, entries, triggerSeqs: triggers, coldStart,
     complete: unreadInputInline({ agentId: task.agentId, fromSeq, toSeq: projection.to_seq, entries, triggerSeqs: triggers }) });
-  if (triggers.size) response.prompt = "Respond to the triggering messages in Current Session Context. 动手前先读完未读的部分，了解上下文。";
-  if (triggers.size) delete response.chat_message;
   delete response.trigger_comment_content;
-  response.issue_session_results = [];
   const inherited = response.inherited_session_projection;
   if (inherited?.session_id) {
     inherited.jsonl = taskSessionInput({ sessionId: inherited.session_id, agentId: task.agentId,

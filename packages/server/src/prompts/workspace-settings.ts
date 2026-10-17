@@ -3,40 +3,58 @@ import type {
   MultiremiWorkspace,
   UpdateMultiremiPromptSettingsInput,
 } from "@multiremi/contracts/types.js";
-import { ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
+import { LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT, mergedWorkspacePrompt } from "@multiremi/contracts/remi-rules.js";
 
-export const MAX_WORKSPACE_PROMPT_LENGTH = 8_000;
+/** Bootstrap and delta used to allow 8,000 characters each; the merged prompt keeps both. */
+export const MAX_WORKSPACE_PROMPT_LENGTH = 16_000;
 
-export const DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT = `## Code Delivery Contract
+/**
+ * Remi's former default bootstrap prompt (ADR 0023). Its rules are now part of
+ * the Remi notes the daemon writes into every session's `AGENTS.md`; the server
+ * still puts it ahead of the workspace's own text for daemons from before.
+ */
+export const DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT = LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT;
 
-When a task changes code:
-- Push the working branch and create a GitHub pull request or Codebase merge request before reporting completion.
-- Include the issue key in the PR/MR title or description so Multiremi can associate it automatically.
-- Reuse an existing open PR/MR for the same source branch. Create at most one PR/MR per changed repository.
-- Creating a PR/MR does not require approval. Merging it or pushing directly to the default branch requires explicit user authorization.
-- Return every PR/MR URL in the final result. If creation fails, report the exact failure and preserve the pushed branch for recovery.
-- Do not create empty PRs/MRs. A squad leader must ensure delegated code changes have a PR/MR before completing the parent task.
-
-Use \`remi message\` for communication, \`remi inbox\` to read addressed messages, and \`remi turn\` to inspect or control execution.
-
-${ARTIFACT_DELIVERY_CONTRACT}`;
-
-const KEYS = {
-  bootstrap: "prompt_bootstrap_appendix",
-  delta: "prompt_delta_appendix",
+/** `prompt_appendix` holds the workspace's own text only; the two legacy keys are folded into it. */
+export const WORKSPACE_PROMPT_KEYS = {
+  prompt: "prompt_appendix",
+  legacyBootstrap: "prompt_bootstrap_appendix",
+  legacyDelta: "prompt_delta_appendix",
   revision: "prompt_revision",
   updatedAt: "prompt_updated_at",
   updatedBy: "prompt_updated_by",
 } as const;
+const KEYS = WORKSPACE_PROMPT_KEYS;
 
+/** The stored workspace prompt; settings saved before ADR 0023 read as their two prompts merged. */
 export function readWorkspacePromptSettings(workspace: MultiremiWorkspace): MultiremiPromptSettings {
   const settings = workspace.settings ?? {};
   return {
-    bootstrapPrompt: readString(settings[KEYS.bootstrap]) ?? DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT,
-    deltaPrompt: readString(settings[KEYS.delta]) ?? "",
+    prompt: readString(settings[KEYS.prompt])
+      ?? mergedWorkspacePrompt(readString(settings[KEYS.legacyBootstrap]), readString(settings[KEYS.legacyDelta])),
     revision: readRevision(settings[KEYS.revision]),
     updatedAt: readString(settings[KEYS.updatedAt]),
     updatedBy: readString(settings[KEYS.updatedBy]),
+  };
+}
+
+/**
+ * Settings with the two legacy prompt keys folded into `prompt_appendix`, or
+ * null when there is nothing to fold. A stored bootstrap prompt that begins
+ * with Remi's former default keeps only what follows it. The legacy keys stay,
+ * so an image from before reads what it always read.
+ */
+export function foldLegacyWorkspacePrompts(settings: Record<string, unknown>): Record<string, unknown> | null {
+  if (readString(settings[KEYS.prompt]) !== null) return null;
+  if (!(KEYS.legacyBootstrap in settings) && !(KEYS.legacyDelta in settings)) return null;
+  return { ...settings, [KEYS.prompt]: mergedWorkspacePrompt(readString(settings[KEYS.legacyBootstrap]), readString(settings[KEYS.legacyDelta])) };
+}
+
+/** What an image from before ADR 0023 reads: Remi's former default with the workspace's text after it. */
+function legacyPromptKeys(prompt: string): Record<string, string> {
+  return {
+    [KEYS.legacyBootstrap]: [DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT, prompt].filter(Boolean).join("\n\n"),
+    [KEYS.legacyDelta]: "",
   };
 }
 
@@ -55,32 +73,33 @@ export function mergeWorkspacePromptSettings(
     throw new WorkspacePromptRevisionConflictError(expectedRevision, current.revision);
   }
 
-  const bootstrapPrompt = normalizePrompt(
-    input.bootstrapPrompt ?? input.bootstrap_prompt ?? current.bootstrapPrompt,
-    "bootstrap_prompt",
-  );
-  const deltaPrompt = normalizePrompt(
-    input.deltaPrompt ?? input.delta_prompt ?? current.deltaPrompt,
-    "delta_prompt",
-  );
-  validatePromptLength("bootstrap_prompt", bootstrapPrompt);
-  validatePromptLength("delta_prompt", deltaPrompt);
+  const legacyBootstrap = input.bootstrapPrompt ?? input.bootstrap_prompt;
+  const legacyDelta = input.deltaPrompt ?? input.delta_prompt;
+  // Clients from before ADR 0023 send the two prompts; they are stored as one.
+  const prompt = input.prompt !== undefined
+    ? normalizePrompt(input.prompt, "prompt").trim()
+    : legacyBootstrap !== undefined || legacyDelta !== undefined
+      ? mergedWorkspacePrompt(legacyBootstrap === undefined ? "" : normalizePrompt(legacyBootstrap, "bootstrap_prompt"),
+        legacyDelta === undefined ? "" : normalizePrompt(legacyDelta, "delta_prompt"))
+      : current.prompt;
+  validatePromptLength("prompt", prompt);
 
-  const changed = bootstrapPrompt !== current.bootstrapPrompt || deltaPrompt !== current.deltaPrompt;
+  const settings = workspace.settings ?? {};
+  const changed = prompt !== current.prompt;
   if (!changed) return { settings: workspace.settings, prompts: current };
 
   const prompts: MultiremiPromptSettings = {
-    bootstrapPrompt,
-    deltaPrompt,
+    prompt,
     revision: current.revision + 1,
     updatedAt,
     updatedBy,
   };
   return {
     settings: {
-      ...workspace.settings,
-      [KEYS.bootstrap]: prompts.bootstrapPrompt,
-      [KEYS.delta]: prompts.deltaPrompt,
+      ...settings,
+      // Kept in step for a rollback to an image from before ADR 0023.
+      ...legacyPromptKeys(prompts.prompt),
+      [KEYS.prompt]: prompts.prompt,
       [KEYS.revision]: prompts.revision,
       [KEYS.updatedAt]: prompts.updatedAt,
       [KEYS.updatedBy]: prompts.updatedBy,

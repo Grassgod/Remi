@@ -238,8 +238,12 @@ export function registerDaemonReportHandlers(layer: DaemonProtocolLayer, store: 
             break;
           }
           case "task.prompt":
-            if (!["bootstrap", "delta"].includes(string(p.mode)) || typeof p.prompt !== "string" || typeof p.sha256 !== "string") reject();
-            try { store.recordTaskPrompt(taskId, { mode: p.mode as "bootstrap" | "delta", prompt: p.prompt, sha256: p.sha256 }); }
+            if (!["bootstrap", "delta"].includes(string(p.mode)) || typeof p.prompt !== "string" || typeof p.sha256 !== "string"
+              || (p.instructions !== undefined && typeof p.instructions !== "string")) reject();
+            try {
+              store.recordTaskPrompt(taskId, { mode: p.mode as "bootstrap" | "delta", prompt: p.prompt as string, sha256: p.sha256 as string,
+                ...(typeof p.instructions === "string" ? { instructions: p.instructions } : {}) });
+            }
             catch { reject(); }
             break;
           case "task.session_pin":

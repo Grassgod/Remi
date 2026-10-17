@@ -523,7 +523,7 @@ export class IssueSessionsRepo {
     return Number(row.cursor_seq);
   }
 
-  buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
+  buildTaskSessionProjection(taskId: string, options: { boundsOnly?: boolean } = {}): MultiremiSessionProjection | null {
     const projectWithinTransaction = () => {
       const task = this.ctx.tasks().getTask(taskId);
       if (!task?.issueSessionId) return null;
@@ -585,6 +585,7 @@ export class IssueSessionsRepo {
         tokenBudget: tokenBudget - inheritedTokenBudget,
         currentTaskId: task.id,
         resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
+        boundsOnly: options.boundsOnly,
       });
       if (hasInheritedWindow) {
         const parent = this.getIssueSession(session.parentSessionId!);
@@ -602,6 +603,7 @@ export class IssueSessionsRepo {
           perspectiveMode: "inherited",
           tokenBudget: inheritedTokenBudget,
           resolveAuthorName: (type, id) => this.sessionAuthorName(type, id),
+          boundsOnly: options.boundsOnly,
         });
         // The legacy projector always retains its JSONL header. If operators
         // configure a budget smaller than both envelopes, fail rather than

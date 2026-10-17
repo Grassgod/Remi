@@ -118,6 +118,8 @@ export function daemonClaimAgentResponse(agent: MultiremiAgent): Record<string, 
     id: agent.id,
     name: agent.name,
     provider: agent.provider,
+    // ADR 0023: the role line of the Agent's definition in AGENTS.md.
+    description: agent.description ?? "",
     instructions: agent.instructions,
     skills: agent.skills.map(daemonClaimSkillResponse),
     custom_env: agent.customEnv ?? {},

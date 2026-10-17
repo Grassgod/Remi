@@ -96,7 +96,7 @@ import type { MultiremiStore } from "@multiremi/store/store.js";
 import { workspaceDefaultBranchResolver } from "../helpers/repositories.js";
 import { autopilotRunSourceRevision } from "@multiremi/store/repos/autopilots-repo.js";
 import { createLogger } from "@shared/logger.js";
-import { readWorkspacePromptSettings } from "../../prompts/workspace-settings.js";
+import { DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT, readWorkspacePromptSettings } from "../../prompts/workspace-settings.js";
 import { resolveRepositoryWikiAutomation } from "../../repository-wiki/automation.js";
 import { daemonClaimAgentResponse } from "./agents.js";
 import { issueCompatibilityResponse } from "./issues.js";
@@ -426,7 +426,6 @@ export function daemonTaskClaimResponse(
   response.runtime_workspace = task.runtimeWorkspace ?? null;
   const defaultBranchFor = workspaceDefaultBranchResolver(store.getWorkspace(task.workspaceId)?.repos ?? []);
   if (task.knowledgeWarnings?.length) response.knowledge_warnings = task.knowledgeWarnings;
-  let projectionMode: "bootstrap" | "delta" | null = null;
   response.prompt = task.prompt;
   if (task.sessionId) {
     response.session_id = task.sessionId;
@@ -457,14 +456,14 @@ export function daemonTaskClaimResponse(
       .map(attachmentCompatibilityResponse);
   }
   if (task.issueSessionId || task.chatSessionId) {
-    const projection = store.buildTaskSessionProjection(task.id);
+    // ADR 0023: the offer's session input is the unread range record built at send time; no history is assembled.
+    const projection = store.buildTaskSessionProjection(task.id, { boundsOnly: true });
     if (projection) {
       try {
         store.recordTaskInboxDelivery(task.id, projection.fromSeq, projection.toSeq);
       } catch (error) {
         log.warn(`inbox delivery receipt failed for ${task.id}: ${error instanceof Error ? error.message : String(error)}`);
       }
-      projectionMode = projection.mode === "delta" ? "delta" : "bootstrap";
       response.session_projection = {
         session_id: projection.sessionId,
         target_agent_id: projection.targetAgentId,
@@ -504,24 +503,7 @@ export function daemonTaskClaimResponse(
         if (lane) response.issue_session_generation = lane.generation;
       }
     }
-    if (task.issueId) {
-      const since = projectionMode === "delta"
-        ? latestRecordedPromptForLane(store, task)?.assembledAt ?? null
-        : null;
-      response.issue_session_results = store.listIssueSessionResults(task.issueId)
-        .filter((result) => result.sourceSessionId !== task.issueSessionId)
-        // Millisecond timestamps can tie. Re-sending one result is safer than
-        // dropping a result published at the exact prompt assembly instant.
-        .filter((result) => !since || result.createdAt >= since)
-        .map((result) => ({
-          id: result.id,
-          source_session_id: result.sourceSessionId,
-          title: result.title,
-          body: result.body,
-          metadata: result.metadata,
-          created_at: result.createdAt,
-        }));
-    }
+    // Published results from other Sessions are not inlined (ADR 0023): `remi session result list` reads them.
   }
   if (task.project) {
     response.project_id = task.project.id;
@@ -592,28 +574,6 @@ export function daemonTaskClaimResponse(
   appendDaemonClaimSquadContext(store, task, response);
   appendDaemonClaimExecutionContext(store, task, response);
   return response;
-}
-
-function latestRecordedPromptForLane(
-  store: MultiremiStore,
-  task: MultiremiTaskWithAgent,
-) {
-  if (!task.issueId || !task.issueSessionId) return null;
-  let latest: ReturnType<MultiremiStore["getTaskPrompt"]> = null;
-  for (const candidate of store.listTasksForIssue(task.issueId)) {
-    if (
-      candidate.id === task.id
-      || candidate.agentId !== task.agentId
-      || candidate.issueSessionId !== task.issueSessionId
-      || taskExecutionScope(candidate) !== taskExecutionScope(task)
-    ) continue;
-    const artifact = store.getTaskPrompt(candidate.id);
-    if (artifact && (!latest || artifact.assembledAt > latest.assembledAt)) latest = artifact;
-  }
-  // Upgraded installations may have a resumable provider lane but no prompt
-  // audit row for its prior task. The caller then includes all published
-  // results once so an upgrade cannot silently lose collaboration context.
-  return latest;
 }
 
 function appendDaemonClaimSquadContext(
@@ -688,8 +648,10 @@ function appendDaemonClaimWorkspaceContext(store: MultiremiStore, task: Multirem
   if (workspace?.context?.trim()) response.workspace_context = workspace.context.trim();
   if (workspace) {
     const prompts = readWorkspacePromptSettings(workspace);
-    if (prompts.bootstrapPrompt.trim()) response.workspace_bootstrap_prompt = prompts.bootstrapPrompt.trim();
-    if (prompts.deltaPrompt.trim()) response.workspace_delta_prompt = prompts.deltaPrompt.trim();
+    // ADR 0023: the workspace's own text, always present so a daemon can tell this server from an older one.
+    response.workspace_prompt = prompts.prompt.trim();
+    // Daemons from before read Remi's rules from the bootstrap prompt, the way its default carried them.
+    response.workspace_bootstrap_prompt = [DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT, prompts.prompt.trim()].filter(Boolean).join("\n\n");
   }
 
   // Read at claim time so a saved workspace env applies to the next dispatched
@@ -711,8 +673,7 @@ function appendDaemonClaimChatContext(store: MultiremiStore, task: MultiremiTask
   try {
     const allMessages = store.listChatMessages(task.chatSessionId);
     const messages = daemonUserMessagesForTask(store, task, allMessages);
-    const chatMessage = messages.map((message) => message.body.trim()).filter(Boolean).join("\n\n");
-    if (chatMessage) response.chat_message = chatMessage;
+    // The message bodies reach the daemon as the offer's input; only their attachments ride here.
     const attachments = store.listAttachmentsForChatMessages(messages.map(message => message.id));
     response.chat_message_attachments = messages.flatMap(message => attachments.get(message.id) ?? [])
       .map(attachmentCompatibilityResponse);
@@ -751,6 +712,8 @@ function appendDaemonClaimBoundIssueLog(
         provider: task.agent?.provider, model: task.agent?.model,
         degradeLevel: task.projectionDegradeLevel ?? 0,
       }) / 4)),
+      // The offer replaces the log with an unread range record of the Issue Session.
+      boundsOnly: true,
     });
     response.bound_issue_log = {
       session_id: session.id,

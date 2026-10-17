@@ -501,7 +501,7 @@ export class ChatRepo {
     return conversationLogChatMessage(entry);
   }
 
-  buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
+  buildTaskSessionProjection(taskId: string, options: { boundsOnly?: boolean } = {}): MultiremiSessionProjection | null {
     const projectWithinTransaction = () => {
       const task = this.ctx.tasks().getTask(taskId);
       if (!task?.chatSessionId) return null;
@@ -549,6 +549,7 @@ export class ChatRepo {
         tokenBudget,
         currentTaskId: task.id,
         resolveAuthorName: (type, id) => type === "agent" && id === agent?.id ? agent.name : null,
+        boundsOnly: options.boundsOnly,
       });
       runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
          SET projection_from_seq = ?, projection_to_seq = ?, projection_mode = ?,
