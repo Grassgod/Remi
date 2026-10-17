@@ -214,6 +214,23 @@ describe("Runtime workspace local execution", () => {
     expect(existsSync(join(root, "own-skill"))).toBe(true);
   });
 
+  it("never writes into or deletes a skill directory Remi did not create", () => {
+    const { base, task } = fixture();
+    const root = join(base, "exec", ".claude", "skills");
+    // Someone else's skill already has the Agent skill's name.
+    mkdirSync(join(root, "review"), { recursive: true });
+    writeFileSync(join(root, "review", "SKILL.md"), "mine");
+    const skill = (name: string) => ({ name, description: `${name} skill`, content: `# ${name}`, files: [] });
+    syncAgentSkills(root, { ...task, agent: { ...task.agent!, skills: [skill("Review"), skill("Deploy")] } } as AgentTask);
+    expect(readFileSync(join(root, "review", "SKILL.md"), "utf8")).toBe("mine");
+    expect(existsSync(join(root, "deploy", "SKILL.md"))).toBe(true);
+    expect(JSON.parse(readFileSync(join(root, ".remi-skills.json"), "utf8"))).toEqual({ skills: ["deploy"] });
+    // Removing the Agent's skills removes only what Remi recorded.
+    syncAgentSkills(root, { ...task, agent: { ...task.agent!, skills: [] } } as AgentTask);
+    expect(readFileSync(join(root, "review", "SKILL.md"), "utf8")).toBe("mine");
+    expect(existsSync(join(root, "deploy"))).toBe(false);
+  });
+
   it("keeps the user's personal Codex skills out of every session config", async () => {
     const { base, task, options } = fixture();
     const personal = join(base, "personal-home");

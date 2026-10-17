@@ -4686,10 +4686,13 @@ export class MultiremiDaemon {
       const contextDir = task.runtimeWorkspaceId ? providerHome?.root : workDir;
       if (!contextDir) throw new Error("Runtime workspace requires an isolated provider home");
       writeTaskContext(contextDir, task);
-      // ADR 0023: skills load natively, from the working directory, or from the provider home when that is the user's.
-      if (task.runtimeWorkspaceId) {
-        if (providerHome) syncAgentSkills(providerHomeSkillRoot(providerHome.home, agent.provider), task);
-      } else syncAgentSkills(agentSkillRoot(workDir, agent.provider), task);
+      // ADR 0023: skills load natively. Remi writes them only where it owns the folder: the daemon's execution
+      // directory, or the provider home when the working directory is the user's own (a runtime workspace or a
+      // Project's local_directory).
+      const userFolder = Boolean(task.runtimeWorkspaceId) || (resolvedWorkDir.localDirectory && workDir === workspaceDir);
+      if (!userFolder) syncAgentSkills(agentSkillRoot(workDir, agent.provider), task);
+      else if (providerHome) syncAgentSkills(providerHomeSkillRoot(providerHome.home, agent.provider), task);
+      else if (agent.skills?.length) log.warn(`Task ${task.id}: no provider home for skills; the user's folder is left as it is`);
       writeProjectResourceContext(contextDir, task);
     } catch (err) {
       log.warn(`Failed to write task context for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);

@@ -125,7 +125,7 @@ daemon 检查 cwd、额外上下文和环境文件的真实路径位于根目录
 
 原生会话历史继续按 Session 隔离。daemon 在隔离的 provider home 的 `AGENTS.md`（Claude 另有只含 `@AGENTS.md` 的 `CLAUDE.md`）里，先写 Remi 的会话说明，再接本地上下文：根目录到 cwd 的指令和工作区自带的 Skill 索引（[ADR 0023](../adr/0023-turn-input-and-provider-agents-md.md)）。不读取用户级的 `~/.claude/CLAUDE.md`、`~/.codex/AGENTS.md` 和个人 Skill 目录。Codex 每层按 `AGENTS.override.md`、`AGENTS.md`、`AGENT.md` 选一份；Claude 每层按 `CLAUDE.md`、`AGENTS.md`、`AGENT.md` 选一份。目录越具体，优先级越高。
 
-Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文件从原目录读取。数据库 Agent Skill 每轮同步到 provider home 里 provider 原生加载的目录（Claude `CLAUDE_CONFIG_DIR/skills`，Codex `CODEX_HOME/skills`，Antigravity `.agents/skills`），不进索引，也不覆盖本地同名 Skill。单份上下文文件上限 256 KiB；生成的本地指令和 Skill 索引合计上限 24 KiB，超限明确失败；整个 `AGENTS.md` 上限 48 KiB。
+Skill 索引包含名称、触发描述和绝对 `SKILL.md` 路径，支持文件从原目录读取。数据库 Agent Skill 每轮同步到 provider home 里 provider 原生加载的目录（Claude `CLAUDE_CONFIG_DIR/skills`，Codex `CODEX_HOME/skills`，Antigravity `.agents/skills`），不进索引，也不覆盖本地同名 Skill。Project 的 `local_directory` 同样如此：Remi 不往用户文件夹写 Skill，也只删除自己创建并记入清单的 Skill 目录。单份上下文文件上限 256 KiB；生成的本地指令和 Skill 索引合计上限 24 KiB，超限明确失败；整个 `AGENTS.md` 上限 48 KiB。
 
 `env_file` 使用 dotenv 格式，不执行 shell。注入顺序：机器环境 → 团队环境 → Agent 环境 → 本地环境文件 → provider 路由/认证 → Task 坐标。本地文件不能覆盖 `MULTIREMI_*`、`CODEX_HOME`、`CLAUDE_CONFIG_DIR`、`OPENAI_*`、`ANTHROPIC_*`。Antigravity Agent 另外不能覆盖 `GEMINI_HOME`、`GEMINI_API_KEY`、`AGY_*`、`GOOGLE_*`、`ANTIGRAVITY_*`（home、网关路由与 Google 凭据由其环境构造器独占；其他 provider 仍可在本地文件中使用 Google 工具变量）。其他 provider 配置继续沿用现有筛选、插件和 relay 机制，不共享完整 native home。
 

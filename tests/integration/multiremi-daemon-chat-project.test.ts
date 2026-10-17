@@ -79,6 +79,8 @@ describe("Project-bound Chat daemon startup", () => {
       });
       store.createProjectDoc(project.id, { kind: "wiki", title: "Project guide", path: "guide.md", body: "Current Project Wiki." });
       const agent = store.createAgent({ name: "Chat Project worker", provider: "claude" });
+      const skill = store.createSkill({ name: "Chat Skill", content: "# Chat Skill\n" });
+      store.setAgentSkills(agent.id, { skill_ids: [skill.id!] });
       const chat = store.createChatSession({ agentId: agent.id, projectId: project.id });
       const sent = store.sendChatMessage(chat.id, { body: "Read this Project context." });
       expect(store.getTaskWithAgent(sent.task.id)).toMatchObject({
@@ -92,6 +94,7 @@ describe("Project-bound Chat daemon startup", () => {
       let instructions = "";
       let cwd = "";
       let envProject: string | undefined;
+      let providerHome = "";
       const daemon = new MultiremiDaemon({
         sshMeshManager: disabledSshMeshRuntime(),
         serverUrl: `http://127.0.0.1:${server.port}`, token: credential.token,
@@ -103,6 +106,7 @@ describe("Project-bound Chat daemon startup", () => {
             instructions = providerInstructions(options.env);
             cwd = options.cwd!;
             envProject = options.env?.MULTIREMI_PROJECT_ID;
+            providerHome = options.env?.CLAUDE_CONFIG_DIR ?? "";
             yield { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Project received." }] } as any;
           },
           getLastResponse: () => ({ text: "Project received.", sessionId: "chat-project-session", requestId: "chat-project-request" }),
@@ -116,7 +120,11 @@ describe("Project-bound Chat daemon startup", () => {
         if (localDirectory) {
           expect(sync).not.toHaveBeenCalled();
           expect(checkout).not.toHaveBeenCalled();
+          // The user's folder is not Remi's: the Agent's skill is in the provider home, nothing skill-related here.
+          for (const entry of [".claude", ".agents", ".remi-skills.json"]) expect(existsSync(join(localPath, entry))).toBe(false);
+          expect(readFileSync(join(providerHome, "skills", "chat-skill", "SKILL.md"), "utf8")).toContain("# Chat Skill");
         } else {
+          expect(existsSync(join(cwd, ".claude", "skills", "chat-skill", "SKILL.md"))).toBe(true);
           // MUL-310 now requires an automatic attempt for bound daemon-owned
           // Chat; the earlier zero-eager-Git contract still applies to user dirs.
           expect(sync).toHaveBeenCalledTimes(1);
