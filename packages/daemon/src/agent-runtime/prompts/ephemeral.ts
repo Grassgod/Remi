@@ -2,6 +2,8 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { CHAT_ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
+import { parseUnreadRange, splitProjectedInput } from "@multiremi/contracts/session-input.js";
+import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { hasReadOnlyCodeSnapshot, isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "./side-conversation.js";
 
@@ -361,7 +363,55 @@ function taskPromptMode(task: AgentTask): TaskPromptMode {
   return projection?.mode === "delta" ? "delta" : "bootstrap";
 }
 
+/**
+ * The turn input as ordinary messages, or null while part of it still needs a read.
+ * Every range record the server sent for this input (the first input message's and the
+ * session projection's) must say `complete`: all unread messages are inline in full, so
+ * the range read and its envelope add nothing. Side conversations keep their range context.
+ * The agent's own messages that the range only listed (no body) are left out.
+ */
+function plainTurnInput(task: AgentTask): UnifiedMessage[] | null {
+  const messages = task.input_messages;
+  if (!messages?.length || isSideConversation(task)) return null;
+  const first = splitProjectedInput(messages[0]!.body_md);
+  const projection = projectionInputComplete(task);
+  if (!first.range && projection === null) return null;
+  if (first.range && (first.range.complete !== true || first.replay) || projection === false) return null;
+  const agentId = task.agent?.id;
+  return (first.range ? [{ ...messages[0]!, body_md: first.body }, ...messages.slice(1)] : messages)
+    .filter(message => message.body_md || !(message.sender_type === "agent" && message.sender_id === agentId));
+}
+
+/** null without a range record; otherwise whether it is complete with no folded trigger. */
+function projectionInputComplete(task: AgentTask): boolean | null {
+  const projection = task.sessionProjection ?? task.session_projection ?? null;
+  const [first, ...lines] = projection?.jsonl?.split("\n") ?? [];
+  const range = parseUnreadRange(first);
+  if (!range) return null;
+  return range.complete === true && !lines.some(line => {
+    try {
+      const entry = JSON.parse(line);
+      return entry.type === "triggering_message" && Boolean(entry.body_folded || entry.body_omitted_chars);
+    } catch { return true; }
+  });
+}
+
+/** A single human message in a private Chat reads as itself; otherwise each message keeps who said it. */
+function plainTaskRequest(task: AgentTask, messages: UnifiedMessage[]): string {
+  const privateChat = Boolean(task.chatSessionId && !(task.boundIssue ?? task.bound_issue));
+  const only = messages.length === 1 ? messages[0]! : null;
+  if (privateChat && only?.sender_type === "member" && only.body_md.trim()) return only.body_md;
+  const agentId = task.agent?.id;
+  return messages.map(message => {
+    const author = [message.sender_type, message.sender_id].filter(Boolean).join(" ")
+      + (message.sender_type === "agent" && message.sender_id === agentId ? " (you)" : "");
+    return `[${message.seq} · ${author} · ${message.message_kind}]\n${message.body_md}`;
+  }).join("\n\n");
+}
+
 function currentTaskRequest(task: AgentTask): string {
+  const plain = plainTurnInput(task);
+  if (plain) return plainTaskRequest(task, plain);
   if (task.input_messages) return task.input_messages.map(message =>
     `[${message.seq} · ${message.sender_type} ${message.sender_id ?? ""} · ${message.message_kind}]\n${message.body_md}`).join("\n\n");
   let prompt = task.prompt.trim();
@@ -508,10 +558,12 @@ function appendSessionContextSections(sections: string[], task: AgentTask, mode:
     let unreadInput: Record<string, any> | null = null;
     try { const first = JSON.parse(inputLines[0] ?? ""); if (first.type === "unread_range") unreadInput = first; } catch {}
     if (unreadInput) {
-      sections.push("", "## Current Session Context", unreadInput.instruction);
-      for (const line of inputLines.slice(1)) {
-        const message = JSON.parse(line);
-        if (task.input_messages?.some(input => input.id === message.id)) continue;
+      // Complete input is already in Current Request; only triggers outside it remain.
+      const plain = plainTurnInput(task) !== null;
+      const pending = inputLines.slice(1).map(line => JSON.parse(line))
+        .filter(message => !task.input_messages?.some(input => input.id === message.id));
+      if (!plain || pending.length) sections.push("", "## Current Session Context", ...(plain ? [] : [unreadInput.instruction]));
+      for (const message of pending) {
         sections.push("", `### Triggering Message ${message.seq} (${message.id})`,
           `${message.author_type}: ${message.author_id ?? ""}`, message.body,
           ...(message.expand_hint ? [message.expand_hint] : []));
@@ -629,11 +681,14 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask, platfo
   sections.push("## Triggering Comment");
   sections.push(`${commentAuthorLabel(authorType, authorName)} just left a new comment. Focus on this comment and do not confuse it with previous comments.`);
   const projection = task.sessionProjection ?? task.session_projection ?? null;
+  const plainInput = plainTurnInput(task) !== null;
   if (triggerContent && !projection?.jsonl?.trim()) {
     sections.push("");
     sections.push(blockquote(triggerContent));
   } else if (triggerContent) {
-    sections.push("The comment body appears once in Current Session Context; use the event with this trigger comment ID as the authoritative text.");
+    sections.push(plainInput
+      ? "The comment body appears once in Current Request; use it as the authoritative text."
+      : "The comment body appears once in Current Session Context; use the event with this trigger comment ID as the authoritative text.");
   }
   const triggerAttachments = arrayField(task, "triggerCommentAttachments", "trigger_comment_attachments");
   if (triggerAttachments.length) {
@@ -647,10 +702,13 @@ function appendTriggerCommentSection(sections: string[], task: AgentTask, platfo
   }
 
   if (projection?.jsonl?.trim()) {
-    sections.push("");
-    sections.push(projection.jsonl.startsWith('{"type":"unread_range"')
-      ? "动手前先执行 Current Session Context 中的范围读取命令，读完未读部分。"
-      : "The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
+    // Complete input has no range left to read.
+    if (!plainInput) {
+      sections.push("");
+      sections.push(projection.jsonl.startsWith('{"type":"unread_range"')
+        ? "动手前先执行 Current Session Context 中的范围读取命令，读完未读部分。"
+        : "The current product Session history is already injected above. Do not re-read the whole Issue comment history merely to reconstruct context.");
+    }
   } else {
     const readHint = buildCommentReadHint(task.issueSessionId ?? task.issue_session_id ?? "<issue-session-id>", triggerCommentId, triggerThreadId, newCommentsSince, newCommentCount, Boolean(priorSessionId));
     if (readHint) {

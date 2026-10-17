@@ -51,6 +51,12 @@ daemon 的任务回复只取一条顶层 `agent_message` 条目，由 `settle()`
 触发消息通常内联 8,000 个 JavaScript 字符，超长保留开头、准确省略数和
 `remi session log get <session> <seq>`。冷启动范围从 0 开始，未读统计与范围读取
 排除 agent 自己的历史消息；提示词明确要求动手前先读未读部分。
+例外是完整输入：范围内每条需读的条目都是完整内联的触发消息（自己的消息不需读）时，
+`unread_range` 带加法字段 `complete: true`，规则与输入确认的 `assertOfferedInputRead` 相同；
+冷 replacement 回放原始输入、budget 折叠任一正文后都不带。新 daemon 只在 offer 输入与会话投影的
+范围记录都为 complete、且不是旁支会话时，把输入作为普通消息交给 agent：一对一 Chat 的单条成员消息
+只给正文，其余每条保留 `[seq · 作者 · kind]` 标签（agent 自己的消息标 `(you)`，只列入范围的自身空正文消息省略），
+不渲染范围记录、读取指令和「动手前先执行…」。插话批次同理只看它自己的范围记录。旧 daemon 忽略该字段，照旧提示读取。
 
 现有命令增加 `remi session log get <session> --from X --to Y`，语义为 `X < seq ≤ Y`。
 沿用 `GET /api/sessions/:id/log/entry`，不新增 API 或 CLI 命令路径。

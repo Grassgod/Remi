@@ -2369,12 +2369,14 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(store.getTask(continued.task.id)?.status).toBe("completed");
       expect(sendOptions[4]?.sessionId).toBe("sess-chat-3");
       expect(prompts[4]).toStartWith("# Delta Prompt");
-      const continuedRange = prompts[4]!.match(/remi message list (\S+) --from (\d+) --to (\d+)/)!;
-      expect(continuedRange[1]).toBe(session.id);
-      expect(continuedRange[2]).toBe(range[3]);
+      // Its only unread message is inline in full: plain input, no range read, from the actual read high-water.
+      expect(prompts[4]).toContain("## Current Request\nContinue after cold recovery\n");
+      expect(prompts[4]).not.toContain(`remi message list ${session.id} --from`);
+      const continuedRange = prompts[4]!.match(/input seq \((\d+), (\d+)\]/)!;
+      expect(continuedRange[1]).toBe(range[3]);
       const consumedTo = store.getTurnForAttempt(continued.task.id)!.input_to_seq;
       expect(Number.isSafeInteger(consumedTo)).toBe(true);
-      expect(Number(continuedRange[3])).toBe(consumedTo!);
+      expect(Number(continuedRange[2])).toBe(consumedTo!);
     } finally {
       unsubscribeRetries(); now.mockRestore();
       server.stop(true);

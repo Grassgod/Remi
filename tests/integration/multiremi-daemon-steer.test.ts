@@ -223,10 +223,14 @@ describe("Bun Multiremi daemon steering", () => {
         result: { via: "reprompt", native_outcome: null, error: null } } });
       const message = store.getMessage(steerId!)!;
       const [range, ...body] = String((steerMessages[0] as { text: string }).text).split("\n");
+      // The original request and the steer are the whole unread input, both inline: the range is complete,
+      // so the injected prompt carries the directive as itself without the range record.
       expect(JSON.parse(range!)).toEqual({ type: "unread_range", session_id: message.session_id,
         from_seq: 0, to_seq: message.seq, unread_count: 1,
-        instruction: unreadRangeHint(message.session_id, 0, message.seq, 1, true) });
+        instruction: unreadRangeHint(message.session_id, 0, message.seq, 1, true), complete: true });
       expect(body.join("\n")).toBe("改用中文输出");
+      expect(prompts[1]).toContain("- 改用中文输出\n");
+      expect(prompts[1]).not.toContain("unread_range");
     } finally {
       await activeDaemon?.stopAndDrainTestWork();
       server.stop(true);

@@ -4,6 +4,7 @@
 import type { MultiremiTaskSteerMessage, TaskUsageEntry } from "@multiremi/contracts/types.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
 import { formatPromptAttachment } from "@daemon/agent-runtime/prompts/ephemeral.js";
+import { splitProjectedInput } from "@multiremi/contracts/session-input.js";
 
 export const DEFAULT_STEER_POLL_MS = 2500;
 export const DEFAULT_FORCE_ANSWER_GRACE_MS = 3 * 60 * 1000;
@@ -126,6 +127,12 @@ export class TaskSteerFeed {
   }
 }
 
+/** A pushed batch leads with its unread range; when the range is complete the message reads as itself. */
+function steerText(content: string): string {
+  const input = splitProjectedInput(content);
+  return input.range?.complete === true && !input.replay ? input.body : content;
+}
+
 /**
  * The prompt injected into the live provider session for a batch of steer
  * messages. The session keeps its full transcript, so the wrapper only has to
@@ -140,7 +147,7 @@ export function buildSteerInjectionPrompt(messages: PreparedTaskSteerMessage[]):
     parts.push(
       "[Mid-run user steering] The user sent new instructions while this task was running:",
       ...steers.map((m) => [
-        `- ${m.content}`,
+        `- ${steerText(m.content)}`,
         ...((m.localAttachments ?? m.attachments)?.length
           ? ["Attachments:", ...(m.localAttachments ?? m.attachments)!.map(formatPromptAttachment)]
           : []),
