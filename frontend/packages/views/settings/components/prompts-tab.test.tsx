@@ -98,12 +98,12 @@ describe("PromptsTab", () => {
     }));
   });
 
-  it("enforces the 16,000 character limit", () => {
+  it("enforces the 16,002 character limit", () => {
     render(<PromptsTab />, { wrapper: Wrapper });
 
-    fireEvent.change(screen.getByLabelText("Workspace prompt"), { target: { value: "x".repeat(16_001) } });
+    fireEvent.change(screen.getByLabelText("Workspace prompt"), { target: { value: "x".repeat(16_003) } });
 
-    expect(screen.getByText("16001 / 16000")).toHaveClass("text-destructive");
+    expect(screen.getByText("16003 / 16002")).toHaveClass("text-destructive");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 

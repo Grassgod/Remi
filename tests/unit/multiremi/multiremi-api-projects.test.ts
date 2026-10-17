@@ -381,7 +381,7 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     const maxLengthUpdate = await app.request(`/api/multiremi/projects/${createdBody.project.id}`, {
       method: "PATCH",
       headers,
-      body: JSON.stringify({ instructions: "\u{20000}".repeat(8_000), expectedInstructionsRevision: 2 }),
+      body: JSON.stringify({ instructions: "\u{20000}".repeat(8_002), expectedInstructionsRevision: 2 }),
     });
     expect(maxLengthUpdate.status).toBe(200);
     expect((await maxLengthUpdate.json()).project.instructionsRevision).toBe(3);
@@ -389,10 +389,10 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     const tooLongUpdate = await app.request(`/api/projects/${createdBody.project.id}`, {
       method: "PUT",
       headers,
-      body: JSON.stringify({ instructions: "\u{20000}".repeat(8_001), expected_instructions_revision: 3 }),
+      body: JSON.stringify({ instructions: "\u{20000}".repeat(8_003), expected_instructions_revision: 3 }),
     });
     expect(tooLongUpdate.status).toBe(400);
-    expect(await tooLongUpdate.json()).toEqual({ error: "instructions must be 8000 characters or fewer" });
+    expect(await tooLongUpdate.json()).toEqual({ error: "instructions must be 8002 characters or fewer" });
 
     const compatibilityCreated = await app.request("/api/projects", {
       method: "POST",
@@ -410,13 +410,13 @@ describe("Multiremi API — projects, squads, and workspace objects", () => {
     const tooLongCreate = await app.request("/api/multiremi/projects", {
       method: "POST",
       headers,
-      body: JSON.stringify({ title: "Too long", instructions: "x".repeat(8_001) }),
+      body: JSON.stringify({ title: "Too long", instructions: "x".repeat(8_003) }),
     });
     expect(tooLongCreate.status).toBe(400);
-    expect(await tooLongCreate.json()).toEqual({ error: "instructions must be 8000 characters or fewer" });
+    expect(await tooLongCreate.json()).toEqual({ error: "instructions must be 8002 characters or fewer" });
 
     // A client from before sends two halves within their own limits that together exceed the one field's.
-    const halvesError = { error: "instructions and delta_instructions together must be 8000 characters or fewer" };
+    const halvesError = { error: "instructions and delta_instructions together must be 8002 characters or fewer" };
     const tooLongHalves = await app.request("/api/multiremi/projects", {
       method: "POST",
       headers,

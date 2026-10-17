@@ -191,11 +191,11 @@ describe("ProjectInstructionsSection", () => {
     const { onSave } = renderSection();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     const editor = screen.getByRole("textbox", { name: "Instructions" });
-    fireEvent.change(editor, { target: { value: "x".repeat(8000) } });
-    expect(screen.getByText("8000 / 8000")).not.toHaveClass("text-destructive");
-    fireEvent.change(editor, { target: { value: "x".repeat(8001) } });
+    fireEvent.change(editor, { target: { value: "x".repeat(8002) } });
+    expect(screen.getByText("8002 / 8002")).not.toHaveClass("text-destructive");
+    fireEvent.change(editor, { target: { value: "x".repeat(8003) } });
 
-    expect(screen.getByText("8001 / 8000")).toHaveClass("text-destructive");
+    expect(screen.getByText("8003 / 8002")).toHaveClass("text-destructive");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onSave).not.toHaveBeenCalled();

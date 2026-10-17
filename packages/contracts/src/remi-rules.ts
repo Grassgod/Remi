@@ -35,8 +35,11 @@ export function mergedWorkspacePrompt(bootstrap: string | null | undefined, delt
   return [customWorkspacePrompt(bootstrap), (delta ?? "").replace(/\r\n?/g, "\n").trim()].filter(Boolean).join("\n\n");
 }
 
-/** Bootstrap and delta instructions used to allow 4,000 characters each; the merged field keeps both (ADR 0023). */
-export const MAX_PROJECT_INSTRUCTIONS_LENGTH = 8_000;
+/**
+ * Bootstrap and delta instructions used to allow 4,000 characters each; the
+ * merged field keeps both and the blank line between them (ADR 0023).
+ */
+export const MAX_PROJECT_INSTRUCTIONS_LENGTH = 4_000 + 2 + 4_000;
 
 /** Thrown when a client from before sends both halves and together they exceed the one field's limit. */
 export const PROJECT_INSTRUCTIONS_TOO_LONG = `instructions and delta_instructions together must be ${MAX_PROJECT_INSTRUCTIONS_LENGTH} characters or fewer`;

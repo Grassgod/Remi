@@ -5,8 +5,8 @@ import type {
 } from "@multiremi/contracts/types.js";
 import { LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT, mergedWorkspacePrompt } from "@multiremi/contracts/remi-rules.js";
 
-/** Bootstrap and delta used to allow 8,000 characters each; the merged prompt keeps both. */
-export const MAX_WORKSPACE_PROMPT_LENGTH = 16_000;
+/** Bootstrap and delta used to allow 8,000 characters each; the merged prompt keeps both and the blank line between them. */
+export const MAX_WORKSPACE_PROMPT_LENGTH = 8_000 + 2 + 8_000;
 
 /**
  * Remi's former default bootstrap prompt (ADR 0023). Its rules are now part of

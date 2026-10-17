@@ -20,7 +20,8 @@ import { useT } from "../../i18n";
 import { useFormatRelativeDate } from "./labels";
 
 /** The server's limit for a project's instructions (ADR 0023). */
-export const PROJECT_INSTRUCTIONS_MAX_LENGTH = 8000;
+/** The server's limit: two former 4,000-character halves and the blank line between them. */
+export const PROJECT_INSTRUCTIONS_MAX_LENGTH = 8002;
 
 interface ProjectInstructionsSectionProps {
   instructions: string;

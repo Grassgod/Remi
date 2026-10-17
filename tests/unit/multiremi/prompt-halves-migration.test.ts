@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { LEGACY_DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT } from "@multiremi/contracts/remi-rules.js";
 import { readWorkspacePromptSettings } from "../../../packages/server/src/prompts/workspace-settings.js";
+import { createMultiremiApp } from "@multiremi/api.js";
 import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -40,6 +41,38 @@ describe("20261019_merge_prompt_halves (ADR 0023)", () => {
     runMigrations(db! as never);
     expect(db!.query("SELECT instructions FROM multiremi_projects WHERE id = ?").get(project.id))
       .toEqual({ instructions: "Bootstrap rule\n\nDelta rule" });
+  });
+
+  it("leaves room for the blank line it puts between two full halves, so they can be edited and saved", async () => {
+    const store = createLocalStore();
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    const headers = { Authorization: "Bearer MASTER", "content-type": "application/json" };
+    const project = store.createProject({ title: "Full halves" });
+    // The largest halves the old limits allowed: 4,000 characters each for a Project, 8,000 for a workspace.
+    db!.run("UPDATE multiremi_projects SET instructions = ?, delta_instructions = ? WHERE id = ?", ["a".repeat(4_000), "b".repeat(4_000), project.id]);
+    db!.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = 'local'", [JSON.stringify({
+      prompt_bootstrap_appendix: "c".repeat(8_000), prompt_delta_appendix: "d".repeat(8_000), prompt_revision: 1 })]);
+    db!.run("DELETE FROM multiremi_schema_migrations WHERE id = '20261019_merge_prompt_halves'");
+    runMigrations(db! as never);
+
+    const merged = store.getProject(project.id)!;
+    expect([...merged.instructions].length).toBe(8_002);
+    const edited = `A${merged.instructions.slice(1)}`;
+    const projectSave = await app.request(`/api/projects/${project.id}`, { method: "PUT", headers,
+      body: JSON.stringify({ instructions: edited, expected_instructions_revision: merged.instructionsRevision }) });
+    expect(projectSave.status).toBe(200);
+    const tooLong = await app.request(`/api/projects/${project.id}`, { method: "PUT", headers,
+      body: JSON.stringify({ instructions: `${edited}x`, expected_instructions_revision: merged.instructionsRevision + 1 }) });
+    expect(tooLong.status).toBe(400);
+
+    const prompt = readWorkspacePromptSettings(store.getWorkspace("local")!).prompt;
+    expect([...prompt].length).toBe(16_002);
+    const workspaceSave = await app.request("/api/workspaces/local/prompts", { method: "PUT", headers,
+      body: JSON.stringify({ prompt: `C${prompt.slice(1)}`, expectedRevision: 1 }) });
+    expect(workspaceSave.status).toBe(200);
+    const workspaceTooLong = await app.request("/api/workspaces/local/prompts", { method: "PUT", headers,
+      body: JSON.stringify({ prompt: `C${prompt}`, expectedRevision: 2 }) });
+    expect(workspaceTooLong.status).toBe(400);
   });
 
   it("reads a delta an older image wrote after the migration as part of the instructions, and clears it on the next save", () => {

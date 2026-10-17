@@ -23,7 +23,8 @@ import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../../i18n";
 
 /** The server's limit for the workspace's own prompt (ADR 0023). */
-const MAX_LENGTH = 16_000;
+/** The server's limit: two former 8,000-character halves and the blank line between them. */
+const MAX_LENGTH = 16_002;
 
 export function PromptsTab() {
   const { t } = useT("settings");
