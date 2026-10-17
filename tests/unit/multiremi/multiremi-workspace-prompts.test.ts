@@ -66,6 +66,32 @@ describe("workspace prompt settings", () => {
     expect(await legacy.json()).toMatchObject({ prompt: "Bootstrap once.\n\nCheck new comments.", revision: 2 });
   });
 
+  it("keeps the stored other half when a client from before sends only one of the two prompts", async () => {
+    const store = createLocalStore();
+    const app = createMultiremiApp({ store, authToken: "MASTER" });
+    store.updateWorkspace("local", { settings: {
+      prompt_bootstrap_appendix: `${DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nBootstrap once.`,
+      prompt_delta_appendix: "Old delta.",
+      prompt_revision: 3,
+    } });
+    const put = (body: Record<string, unknown>) => app.request("/api/workspaces/local/prompts", {
+      method: "PUT", headers: MASTER, body: JSON.stringify(body) });
+
+    // An old CLI's `--delta-prompt`: the stored bootstrap half stays.
+    const delta = await put({ delta_prompt: "New delta.", expected_revision: 3 });
+    expect(delta.status).toBe(200);
+    expect((await delta.json()).prompt).toBe("Bootstrap once.\n\nNew delta.");
+
+    // `--bootstrap-prompt` alone: the stored delta half stays. After the write above both halves are in the
+    // bootstrap key, the way an old client reads them back.
+    store.updateWorkspace("local", { settings: { ...store.getWorkspace("local")!.settings,
+      prompt_bootstrap_appendix: `${DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nBootstrap once.`, prompt_delta_appendix: "Kept delta.",
+      prompt_revision: 5 } });
+    const bootstrap = await put({ bootstrapPrompt: `${DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nNew bootstrap.`, expectedRevision: 5 });
+    expect(bootstrap.status).toBe(200);
+    expect((await bootstrap.json()).prompt).toBe("New bootstrap.\n\nKept delta.");
+  });
+
   it("reads settings saved before ADR 0023 as their two prompts merged, without Remi's former default", () => {
     const store = createLocalStore();
     store.updateWorkspace("local", { settings: {

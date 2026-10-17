@@ -73,18 +73,24 @@ export function mergeWorkspacePromptSettings(
     throw new WorkspacePromptRevisionConflictError(expectedRevision, current.revision);
   }
 
+  const settings = workspace.settings ?? {};
   const legacyBootstrap = input.bootstrapPrompt ?? input.bootstrap_prompt;
   const legacyDelta = input.deltaPrompt ?? input.delta_prompt;
-  // Clients from before ADR 0023 send the two prompts; they are stored as one.
+  // Clients from before ADR 0023 send the two prompts; they are stored as one. A client that sends only one
+  // (an old CLI's `--delta-prompt`) keeps the other as stored: the legacy keys stay in step with the prompt.
   const prompt = input.prompt !== undefined
     ? normalizePrompt(input.prompt, "prompt").trim()
     : legacyBootstrap !== undefined || legacyDelta !== undefined
-      ? mergedWorkspacePrompt(legacyBootstrap === undefined ? "" : normalizePrompt(legacyBootstrap, "bootstrap_prompt"),
-        legacyDelta === undefined ? "" : normalizePrompt(legacyDelta, "delta_prompt"))
+      ? mergedWorkspacePrompt(
+        legacyBootstrap === undefined
+          ? readString(settings[KEYS.legacyBootstrap]) ?? current.prompt
+          : normalizePrompt(legacyBootstrap, "bootstrap_prompt"),
+        legacyDelta === undefined
+          ? readString(settings[KEYS.legacyDelta]) ?? ""
+          : normalizePrompt(legacyDelta, "delta_prompt"))
       : current.prompt;
   validatePromptLength("prompt", prompt);
 
-  const settings = workspace.settings ?? {};
   const changed = prompt !== current.prompt;
   if (!changed) return { settings: workspace.settings, prompts: current };
 
