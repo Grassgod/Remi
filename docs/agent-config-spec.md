@@ -114,5 +114,5 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 
 - 服务端对 `instructions`、`avatar_url` 零校验（长度/URL 白名单），是仅有的两个无校验用户可写字段。
 - 旧 Remi admin 与本地 `soul.md` 装配已在 MUL-69 删除；后续文档不得再把它们列为活配置入口。
-- `multiremi_agents.skills` JSON 列与 `multiremi_agent_skills` 连接表双轨存储，写路径互不同步，靠读时 merge 掩盖。
+- `multiremi_agents.skills` JSON 列（内联 skill）与 `multiremi_agent_skills` 连接表（挂载的工作区 skill）仍双轨存储，读时 merge。`PUT /api/agents/:id/skills` 整体替换两者，会清空内联列；`/skills/add` 只追加挂载；普通 Agent 更新不再把挂载的 skill 回写进内联列。修复前回写的副本要等下一次 `PUT /api/agents/:id/skills` 才会清除。
 - skill 正文全量内联进 bootstrap prompt（非按需加载），长 skill 有 token 成本。

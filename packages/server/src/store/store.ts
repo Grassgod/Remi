@@ -946,6 +946,10 @@ runMigrations(this.db);
     return this.agents.setAgentSkills(agentId, input);
   }
 
+  addAgentSkills(agentId: string, skillIds: readonly string[]): MultiremiSkill[] {
+    return this.agents.addAgentSkills(agentId, skillIds);
+  }
+
   /** Internal cross-domain primitive; callers must already own a DB transaction. */
   lockAgentPluginWorkspace(workspaceId: string): void {
     return this.agentPlugins.lockAgentPluginWorkspace(workspaceId);

@@ -190,12 +190,8 @@ export function registerAgentRoutes(app: Hono, deps: RouterDeps): void {
     if (loaded instanceof Response) return loaded;
     const body = await readJsonStrict<SetAgentSkillsInput>(c);
     if (isJsonApiError(body)) return c.json({ error: body.apiError }, body.statusCode);
-    const currentSkillIds = store.listAgentSkills(loaded.agent.id, { includeFiles: false })
-      .map((skill) => skill.id)
-      .filter((id): id is string => Boolean(id));
-    const nextSkillIds = Array.from(new Set([...currentSkillIds, ...(body.skillIds ?? body.skill_ids ?? [])]));
     try {
-      const skills = store.setAgentSkills(loaded.agent.id, { skillIds: nextSkillIds });
+      const skills = store.addAgentSkills(loaded.agent.id, body.skillIds ?? body.skill_ids ?? []);
       publishAgentSkillsEvent(c, store, loaded.agent, skills);
       return c.json(skills.map(skillSummaryCompatibilityResponse));
     } catch (error) {
