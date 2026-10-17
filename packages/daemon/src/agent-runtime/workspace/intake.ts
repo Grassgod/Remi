@@ -6,7 +6,6 @@ import {
   mkdirSync,
   readlinkSync,
   readdirSync,
-  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -14,6 +13,7 @@ import {
 import { basename, join } from "node:path";
 import type { AgentTask, AgentTaskProjectContext } from "@daemon/contracts/types.js";
 import { MultiremiRepoCache } from "../repo/checkout.js";
+import { renameReadOnlyDirectory } from "./read-only-rename.js";
 
 export interface IntakeWorkspaceOptions {
   snapshotsRoot: string;
@@ -129,13 +129,17 @@ export async function prepareIntakeWorkspace(
       });
     }
 
+    // Every view directory, the root included, is read-only from here on, so
+    // each move goes through renameReadOnlyDirectory (macOS refuses to rename
+    // a 0555 directory). A crash that leaves the published root writable is
+    // harmless: the next round replaces the whole view before an agent runs.
     makeViewReadOnly(stagingRoot);
-    if (existsSync(projectsRoot)) renameSync(projectsRoot, backupRoot);
-    renameSync(stagingRoot, projectsRoot);
+    if (existsSync(projectsRoot)) renameReadOnlyDirectory(projectsRoot, backupRoot);
+    renameReadOnlyDirectory(stagingRoot, projectsRoot);
     if (existsSync(backupRoot)) removeReadOnlyTree(backupRoot);
   } catch (error) {
     if (existsSync(stagingRoot)) removeReadOnlyTree(stagingRoot);
-    if (!existsSync(projectsRoot) && existsSync(backupRoot)) renameSync(backupRoot, projectsRoot);
+    if (!existsSync(projectsRoot) && existsSync(backupRoot)) renameReadOnlyDirectory(backupRoot, projectsRoot);
     throw error;
   }
 

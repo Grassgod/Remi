@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
@@ -48,6 +48,8 @@ describe("intake workspace", () => {
       expect(readFileSync(join(prepared.repos[0]!.worktreePath, "README.md"), "utf8")).toBe("workflow snapshot\n");
       const manifest = JSON.parse(readFileSync(join(workDir, "manifest.json"), "utf8"));
       expect(manifest.projects[0].repos[0]).toMatchObject({ commit, base_ref: "refs/remotes/origin/workflow-dev" });
+      // The second round sets aside and replaces the read-only view of the first.
+      expectPublishedReadOnlyView(workDir);
     }
   });
 
@@ -85,6 +87,7 @@ describe("intake workspace", () => {
       expect.stringMatching(/^repo-[a-f0-9]{8}$/),
     ]);
     expect(lstatSync(repoLink).isSymbolicLink()).toBe(true);
+    expect(statSync(repoLink).mode & 0o222).toBe(0);
     expect(readFileSync(join(repoLink, "README.md"), "utf8")).toBe("intake snapshot\n");
     expect(existsSync(join(repoLink, ".git"))).toBe(false);
     expect(readFileSync(join(projectRoot, "knowledge", "wiki", "architecture.md"), "utf8")).toContain("Use Bun.");
@@ -98,6 +101,34 @@ describe("intake workspace", () => {
       kind: "intake",
       read_only: true,
     });
+    expectPublishedReadOnlyView(workDir);
+  });
+
+  it("re-protects a view and a code view whose publish stopped before their roots were read-only", async () => {
+    const source = createRepo();
+    const cache = new MultiremiRepoCache(tempDir("intake-cache-"));
+    await cache.sync("local", [{ url: source }]);
+    const workDir = tempDir("intake-workspace-");
+    const snapshotsRoot = tempDir("intake-snapshots-");
+    const task = {
+      id: "tsk_intake_recovered",
+      workspaceId: "local",
+      issueId: "iss_intake",
+      projectContexts: [{ project: { id: "prj_remi", title: "Remi" }, resources: [], docs: [], repos: [{ url: source }] }],
+    } as unknown as AgentTask;
+    await prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot });
+    // Both trees are renamed into place before their roots regain 0555, so a
+    // crash in between leaves exactly these roots writable.
+    const codeView = realpathSync(join(workDir, "projects", "Remi", "repos", "repo"));
+    chmodSync(join(workDir, "projects"), 0o755);
+    chmodSync(codeView, 0o755);
+
+    const prepared = await prepareIntakeWorkspace(workDir, task, cache, { snapshotsRoot });
+
+    expect(prepared.repos[0]).toMatchObject({ status: "ready", worktreePath: join(workDir, "projects", "Remi", "repos", "repo") });
+    expect(realpathSync(prepared.repos[0]!.worktreePath)).toBe(codeView);
+    expectPublishedReadOnlyView(workDir);
+    expect(lstatSync(codeView).mode & 0o222).toBe(0);
   });
 
   it("degrades a repo without a usable snapshot to an error entry instead of failing the round", async () => {
@@ -135,6 +166,20 @@ describe("intake workspace", () => {
     expect(manifest.projects[0].repos[0].url).toBe(source);
   });
 });
+
+/** Only the published view is left, and none of its own directories or files can be written. */
+function expectPublishedReadOnlyView(workDir: string): void {
+  expect(readdirSync(workDir).filter((name) => name.startsWith(".projects."))).toEqual([]);
+  const writable: string[] = [];
+  const visit = (path: string): void => {
+    const info = lstatSync(path);
+    if (info.isSymbolicLink()) return;
+    if (info.mode & 0o222) writable.push(path);
+    if (info.isDirectory()) for (const name of readdirSync(path)) visit(join(path, name));
+  };
+  visit(join(workDir, "projects"));
+  expect(writable).toEqual([]);
+}
 
 function createRepo(): string {
   const dir = join(tempDir("intake-source-"), "repo");
