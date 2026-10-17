@@ -64,6 +64,7 @@ vi.mock("@multiremi/ui/components/ui/sidebar", () => ({
   ),
   SidebarMenuItem: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SidebarRail: () => null,
+  useSidebar: () => ({ state: "expanded", toggleSidebar: vi.fn(), isMobile: false }),
 }));
 vi.mock("@multiremi/ui/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({ children }: { children: React.ReactNode }) => <>{children}</>,

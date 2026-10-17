@@ -507,9 +507,10 @@ describe("ChatWindow page shell", () => {
     expect(header.querySelector('[data-testid="avatar-agent-a"]')).not.toBeNull();
     await waitFor(() => expect(header).toHaveTextContent("Remi"));
     expect(screen.queryByText("Private conversations with your agents")).toBeNull();
-    // New chat and history moved to the sidebar.
+    // New chat and history moved to the sidebar; the header only hides and shows it.
     expect(screen.queryByTestId("session-dropdown")).toBeNull();
-    expect(header.querySelectorAll("button")).toHaveLength(1);
+    expect([...header.querySelectorAll("button")].map((button) => button.getAttribute("aria-label")))
+      .toEqual(["Hide sidebar", "Chat history"]);
   });
 
   it("shows a placeholder, not 'unavailable', while the Project list loads", async () => {

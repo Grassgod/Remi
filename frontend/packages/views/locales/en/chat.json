@@ -156,7 +156,10 @@
     "loading": "Loading chats…",
     "loading_conversation": "Loading conversation…",
     "load_failed": "Unable to load this conversation.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "hide_sidebar": "Hide sidebar",
+    "show_sidebar": "Show sidebar",
+    "resize_sidebar": "Resize sidebar"
   },
   "sessions": {
     "pin": "Pin chat",

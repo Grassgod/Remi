@@ -41,6 +41,8 @@
     "pinned_label": "固定",
     "workspace_group": "工作区",
     "configure_group": "配置",
-    "unread_overflow": "99+"
+    "unread_overflow": "99+",
+    "collapse": "收起侧边栏",
+    "expand": "展开侧边栏"
   }
 }
