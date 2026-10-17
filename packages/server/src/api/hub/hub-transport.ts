@@ -28,6 +28,8 @@ export interface HubTransportPublishInput {
   key: HubStreamKey;
   frames: readonly HubFrame[];
   head?: number;
+  /** The frames revise rows the stream already passed (a re-emitted whole row). */
+  changed?: boolean;
 }
 
 export type HubPeerLossReason = "first_epoch" | "epoch_change" | "sequence_gap";

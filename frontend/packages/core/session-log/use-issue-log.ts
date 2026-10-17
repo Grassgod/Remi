@@ -53,12 +53,17 @@ export function useIssueLog(sessionId: string, initial?: IssueLogBootstrap, comm
       }, 100);
     };
     void replica.connect({ userId, workspaceId, env,
+      // As the replica's leader this page also subscribes for the sessions other
+      // tabs and logs show; `id` is not necessarily this page's session.
       subscribe: (id, fromSeq) => {
         subscriptions.get(id)?.unsubscribe();
+        const failed = () => { if (id === sessionId) setError(true); };
         const subscription = subscribeStream("log", id, {
-          onFrames: frames => { void replica.hydratedFrames(id, frames).then(refreshSurfaces).catch(() => setError(true)); },
+          onFrames: frames => { void replica.hydratedFrames(id, frames).then(refreshSurfaces).catch(failed); },
           onAck: ack => replica.ack(id, ack),
-          onGap: () => { void replica.refreshVisible().catch(() => setError(true)); },
+          onGap: gap => {
+            void (id === sessionId ? replica.refreshVisible() : replica.backfill(id, { from: gap.from, to: gap.to })).catch(failed);
+          },
         }, { fromSeq });
         if (subscription) subscriptions.set(id, subscription);
       },

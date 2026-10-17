@@ -118,6 +118,12 @@ function openMenu(title: string) {
   fireEvent.click(within(row(title)).getByRole("button", { name: "More actions" }));
 }
 
+/** Archive lives in the ⋯ menu; the row's quick action pins. */
+async function archiveFromMenu(title: string) {
+  openMenu(title);
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Archive" }));
+}
+
 beforeEach(() => {
   clock = 0;
   setCurrentWorkspace("demo", "ws-1");
@@ -359,7 +365,7 @@ describe("ChatSidebar row actions", () => {
       sessions: [chat("a", { title: "Running chat" })],
       pending: { tasks: [{ task_id: "task-a", turn_id: "turn-a", chat_session_id: "a", status: "running" }] },
     });
-    fireEvent.click(within(row("Running chat")).getByRole("button", { name: "Archive" }));
+    await archiveFromMenu("Running chat");
     expect(await screen.findByText("Stop and archive this chat?")).toBeInTheDocument();
     expect(state.update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Stop and archive" }));
@@ -372,11 +378,11 @@ describe("ChatSidebar row actions", () => {
   it("asks before archiving a chat whose background tasks would stop, and says so (PR 6 §2.7)", async () => {
     mount({ sessions: [chat("a", { title: "Server chat", running_background_tasks: 2 }), chat("b", { title: "Both", running_background_tasks: 1 })],
       pending: { tasks: [{ task_id: "task-b", turn_id: "turn-b", chat_session_id: "b", status: "running" }] } });
-    fireEvent.click(within(row("Server chat")).getByRole("button", { name: "Archive" }));
+    await archiveFromMenu("Server chat");
     expect(await screen.findByText("2 background tasks will be stopped. You can restore the chat from Archived.")).toBeInTheDocument();
     expect(state.update).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    fireEvent.click(within(row("Both")).getByRole("button", { name: "Archive" }));
+    await archiveFromMenu("Both");
     expect(await screen.findByText("The reply in progress and 1 background task will be stopped. You can restore the chat from Archived.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     openMenu("Server chat");
@@ -386,7 +392,7 @@ describe("ChatSidebar row actions", () => {
 
   it("archives an idle chat at once and offers Undo", async () => {
     mount({ sessions: [chat("a", { title: "Idle chat" })] });
-    fireEvent.click(within(row("Idle chat")).getByRole("button", { name: "Archive" }));
+    await archiveFromMenu("Idle chat");
     expect(screen.queryByText("Stop and archive this chat?")).toBeNull();
     expect(state.update).toHaveBeenCalledWith({ sessionId: "a", status: "archived" });
     await waitFor(() => expect(state.toast).toHaveBeenCalled());
@@ -400,7 +406,7 @@ describe("ChatSidebar row actions", () => {
   it("shows the failure copy when a row action fails", async () => {
     state.update.mockRejectedValue(new Error("offline"));
     mount({ sessions: [chat("a", { title: "Idle chat" })] });
-    fireEvent.click(within(row("Idle chat")).getByRole("button", { name: "Archive" }));
+    await archiveFromMenu("Idle chat");
     await waitFor(() => expect(state.toast.error).toHaveBeenCalledWith("Action failed. Please try again."));
     expect(state.toast).not.toHaveBeenCalled();
   });
@@ -431,6 +437,18 @@ describe("ChatSidebar row actions", () => {
     fireEvent.change(await screen.findByRole("textbox", { name: "Rename chat" }), { target: { value: "  New title " } });
     fireEvent.submit(screen.getByRole("textbox", { name: "Rename chat" }).closest("form")!);
     expect(state.update).toHaveBeenCalledWith({ sessionId: "a", title: "New title" });
+  });
+
+  it("pins and unpins with the row's quick action, which no longer archives", () => {
+    mount({ sessions: [chat("a", { title: "Pin me" }), chat("b", { title: "Unpin me", pinned: true })] });
+    expect(within(row("Pin me")).queryByRole("button", { name: "Archive" })).toBeNull();
+    fireEvent.click(within(row("Pin me")).getByRole("button", { name: "Pin" }));
+    expect(state.update).toHaveBeenLastCalledWith({ sessionId: "a", pinned: true });
+    fireEvent.click(within(row("Unpin me")).getByRole("button", { name: "Unpin" }));
+    expect(state.update).toHaveBeenLastCalledWith({ sessionId: "b", pinned: false });
+    // Pinning only edits the chat: no confirmation and no toast.
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(state.toast).not.toHaveBeenCalled();
   });
 
   it("pins and unpins from the menu", async () => {

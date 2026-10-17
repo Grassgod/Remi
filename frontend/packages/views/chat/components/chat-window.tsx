@@ -69,9 +69,9 @@ import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
 import { clientIdOf, type OptimisticChatRow } from "../lib/optimistic-log";
 import { ChatInput, type ChatSendMode } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
-import { ProjectDisplay } from "./project-dropdown";
 import { SessionDropdown } from "./session-dropdown";
 import { ChatSidebar } from "./chat-sidebar";
+import { ChatPageLayout, ChatSidebarToggle } from "./chat-page-layout";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { EmptyState } from "./chat-empty-state";
 import { ChatResizeHandles } from "./chat-resize-handles";
@@ -114,8 +114,6 @@ export function ChatWindow({
   const { t } = useT("chat");
   const { t: tr } = useT("runtimes");
   const wsId = useWorkspaceId();
-  const [runtimeWorkspaceId, setRuntimeWorkspaceId] = useState<string | null>(null);
-  useEffect(() => { setRuntimeWorkspaceId(null); }, [wsId]);
   const isOpen = useChatStore((s) => s.isOpen);
   const chatVisible = isPage || isOpen;
   const storedActiveSessionId = useChatStore((s) => s.activeSessionId);
@@ -128,8 +126,10 @@ export function ChatWindow({
   const activeSessionId = isPage ? pageSessionId : storedActiveSessionId;
   const displayedSessionId = activeSessionId;
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
+  // Where a new chat will run; the store resets it whenever a chat is opened or left.
   const draftProjectId = useChatStore((s) => s.draftProjectId);
-  const setDraftProjectId = useChatStore((s) => s.setDraftProjectId);
+  const runtimeWorkspaceId = useChatStore((s) => s.draftRuntimeWorkspaceId);
+  const setDraftLocation = useChatStore((s) => s.setDraftLocation);
   const setOpen = useChatStore((s) => s.setOpen);
   const storeSetActiveSession = useChatStore((s) => s.setActiveSession);
   const setActiveSession = useCallback(
@@ -146,7 +146,6 @@ export function ChatWindow({
   const { data: agents = [] } = useQuery(agentListOptions(wsId, { enabled: chatVisible }));
   const { data: members = [] } = useQuery({ ...memberListOptions(wsId), enabled: chatVisible });
   const { data: projectsData, isError: projectsFailed } = useQuery({ ...projectListOptions(wsId), enabled: chatVisible });
-  const projects = projectsData ?? [];
   // Loading is not "missing": a bound Project reads "…" until the list answers.
   const loadedProjects = projectsData ?? (projectsFailed ? [] : undefined);
   // Single sessions cache — eliminates the separate active/all queries
@@ -273,11 +272,11 @@ export function ChatWindow({
   });
   const backgroundTasksRunning = Math.max(sessionBackgroundTasks ?? 0, backgroundTasks.running);
 
-  // New chats keep the picker: it is the only chance to choose where the
-  // chat runs. An existing chat with neither binding has no location to
-  // report, so the strip would spend a row on the absence of a choice. The
-  // page names an existing chat's location in its header instead.
-  const showLocationStrip =
+  // The work location lives in the composer footer beside the agent, not in a
+  // row of its own. A new chat chooses it until the first message; a started
+  // chat shows a bound location as a read-only chip and nothing when unbound.
+  // The page header already names a started chat's location.
+  const showLocation =
     !activeSessionId ||
     (!isPage && Boolean(currentSession?.project_id || currentSession?.runtime_workspace_id));
 
@@ -611,8 +610,8 @@ export function ChatWindow({
         previousSessionId: activeSessionId,
       });
       setSelectedAgentId(agent.id);
-      if (activeSessionId) setDraftProjectId(null);
-      // Reset session when switching agent
+      // Reset session when switching agent; leaving a chat also resets the
+      // draft location, while a draft keeps it.
       setActiveSession(null, agent.id);
     },
     [
@@ -620,7 +619,6 @@ export function ChatWindow({
       selectedAgentId,
       activeSessionId,
       setSelectedAgentId,
-      setDraftProjectId,
       setActiveSession,
     ],
   );
@@ -632,10 +630,13 @@ export function ChatWindow({
       previousSessionId: activeSessionId,
       previousPendingTask: pendingTaskId,
     });
-    setRuntimeWorkspaceId(location?.runtime_workspace_id ?? null);
-    setDraftProjectId(location?.project_id ?? null);
+    // Leaving the open chat resets the draft location, so bind the new one after.
     setActiveSession(null);
-  }, [activeSessionId, pendingTaskId, setActiveSession, setDraftProjectId]);
+    setDraftLocation({
+      projectId: location?.project_id ?? null,
+      runtimeWorkspaceId: location?.runtime_workspace_id ?? null,
+    });
+  }, [activeSessionId, pendingTaskId, setActiveSession, setDraftLocation]);
 
   const handleSelectSession = useCallback(
     (session: ChatSession) => {
@@ -714,6 +715,7 @@ export function ChatWindow({
         // Page header: who and what this chat is. New chat and history live
         // in the sidebar, so the header carries no session controls.
         <div data-chat-page-header="" className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+          <ChatSidebarToggle />
           <Button
             variant="ghost"
             size="icon-sm"
@@ -841,26 +843,6 @@ export function ChatWindow({
         </div>
       )}
 
-      {showLocationStrip && (
-        <div className="flex min-w-0 items-center border-b px-4 py-1.5">
-          {activeSessionId && !currentSession?.runtime_workspace_id ? (
-            <ProjectDisplay projects={projects} projectId={currentSession?.project_id ?? null} />
-          ) : (
-            <WorkLocationPicker
-              projectsEnabled={chatVisible}
-              wsId={wsId}
-              value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
-              projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
-              onChange={location => {
-                setDraftProjectId(location.project_id);
-                setRuntimeWorkspaceId(location.runtime_workspace_id);
-              }}
-              disabled={Boolean(activeSessionId) || createSession.isPending}
-            />
-          )}
-        </div>
-      )}
-
       {/* The log window is hidden until its first answer; no skeleton replaces rows. */}
       {messagesError && !logSnapshot.ready ? (
         <div
@@ -976,12 +958,29 @@ export function ChatWindow({
         agentName={activeAgent?.name}
         rightAdornment={<ChatContextUsage live={liveRingUsage} last={ringContext.last} />}
         leftAdornment={
-          <AgentDropdown
-            agents={availableAgents}
-            activeAgent={activeAgent}
-            userId={user?.id}
-            onSelect={handleSelectAgent}
-          />
+          <>
+            <AgentDropdown
+              agents={availableAgents}
+              activeAgent={activeAgent}
+              userId={user?.id}
+              onSelect={handleSelectAgent}
+            />
+            {showLocation && (
+              <WorkLocationPicker
+                surface="chat"
+                projectsEnabled={chatVisible}
+                wsId={wsId}
+                value={activeSessionId ? currentSession?.runtime_workspace_id ?? null : runtimeWorkspaceId}
+                projectId={activeSessionId ? currentSession?.project_id ?? null : draftProjectId}
+                onChange={(location) => setDraftLocation({
+                  projectId: location.project_id,
+                  runtimeWorkspaceId: location.runtime_workspace_id,
+                })}
+                readOnly={Boolean(activeSessionId)}
+                disabled={createSession.isPending}
+              />
+            )}
+          </>
         }
         contextItems={contextItems}
       />
@@ -990,10 +989,9 @@ export function ChatWindow({
 
   if (isPage)
     return (
-      <div className="flex h-full min-h-0">
-        <aside
-          className={`${showList ? "flex" : "hidden"} w-full min-h-0 shrink-0 flex-col border-r bg-sidebar md:flex md:w-[300px]`}
-        >
+      <ChatPageLayout
+        showList={showList}
+        list={
           <ChatSidebar
             sessions={sessions}
             projects={loadedProjects}
@@ -1006,16 +1004,13 @@ export function ChatWindow({
             onSessionDeleted={() => setActiveSession(null)}
             onClose={() => setShowList(false)}
           />
-        </aside>
-        <main
-          className={`${showList ? "hidden" : "flex"} min-h-0 min-w-0 flex-1 flex-col md:flex`}
-        >
-          {/* The subagent panel pushes the conversation aside (PR 5 §6.6). */}
-          <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="page">
-            {conversation}
-          </SubagentPanelLayout>
-        </main>
-      </div>
+        }
+      >
+        {/* The subagent panel pushes the conversation aside (PR 5 §6.6). */}
+        <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="page">
+          {conversation}
+        </SubagentPanelLayout>
+      </ChatPageLayout>
     );
 
   return (

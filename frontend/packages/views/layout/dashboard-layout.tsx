@@ -6,6 +6,7 @@ import { ModalRegistry } from "../modals/registry";
 import { AppSidebar } from "./app-sidebar";
 import { DashboardGuard } from "./dashboard-guard";
 import { FloatingPanelLayout } from "./floating-panel-layout";
+import { useAppNavPreference } from "./shell-preferences-provider";
 import { NavigationProgress } from "./navigation-progress";
 import { WorkspacePresencePrefetch } from "./workspace-presence-prefetch";
 
@@ -25,6 +26,8 @@ export function DashboardLayout({
   searchSlot,
   loadingIndicator,
 }: DashboardLayoutProps) {
+  // Expanded or the icon rail, as the server read it from the cookie.
+  const nav = useAppNavPreference();
   return (
     <DashboardGuard
       loadingFallback={
@@ -33,7 +36,7 @@ export function DashboardLayout({
         </div>
       }
     >
-      <SidebarProvider className="h-svh">
+      <SidebarProvider className="h-svh" open={nav?.open} onOpenChange={nav?.setOpen}>
         <WorkspacePresencePrefetch />
         <AppSidebar searchSlot={searchSlot} />
         <SidebarInset className="relative overflow-hidden">

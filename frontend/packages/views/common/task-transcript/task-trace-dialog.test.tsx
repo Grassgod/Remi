@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, renderHook, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { AgentTask } from "@multiremi/core/types/agent";
 import { renderWithI18n } from "../../test/i18n";
-import { command, event, message, read, traceTurn, turnPage, unknown } from "../../test/trace-fixtures";
+import { command, event, message, read, traceTurn, turnPage, turnTraceCache, unknown } from "../../test/trace-fixtures";
 import { TaskTraceDialog } from "./task-trace-dialog";
+import { useTurnTrace } from "./use-task-trace";
 
 const { getTaskTrace, getTurnInput, handlers, subscriptionEnabled } = vi.hoisted(() => ({
   getTaskTrace: vi.fn(),
@@ -126,6 +127,62 @@ describe("task trace dialog", () => {
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(await screen.findByText("1 tool call")).toBeInTheDocument();
     expect(getTaskTrace).toHaveBeenCalledTimes(2);
+  });
+
+  it("rereads a finished attempt whose live read landed before the daemon claimed it", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const wrapper = ({ children }: { children: React.ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+    // Chat's live view reads while the attempt is still queued: the server has no trace pointer yet.
+    getTaskTrace.mockResolvedValueOnce(page([], { state: "not_found", reason: "pointer_missing", source: null, turn: null, head: 0 }));
+    const live = renderHook(() => useTurnTrace(task.id, { live: true, turnId: "turn_1" }), { wrapper });
+    await waitFor(() => expect(live.result.current.read?.state).toBe("not_found"));
+    // The daemon claims and runs it; the stream delivers every item, then closes.
+    const done = traceTurn({ id: task.id, status: "completed", stats: { item_count: 3, tool_call_count: 1, process_item_count: 2, type_histogram: [] } });
+    const items = [message("msg:1", "Let me look."), command("cmd_1", [read("a.ts")]), message("msg:2", "Hello!", "final")];
+    await act(async () => {
+      handlers.current?.onFrames?.([
+        frame(event({ type: "turn.started", turn }, 1), 1),
+        ...items.map((item, index) => frame(event({ type: "item.completed", item }, index + 2), index + 2)),
+        frame(event({ type: "turn.completed", turn: done }, 5), 5),
+      ] as never);
+    });
+    act(() => { handlers.current?.onClosed?.({ stream: "trace", id: task.id, head_seq: 5 } as never); });
+    await waitFor(() => expect(live.result.current.closed).toBe(true));
+    expect(live.result.current.items).toHaveLength(3);
+    live.unmount();
+
+    // The reader opens the finished turn's execution log: the read is done again.
+    getTaskTrace.mockResolvedValue(page(items, { turn: done, closed: true, head: 5 }));
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <TaskTraceDialog task={{ ...task, status: "completed" }} agentName="Agent" onOpenChange={() => {}} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByText("1 tool call")).toBeInTheDocument();
+    expect(screen.queryByText("No execution trace is available")).toBeNull();
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("Execution finished · 3 events")).toBeInTheDocument();
+    expect(queryClient.getQueryData<{ read: { state: string } }>(["task-trace", task.id])?.read.state).toBe("ok");
+  });
+
+  it("keeps the steps the stream delivered when the reread finds the runtime offline", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const done = traceTurn({ id: task.id, status: "completed" });
+    queryClient.setQueryData(["task-trace", task.id], {
+      ...turnTraceCache(page([command("cmd_1", [read("a.ts")]), message("msg:2", "Hello!", "final")], { turn: done, closed: true })),
+      read: { state: "not_found", format: "v2" },
+    });
+    getTaskTrace.mockResolvedValue(page([], { state: "unreachable", runtime_name: "Runtime A", retryable: true, turn: null, head: 0 }));
+    renderWithI18n(
+      <QueryClientProvider client={queryClient}>
+        <TaskTraceDialog task={{ ...task, status: "completed" }} agentName="Agent" onOpenChange={() => {}} />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(queryClient.getQueryData<{ read: { state: string } }>(["task-trace", task.id])?.read.state).toBe("unreachable"));
+    expect(getTaskTrace).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Execution finished · 2 events")).toBeInTheDocument();
+    expect(screen.queryByText("Runtime A is offline")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("does not subscribe to a trace that is already closed", async () => {

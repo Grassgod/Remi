@@ -262,12 +262,19 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   frames(...args: Parameters<BrowserReplica["frames"]>): void { this.browser?.frames(...args); }
-  /** Read-side metadata is authoritative for attachments and reactions. */
+  /**
+   * Read-side metadata is authoritative for attachments and reactions.
+   *
+   * As the leader this page's socket also carries the sessions other tabs (and
+   * other logs on this page, such as the floating chat over an Issue) show, so
+   * their frames arrive here too. Only this session reuses the windows this page
+   * read; another session's rows always come from the read route.
+   */
   hydratedFrames(sessionId: string, frames: readonly HubFrame[]): Promise<void> {
     const generation = this.generation;
+    const own = sessionId === this.sessionId;
     const job = this.frameQueue.then(async () => {
       if (this.disconnected || generation !== this.generation) return;
-      if (sessionId !== this.sessionId) throw new Error("Log frame belongs to another session");
       const missing: HubFrame[] = [];
       const entries = new Map<number, SessionLogRow>();
       for (const frame of frames) {
@@ -276,7 +283,7 @@ export class IssueLogReplica extends ReplicaView {
         if (payload.kind !== "message" && payload.kind !== "turn") continue;
         if (payload.session_id !== undefined && payload.session_id !== sessionId) throw new Error("Log payload belongs to another session");
         if (payload.seq !== undefined && payload.seq !== frame.seq) throw new Error("Log payload has an inconsistent sequence");
-        const candidates = [...(this.window ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)];
+        const candidates = own ? [...(this.window ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)] : [];
         const candidate = candidates.map(rows => rows.find(row => row.seq === frame.seq)).find(Boolean);
         if (candidate && candidate.id === payload.id && candidate.session_id === sessionId && candidate.kind === payload.kind
           && candidate.revision >= Number(payload.revision ?? 0)) entries.set(frame.seq, candidate);
@@ -300,8 +307,10 @@ export class IssueLogReplica extends ReplicaView {
           if (row && row.revision < Number(payload.revision ?? 0)) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
           if (row) entries.set(frame.seq, row);
         }
-        this.knownWindows.push({ range: { from: first, to: last }, entries: window.entries });
-        this.knownWindows = this.knownWindows.slice(-32);
+        if (own) {
+          this.knownWindows.push({ range: { from: first, to: last }, entries: window.entries });
+          this.knownWindows = this.knownWindows.slice(-32);
+        }
         index = end;
       }
       const hydrated = frames.map(frame => {
@@ -319,6 +328,16 @@ export class IssueLogReplica extends ReplicaView {
     });
     this.frameQueue = job.catch(() => {});
     return job;
+  }
+  /**
+   * A mid-stream gap in a session another tab or log shows: read the range into
+   * the shared replica, which publishes it to whoever shows that session. This
+   * session's own gaps refresh its window instead (`refreshVisible`).
+   */
+  async backfill(sessionId: string, range: HubSeqRange): Promise<void> {
+    if (sessionId === this.sessionId) throw new Error("This session refreshes its own window");
+    if (range.to < range.from) return;
+    await this.browser?.loadWindow(sessionId, range);
   }
   /** An ack resumes the stream; its `log_version` is a freshness token, not a reset. */
   ack(...args: Parameters<BrowserReplica["ack"]>): void { this.browser?.ack(...args); }

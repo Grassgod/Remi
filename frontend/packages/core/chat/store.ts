@@ -218,8 +218,15 @@ export interface ChatState {
   isOpen: boolean;
   activeSessionId: string | null;
   selectedAgentId: string | null;
-  /** Project selected for a new conversation; existing bindings live in Query. */
+  /**
+   * Where the unsaved new conversation will run: a Project or a local
+   * directory, never both. Existing bindings live in Query. Opening a real
+   * chat consumes the draft and leaving one starts the next draft unbound, so
+   * a new chat never inherits an earlier chat's location.
+   */
   draftProjectId: string | null;
+  /** Not persisted: a reload starts the new chat without a directory. */
+  draftRuntimeWorkspaceId: string | null;
   /** Drafts per session: sessionId (or DRAFT_NEW_SESSION) → markdown text. */
   inputDrafts: Record<string, string>;
   inputDraftAttachments: Record<string, Record<string, string>>;
@@ -246,6 +253,8 @@ export interface ChatState {
   setActiveSession: (id: string | null) => void;
   setSelectedAgentId: (id: string) => void;
   setDraftProjectId: (id: string | null) => void;
+  /** Selecting a Project or a local directory replaces the other. */
+  setDraftLocation: (location: { projectId: string | null; runtimeWorkspaceId: string | null }) => void;
   /** sessionId accepts a real session UUID or DRAFT_NEW_SESSION. */
   setInputDraft: (sessionId: string, draft: string) => void;
   clearInputDraft: (sessionId: string) => void;
@@ -328,6 +337,7 @@ export function createChatStore(options: ChatStoreOptions) {
     activeSessionId: storage.getItem(wsKey(SESSION_STORAGE_KEY)),
     selectedAgentId: storage.getItem(wsKey(AGENT_STORAGE_KEY)),
     draftProjectId: storage.getItem(wsKey(DRAFT_PROJECT_KEY)),
+    draftRuntimeWorkspaceId: null,
     inputDrafts: readDrafts(storage, wsKey(DRAFTS_KEY)),
     inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
     localAttachmentDetails: {},
@@ -352,15 +362,22 @@ export function createChatStore(options: ChatStoreOptions) {
       set({ isOpen: next });
     },
     setActiveSession: (id) => {
-      logger.info("setActiveSession", { from: get().activeSessionId, to: id });
+      const previous = get().activeSessionId;
+      logger.info("setActiveSession", { from: previous, to: id });
       if (id) {
         storage.setItem(wsKey(SESSION_STORAGE_KEY), id);
       } else {
         storage.removeItem(wsKey(SESSION_STORAGE_KEY));
       }
       // The subagent panel and a reveal request belong to one chat.
-      const subagents = id !== get().activeSessionId ? { subagentPanel: null, subagentReveal: null } : {};
-      set({ activeSessionId: id, ...subagents });
+      const subagents = id !== previous ? { subagentPanel: null, subagentReveal: null } : {};
+      // A draft location belongs to one unsaved chat. Opening a real chat
+      // (just created, selected or navigated to) consumes it; leaving one
+      // (deleted, or a new chat started) begins the next draft unbound. Only
+      // draft to draft keeps it, so a caller binding the new chat sets it after.
+      const draft = id || previous ? { draftProjectId: null, draftRuntimeWorkspaceId: null } : {};
+      if (id || previous) storage.removeItem(wsKey(DRAFT_PROJECT_KEY));
+      set({ activeSessionId: id, ...subagents, ...draft });
     },
     setSelectedAgentId: (id) => {
       logger.info("setSelectedAgentId", { from: get().selectedAgentId, to: id });
@@ -371,6 +388,14 @@ export function createChatStore(options: ChatStoreOptions) {
       if (id) storage.setItem(wsKey(DRAFT_PROJECT_KEY), id);
       else storage.removeItem(wsKey(DRAFT_PROJECT_KEY));
       set({ draftProjectId: id });
+    },
+    setDraftLocation: ({ projectId, runtimeWorkspaceId }) => {
+      const location = runtimeWorkspaceId
+        ? { draftProjectId: null, draftRuntimeWorkspaceId: runtimeWorkspaceId }
+        : { draftProjectId: projectId, draftRuntimeWorkspaceId: null };
+      if (location.draftProjectId) storage.setItem(wsKey(DRAFT_PROJECT_KEY), location.draftProjectId);
+      else storage.removeItem(wsKey(DRAFT_PROJECT_KEY));
+      set(location);
     },
     setInputDraft: (sessionId, draft) => {
       // Debug level — onUpdate fires on every keystroke.
@@ -570,6 +595,7 @@ export function createChatStore(options: ChatStoreOptions) {
       activeSessionId: nextSession,
       selectedAgentId: nextAgent,
       draftProjectId: storage.getItem(wsKey(DRAFT_PROJECT_KEY)),
+      draftRuntimeWorkspaceId: null,
       inputDrafts: nextDrafts,
       inputDraftAttachments: readDraftAttachments(storage, wsKey(DRAFT_ATTACHMENTS_KEY)),
       localAttachmentDetails: {},

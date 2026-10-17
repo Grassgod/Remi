@@ -876,7 +876,9 @@ function SessionRow({
     : running ? t(($) => $.sidebar.status.running)
       : unread ? t(($) => $.sidebar.status.unread)
         : backgroundTasks > 0 ? t(($) => $.sidebar.status.bg_tasks, { count: backgroundTasks }) : null;
-  const archiveLabel = archived ? t(($) => $.sidebar.menu.restore) : t(($) => $.sidebar.menu.archive);
+  // The quick action pins (archived chats: restores); Archive stays in the menu.
+  const quickLabel = archived ? t(($) => $.sidebar.menu.restore)
+    : session.pinned ? t(($) => $.sidebar.menu.unpin) : t(($) => $.sidebar.menu.pin);
 
   return (
     <div
@@ -924,16 +926,17 @@ function SessionRow({
       >
         <button
           type="button"
-          aria-label={archiveLabel}
-          title={archiveLabel}
+          aria-label={quickLabel}
+          title={quickLabel}
           className={ICON_BUTTON}
           onClick={(event) => {
             event.stopPropagation();
             if (archived) actions.restore(session);
-            else actions.archive(session, running);
+            else actions.togglePin(session);
           }}
         >
-          {archived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
+          {archived ? <ArchiveRestore className="size-3.5" />
+            : session.pinned ? <PinOff className="size-3.5" /> : <Pin className="size-3.5" />}
         </button>
         <DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>
           <DropdownMenuTrigger

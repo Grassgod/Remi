@@ -112,6 +112,7 @@
     "./realtime": "./realtime/index.ts",
     "./replica": "./replica/index.ts",
     "./replica/worker": "./replica/worker.ts",
+    "./replica/test-tabs": "./replica/test-tabs.ts",
     "./session-log/use-issue-log": "./session-log/use-issue-log.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",

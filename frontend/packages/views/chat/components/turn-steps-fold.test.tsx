@@ -311,13 +311,17 @@ describe("finished fold (MUL-472)", () => {
     expect(screen.getByTestId("log")).toBeInTheDocument();
   });
 
-  it("shows the steps the live stream left in the cache even when that read found no trace yet", () => {
-    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(turnPage(traceTurn({ status: "completed" }), [command("cmd_1", [read("a.ts")])])),
-      read: { state: "not_found", format: "v2" } });
+  it("shows the steps the live stream left in the cache even when that read found no trace yet, then reads again", async () => {
+    const page = turnPage(traceTurn({ status: "completed" }), [command("cmd_1", [read("a.ts")])]);
+    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(page), read: { state: "not_found", format: "v2" } });
+    getTaskTrace.mockResolvedValue(page);
     renderWithI18n(<Query><Fold initialOpen /></Query>, { locale: "zh-Hans" });
     expect(screen.getByText("已读取 a.ts")).toBeInTheDocument();
     expect(screen.queryByText("暂无执行过程记录")).toBeNull();
-    expect(getTaskTrace).not.toHaveBeenCalled();
+    // A read that was not ok is never kept: the fold reads the sealed trace once more.
+    await waitFor(() => expect(client.getQueryData<{ read: { state: string } }>(["task-trace", "att_1"])?.read.state).toBe("ok"));
+    expect(getTaskTrace).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("已读取 a.ts")).toBeInTheDocument();
   });
 
   it("offers a retry when the read fails", async () => {

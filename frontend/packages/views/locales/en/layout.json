@@ -41,6 +41,8 @@
     "pinned_label": "Pinned",
     "workspace_group": "Workspace",
     "configure_group": "Configure",
-    "unread_overflow": "99+"
+    "unread_overflow": "99+",
+    "collapse": "Collapse sidebar",
+    "expand": "Expand sidebar"
   }
 }
