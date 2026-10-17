@@ -108,6 +108,55 @@ describe("new chat project selection", () => {
     store.getState().setDraftProjectId(null);
     expect(createChatStore({ storage }).getState().draftProjectId).toBeNull();
   });
+
+  it("keeps one location kind: a Project and a local directory replace each other", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().setDraftLocation({ projectId: "project-a", runtimeWorkspaceId: null });
+    store.getState().setDraftLocation({ projectId: null, runtimeWorkspaceId: "rws-a" });
+    expect(store.getState()).toMatchObject({ draftProjectId: null, draftRuntimeWorkspaceId: "rws-a" });
+    // Only the Project survives a reload; a directory draft is per surface.
+    expect(createChatStore({ storage }).getState()).toMatchObject({ draftProjectId: null, draftRuntimeWorkspaceId: null });
+    store.getState().setDraftLocation({ projectId: "project-a", runtimeWorkspaceId: null });
+    expect(store.getState()).toMatchObject({ draftProjectId: "project-a", draftRuntimeWorkspaceId: null });
+  });
+
+  it("consumes the draft location when the new chat is created or another chat opens", () => {
+    for (const location of [{ projectId: "project-a", runtimeWorkspaceId: null }, { projectId: null, runtimeWorkspaceId: "rws-a" }]) {
+      const storage = memoryStorage();
+      const store = createChatStore({ storage });
+      store.getState().setDraftLocation(location);
+      store.getState().setActiveSession("chat-created");
+      expect(store.getState()).toMatchObject({ draftProjectId: null, draftRuntimeWorkspaceId: null });
+      expect(createChatStore({ storage }).getState().draftProjectId).toBeNull();
+    }
+  });
+
+  it("starts the next new chat unbound after the active chat is deleted", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().setActiveSession("chat-bound");
+    // Whatever a draft left behind while the bound chat was open.
+    store.getState().setDraftProjectId("project-a");
+    // useDeleteChatSession and chat:session_deleted clear the active chat.
+    store.getState().setActiveSession(null);
+    expect(store.getState()).toMatchObject({ activeSessionId: null, draftProjectId: null, draftRuntimeWorkspaceId: null });
+    expect(createChatStore({ storage }).getState().draftProjectId).toBeNull();
+  });
+
+  it("keeps the location while the surface stays on the same unsaved draft", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().setDraftLocation({ projectId: "project-a", runtimeWorkspaceId: null });
+    // An agent switch on the draft re-enters the draft.
+    store.getState().setActiveSession(null);
+    expect(store.getState().draftProjectId).toBe("project-a");
+    // A sidebar group's "+" leaves the open chat first, then binds the new one.
+    store.getState().setActiveSession("chat-open");
+    store.getState().setActiveSession(null);
+    store.getState().setDraftLocation({ projectId: null, runtimeWorkspaceId: "rws-a" });
+    expect(store.getState()).toMatchObject({ draftProjectId: null, draftRuntimeWorkspaceId: "rws-a" });
+  });
 });
 
 describe("follow-up preference", () => {

@@ -40,7 +40,9 @@ Issue 详情页由 [server-log.ts](../../frontend/apps/web/features/issues/serve
 
 Issue 的说明与评论区之间保留横向分隔，评论使用独立边框卡片。`AgentLiveCard` 通过 `SessionLogList.afterRow` 放在说明行之后、与其他日志行同级，吸顶范围覆盖整个评论滚动内容；不能再把它嵌入单个日志行或固定高度的 `overflow-y-auto` 占位。没有活动任务时不留空盒子；多任务展开按内容占高，列表最多占半个视口并可滚动。旧会话或旧请求的迟到结果不会改变当前访问的显示门禁。缓存缺失时以一次首个状态读取替代永久的 128px 预留，不用提高揭示预算或放宽可见跳动门禁。日志头移出的控件及评论新内边距使用 `issue-cards-v2` 行高缓存版本，避免复用旧的 128px 占位或平铺行尺寸。真实几何回归在 [zero-jump-check.ts](../../tests/integration/zero-jump-check.ts) 的 `detail-layout` 场景覆盖桌面、手机、滚动吸顶及展开，`detail-running-empty-cache` 覆盖晚到状态与首屏锚点。
 
-Issue 属性侧栏的工作位置通过 [WorkLocationPicker](../../frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx) 的 `wrapLabel` 模式占满属性值列，长项目名和本地目录名称按可用宽度换行；有任务而禁止改位置时也保留完整名称。Chat 与创建 Issue 的紧凑选择器沿用默认的单行截断。
+Issue 属性侧栏的工作位置通过 [WorkLocationPicker](../../frontend/packages/views/runtimes/components/runtime-workspace-picker.tsx) 的 `wrapLabel` 模式占满属性值列，长项目名和本地目录名称按可用宽度换行；有任务而禁止改位置时也保留完整名称。创建 Issue 与快速创建用 `triggerRender` 的胶囊按钮，单行截断，未绑定项仍叫「自动安排」。
+
+Chat 用 `surface="chat"`：未绑定项叫「无项目」，说明是不拉取任何代码（`location.chat_*` 键，Issue 的 `location.unassigned` 不变），选择器放进 [ChatInput](../../frontend/packages/views/chat/components/chat-input.tsx) 底栏的 `leftAdornment`，与 Agent 选择器相邻，下拉向上展开。底栏是一行：左侧 `min-w-0 flex-1` 且是 `@container`，右侧操作 `shrink-0`，左侧再窄也不会压到发送按钮。「无项目」短标签不截断，Agent 名先截断；项目名或目录名在 `max-w-48` 内截断，`title` 给出全名；左侧容器窄于 14rem 时只显示图标。触发器不用负外边距：包裹层按内容收缩时，`max-w-full` 会以外边距盒宽为基准，把触发器压短 8px，原先「自动安排」显示成「自动…」就是这个原因。已开始的会话用 `readOnly` 只读标签（`role="group"`，`title` 含固定提示）。新聊天的位置草稿在 [chat store](../../frontend/packages/core/chat/store.ts) 的 `draftProjectId` / `draftRuntimeWorkspaceId`，`setActiveSession` 进入或离开真实会话时清空。
 
 ## 统一消息与轮展示
 
