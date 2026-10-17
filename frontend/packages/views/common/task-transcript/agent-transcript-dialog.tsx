@@ -130,10 +130,11 @@ export function AgentTranscriptDialog({
   const eventRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   // The turn's input for this attempt: exactly what it sent the agent when
-  // recorded, else the turn's messages. `task.id` is the turn itself until
-  // its first attempt exists, and the turn route rejects a foreign attempt.
+  // recorded, else the turn's messages. The attempt is always named: the
+  // first attempt has the turn's id, and the turn alone answers with its
+  // current attempt, which after a retry is a later one.
   const promptTurnId = task.turn_id ?? task.id;
-  const promptAttemptId = task.id !== promptTurnId ? task.id : undefined;
+  const promptAttemptId = task.turn_id ? task.id : undefined;
   const promptQuery = useQuery({
     queryKey: ["task-prompt", task.id],
     queryFn: () => (promptAttemptId ? api.getTurnInput(promptTurnId, promptAttemptId) : api.getTurnInput(promptTurnId)),

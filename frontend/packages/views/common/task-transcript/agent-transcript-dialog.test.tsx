@@ -168,9 +168,21 @@ describe("task input prompt", () => {
     expect(copyText).toHaveBeenCalledWith("Fix the review note.\n\n(Reply to comment msg_1)");
   });
 
-  it("asks for the turn alone while the turn has no attempt yet", async () => {
+  it("asks for this attempt's input after a retry, the first attempt included", async () => {
+    // The first attempt has the turn's id; without naming it the turn answers with its current, retried attempt.
+    getTurnInput.mockResolvedValue(turnInput("First attempt"));
+    const first = renderTranscript([], { task: { id: "turn-1", turn_id: "turn-1", status: "failed" }, initialView: "prompt" });
+    await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith("turn-1", "turn-1"));
+    first.unmount();
+    getTurnInput.mockReset();
+    getTurnInput.mockResolvedValue(turnInput("Second attempt"));
+    renderTranscript([], { task: { id: "attempt-2", turn_id: "turn-1", status: "completed" }, initialView: "prompt" });
+    await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith("turn-1", "attempt-2"));
+  });
+
+  it("asks for the turn alone when the task names no turn", async () => {
     getTurnInput.mockResolvedValue(turnInput("Queued request"));
-    renderTranscript([], { task: { id: "turn-1", turn_id: "turn-1", status: "queued" }, initialView: "prompt" });
+    renderTranscript([], { task: { id: "turn-1", status: "queued" }, initialView: "prompt" });
     await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith("turn-1"));
   });
 
