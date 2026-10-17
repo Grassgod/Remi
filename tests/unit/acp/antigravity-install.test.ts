@@ -155,8 +155,14 @@ describe("ensureAntigravityServer", () => {
     // After a pin bump the previous version stays: a daemon that has not restarted may still spawn it.
     expect(readdirSync(root).sort()).toEqual(["9.9.8-linux-x64", "9.9.9-linux-x64"]);
 
-    await ensureAntigravityServer(options(root, { force: true, extract: extractor(undefined, "second"), now: () => new Date("2026-10-04T00:00:00.000Z") }));
-    await ensureAntigravityServer(options(root, { force: true, extract: extractor(undefined, "third"), now: () => new Date("2026-10-05T00:00:00.000Z") }));
+    // Two reinstalls can finish in one clock tick; their backup paths must differ.
+    const clock = spyOn(Date, "now").mockReturnValue(1_792_256_226_673);
+    try {
+      await ensureAntigravityServer(options(root, { force: true, extract: extractor(undefined, "second"), now: () => new Date("2026-10-04T00:00:00.000Z") }));
+      await ensureAntigravityServer(options(root, { force: true, extract: extractor(undefined, "third"), now: () => new Date("2026-10-05T00:00:00.000Z") }));
+    } finally {
+      clock.mockRestore();
+    }
     const names = readdirSync(root).sort();
     expect(names.filter((name) => name.includes(".previous-"))).toHaveLength(1);
     expect(names.filter((name) => !name.includes(".previous-"))).toEqual(["9.9.9-linux-x64"]);
