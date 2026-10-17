@@ -9,7 +9,7 @@
  */
 
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   accessSync, chmodSync, closeSync, constants, existsSync, lstatSync, mkdirSync, mkdtempSync, openSync, readdirSync,
   readFileSync, renameSync, rmSync, statfsSync, writeFileSync, writeSync,
@@ -343,7 +343,7 @@ export async function ensureAntigravityServer(options: EnsureAntigravityOptions 
     writeFileSync(join(extracted, ANTIGRAVITY_MANIFEST), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o644 });
     let previous: string | null = null;
     if (existsSync(where.dir)) {
-      previous = `${where.dir}.previous-${Date.now()}-${process.pid}`;
+      previous = `${where.dir}.previous-${randomUUID()}`;
       renameSync(where.dir, previous);
     }
     try {
