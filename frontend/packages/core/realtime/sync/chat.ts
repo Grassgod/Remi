@@ -37,11 +37,13 @@ function settleChatPendingTask(qc: QueryClient, sessionId: string, taskId: strin
 
 /**
  * Whether the cached `["task-trace", id]` value (`TurnTraceCache` in views) is
- * a read trace the stream already sealed: nothing newer can arrive for it.
+ * a trace that read ok and that the stream already sealed: nothing newer can
+ * arrive for it. A read that was not ok (a live view's read can land before
+ * the daemon claims the attempt) is read again.
  */
 function holdsClosedTrace(data: unknown): boolean {
-  const cache = data as { state?: { closed?: unknown }; read?: unknown } | null | undefined;
-  return !!cache && cache.state?.closed === true && !!cache.read;
+  const cache = data as { state?: { closed?: unknown }; read?: { state?: unknown } | null } | null | undefined;
+  return !!cache && cache.state?.closed === true && cache.read?.state === "ok";
 }
 
 export function applyChatDoneToCache(

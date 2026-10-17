@@ -107,7 +107,7 @@ export function AgentTranscriptDialog({
   headerSlot,
   promptFallback,
   initialView = "execution",
-  traceRead,
+  traceRead: readInfo,
   traceClosed = false,
   traceLoading = false,
   traceError = false,
@@ -145,6 +145,10 @@ export function AgentTranscriptDialog({
   // `redactItem` caches per item, and the reducer keeps the identity of an
   // item that did not change, so a live frame redacts only what it touched.
   const items = useMemo(() => rawItems.map(redactItem), [rawItems]);
+  // A read that is not ok explains only a trace with nothing in it: the cache
+  // can hold a live view's first read (`not_found` before the daemon claimed
+  // the attempt) while the stream supplied every item.
+  const traceRead = readInfo && readInfo.state !== "ok" && items.length > 0 ? null : readInfo;
   // One pass builds the top level and the parent → children index. Top level:
   // items without a parent, or whose parent is not in the trace (fail open).
   const childrenIndex = useRef(new Map<string, readonly TraceItem[]>());

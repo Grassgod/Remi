@@ -87,6 +87,23 @@ describe("applyChatDoneToCache", () => {
     unsubscribe();
   });
 
+  it("marks a sealed trace stale when its read was not ok, so the finished turn rereads it", async () => {
+    const qc = createQueryClient();
+    // A live view's first read can land before the daemon claims the attempt;
+    // the stream then delivers and seals the trace.
+    const sealed = { state: { closed: true, items: [], turn: null, head: 5 }, read: { state: "not_found", format: "v2" }, pending: [] };
+    qc.setQueryData(["task-trace", taskId], sealed);
+    applyChatDoneToCache(qc, donePayload());
+    expect(qc.getQueryState(["task-trace", taskId])?.isInvalidated).toBe(true);
+    const fresh = { ...sealed, read: { state: "ok", format: "v2" } };
+    const read = vi.fn(async () => fresh);
+    const observer = new QueryObserver(qc, { queryKey: ["task-trace", taskId], queryFn: read, staleTime: Infinity });
+    const unsubscribe = observer.subscribe(() => {});
+    await vi.waitFor(() => expect(observer.getCurrentResult().data).toEqual(fresh));
+    expect(read).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   it("handles a replayed chat done event", () => {
     const qc = createQueryClient();
     qc.setQueryData<ChatPendingTask>(pendingKey, {
