@@ -38,6 +38,8 @@ import {
   X,
   Zap,
   Users,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { WorkspaceAvatar } from "../workspace/workspace-avatar";
 import { ActorAvatar } from "@multiremi/ui/components/common/actor-avatar";
@@ -49,6 +51,7 @@ import { openCreateIssueWithPreference } from "@multiremi/core/issues/stores/cre
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarGroupLabel,
@@ -57,6 +60,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@multiremi/ui/components/ui/sidebar";
 import {
   DropdownMenu,
@@ -353,6 +357,35 @@ function PinSkeleton() {
   );
 }
 
+/**
+ * Collapses the nav to its icon rail and back (the rail on its edge does the
+ * same). The mobile sheet closes on its own, so it has no such button.
+ */
+function NavCollapseFooter() {
+  const { t } = useT("layout");
+  const { state, toggleSidebar, isMobile } = useSidebar();
+  if (isMobile) return null;
+  const collapsed = state === "collapsed";
+  const label = collapsed ? t(($) => $.sidebar.expand) : t(($) => $.sidebar.collapse);
+  return (
+    <SidebarFooter>
+      <SidebarMenu>
+        <SidebarMenuItem>
+          <SidebarMenuButton
+            aria-expanded={!collapsed}
+            tooltip={label}
+            className="text-muted-foreground"
+            onClick={toggleSidebar}
+          >
+            {collapsed ? <PanelLeftOpen /> : <PanelLeftClose />}
+            <span>{label}</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+      </SidebarMenu>
+    </SidebarFooter>
+  );
+}
+
 interface AppSidebarProps {
   /** Rendered above SidebarHeader (e.g. desktop traffic light spacer) */
   topSlot?: React.ReactNode;
@@ -498,7 +531,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
   }, [pathname]);
 
   return (
-      <Sidebar variant="inset">
+      <Sidebar variant="inset" collapsible="icon">
         {topSlot}
         {/* Workspace Switcher */}
         <SidebarHeader className={cn("py-3", headerClassName)} style={headerStyle}>
@@ -507,17 +540,17 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
               <DropdownMenu>
                 <DropdownMenuTrigger
                   render={
-                    <SidebarMenuButton>
+                    <SidebarMenuButton tooltip={workspace?.name ?? "Multiremi"}>
                       <span className="relative">
                         <WorkspaceAvatar name={workspace?.name ?? "M"} avatarUrl={workspace?.avatar_url} size="sm" />
                         {myInvitations.length > 0 && (
                           <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-brand ring-1 ring-sidebar" />
                         )}
                       </span>
-                      <span className="flex-1 truncate font-medium">
+                      <span className="flex-1 truncate font-medium group-data-[collapsible=icon]:hidden">
                         {workspace?.name ?? "Multiremi"}
                       </span>
-                      <ChevronDown className="size-3 text-muted-foreground" />
+                      <ChevronDown className="size-3 text-muted-foreground group-data-[collapsible=icon]:hidden" />
                     </SidebarMenuButton>
                   }
                 />
@@ -633,6 +666,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             <SidebarMenuItem>
               <SidebarMenuButton
                 className="text-muted-foreground"
+                tooltip={t(($) => $.sidebar.new_issue)}
                 onClick={() => openCreateIssueWithPreference()}
               >
                 <span className="relative">
@@ -640,7 +674,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                   <DraftDot />
                 </span>
                 <span>{t(($) => $.sidebar.new_issue)}</span>
-                <kbd className="pointer-events-none ml-auto inline-flex h-5 select-none items-center gap-0.5 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground">{t(($) => $.sidebar.new_issue_shortcut)}</kbd>
+                <kbd className="pointer-events-none ml-auto inline-flex h-5 select-none items-center gap-0.5 rounded border bg-muted px-1.5 font-mono text-[10px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden">{t(($) => $.sidebar.new_issue_shortcut)}</kbd>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>
@@ -658,18 +692,19 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
                         isActive={isActive}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         render={<AppLink href={href} />}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                         {item.key === "inbox" && inboxAttentionCount > 0 && (
-                          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          <span className="ml-auto rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground group-data-[collapsible=icon]:hidden">
                             {inboxAttentionCount > 99 ? "99+" : inboxAttentionCount}
                           </span>
                         )}
                         {item.key === "workbench" && workbenchPendingCount > 0 && (
-                          <span className="ml-auto text-xs">
+                          <span className="ml-auto text-xs group-data-[collapsible=icon]:hidden">
                             {workbenchPendingCount > 99 ? "99+" : workbenchPendingCount}
                           </span>
                         )}
@@ -683,7 +718,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
 
           {visiblePinned.length > 0 && (
             <Collapsible defaultOpen>
-              <SidebarGroup className="group/pinned">
+              <SidebarGroup className="group/pinned group-data-[collapsible=icon]:hidden">
                 <SidebarGroupLabel
                   render={<CollapsibleTrigger />}
                   className="group/trigger cursor-pointer hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
@@ -728,6 +763,7 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
                         isActive={isActive}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         render={<AppLink href={href} />}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
@@ -752,13 +788,14 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
                     <SidebarMenuItem key={item.key}>
                       <SidebarMenuButton
                         isActive={isActive}
+                        tooltip={t(($) => $.nav[item.labelKey])}
                         render={<AppLink href={href} />}
                         className="text-muted-foreground hover:not-data-active:bg-sidebar-accent/70 data-active:bg-sidebar-accent data-active:text-sidebar-accent-foreground"
                       >
                         <item.icon />
                         <span>{t(($) => $.nav[item.labelKey])}</span>
                         {item.key === "runtimes" && hasRuntimeUpdates && (
-                          <span className="ml-auto size-1.5 rounded-full bg-destructive" />
+                          <span className="ml-auto size-1.5 rounded-full bg-destructive group-data-[collapsible=icon]:hidden" />
                         )}
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -768,6 +805,8 @@ export function AppSidebar({ topSlot, searchSlot, headerClassName, headerStyle }
             </SidebarGroupContent>
           </SidebarGroup>
         </SidebarContent>
+
+        <NavCollapseFooter />
 
         <SidebarRail />
       </Sidebar>

@@ -156,7 +156,10 @@
     "loading": "채팅 불러오는 중…",
     "loading_conversation": "대화를 불러오는 중…",
     "load_failed": "대화를 불러올 수 없습니다.",
-    "retry": "다시 시도"
+    "retry": "다시 시도",
+    "hide_sidebar": "사이드바 숨기기",
+    "show_sidebar": "사이드바 표시",
+    "resize_sidebar": "사이드바 크기 조정"
   },
   "sessions": {
     "pin": "채팅 고정",

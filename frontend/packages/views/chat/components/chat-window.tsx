@@ -71,6 +71,7 @@ import { ChatInput, type ChatSendMode } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
 import { SessionDropdown } from "./session-dropdown";
 import { ChatSidebar } from "./chat-sidebar";
+import { ChatPageLayout, ChatSidebarToggle } from "./chat-page-layout";
 import { ActorAvatar } from "../../common/actor-avatar";
 import { EmptyState } from "./chat-empty-state";
 import { ChatResizeHandles } from "./chat-resize-handles";
@@ -714,6 +715,7 @@ export function ChatWindow({
         // Page header: who and what this chat is. New chat and history live
         // in the sidebar, so the header carries no session controls.
         <div data-chat-page-header="" className="flex h-12 shrink-0 items-center gap-2 border-b px-4">
+          <ChatSidebarToggle />
           <Button
             variant="ghost"
             size="icon-sm"
@@ -987,10 +989,9 @@ export function ChatWindow({
 
   if (isPage)
     return (
-      <div className="flex h-full min-h-0">
-        <aside
-          className={`${showList ? "flex" : "hidden"} w-full min-h-0 shrink-0 flex-col border-r bg-sidebar md:flex md:w-[300px]`}
-        >
+      <ChatPageLayout
+        showList={showList}
+        list={
           <ChatSidebar
             sessions={sessions}
             projects={loadedProjects}
@@ -1003,16 +1004,13 @@ export function ChatWindow({
             onSessionDeleted={() => setActiveSession(null)}
             onClose={() => setShowList(false)}
           />
-        </aside>
-        <main
-          className={`${showList ? "hidden" : "flex"} min-h-0 min-w-0 flex-1 flex-col md:flex`}
-        >
-          {/* The subagent panel pushes the conversation aside (PR 5 §6.6). */}
-          <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="page">
-            {conversation}
-          </SubagentPanelLayout>
-        </main>
-      </div>
+        }
+      >
+        {/* The subagent panel pushes the conversation aside (PR 5 §6.6). */}
+        <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="page">
+          {conversation}
+        </SubagentPanelLayout>
+      </ChatPageLayout>
     );
 
   return (

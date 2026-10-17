@@ -155,7 +155,10 @@
     "loading": "正在加载对话…",
     "loading_conversation": "正在载入对话…",
     "load_failed": "无法加载对话。",
-    "retry": "重试"
+    "retry": "重试",
+    "hide_sidebar": "隐藏侧边栏",
+    "show_sidebar": "显示侧边栏",
+    "resize_sidebar": "调整侧边栏宽度"
   },
   "sessions": {
     "pin": "置顶对话",

@@ -41,6 +41,8 @@
     "pinned_label": "고정됨",
     "workspace_group": "워크스페이스",
     "configure_group": "설정",
-    "unread_overflow": "99+"
+    "unread_overflow": "99+",
+    "collapse": "사이드바 접기",
+    "expand": "사이드바 펼치기"
   }
 }

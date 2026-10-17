@@ -155,7 +155,10 @@
     "loading": "チャットを読み込み中…",
     "loading_conversation": "会話を読み込み中…",
     "load_failed": "会話を読み込めませんでした。",
-    "retry": "再試行"
+    "retry": "再試行",
+    "hide_sidebar": "サイドバーを非表示",
+    "show_sidebar": "サイドバーを表示",
+    "resize_sidebar": "サイドバーのサイズを変更"
   },
   "sessions": {
     "pin": "チャットを固定",
