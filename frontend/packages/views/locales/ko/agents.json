@@ -287,7 +287,7 @@
       "unsaved_changes": "저장하지 않은 변경사항"
     },
     "instructions": {
-      "intro": "이 에이전트의 정체성과 작업 방식을 정의하세요. 모든 작업에서 에이전트 컨텍스트에 포함됩니다. Markdown을 지원합니다.",
+      "intro": "이 에이전트의 정체성과 작업 방식을 정의하세요. 이 에이전트가 실행하는 모든 세션(Chat 및 Issue)의 AGENTS.md 맨 앞에 기록되며 매 턴 적용됩니다. Markdown을 지원합니다.",
       "placeholder": "이 에이전트의 역할, 전문성, 작업 방식을 정의하세요.\n\n# 예시\n당신은 React와 TypeScript에 특화된 프런트엔드 엔지니어입니다.\n\n## 작업 방식\n- 작고 집중된 PR을 작성합니다. 논리적 변경 단위마다 커밋 하나를 사용합니다\n- 상속보다 조합을 선호합니다\n- 새 컴포넌트에는 항상 단위 테스트를 추가합니다\n\n## 제약\n- 명시적인 승인 없이 shared/ 타입을 수정하지 않습니다\n- features/의 기존 컴포넌트 패턴을 따릅니다"
     },
     "env": {
@@ -451,6 +451,11 @@
     "prompt_loading": "입력 프롬프트를 불러오는 중...",
     "prompt_not_recorded": "입력 프롬프트가 기록되지 않았습니다. 이전 런타임 버전에서 실행된 작업일 수 있습니다.",
     "prompt_load_failed": "입력 프롬프트를 불러오지 못했습니다. 잠시 후 다시 시도하세요.",
+    "prompt_sent_title": "이번 턴에 에이전트에게 보낸 내용",
+    "prompt_messages_fallback": "이 실행에서는 보낸 원문이 기록되지 않아 이번 턴의 메시지를 표시합니다.",
+    "prompt_steers": "턴 중에 보냄",
+    "session_instructions": "세션 설정",
+    "session_instructions_note": "이 실행 당시 세션 AGENTS.md 중 Remi가 기록한 부분입니다. 로컬 워크스페이스의 지침 파일은 기기에만 있으며 여기에 표시되지 않습니다.",
     "status_queued": "대기 중",
     "status_dispatched": "대기 중",
     "status_waiting_local_directory": "로컬 디렉터리 대기 중",

@@ -287,7 +287,7 @@
       "unsaved_changes": "Unsaved changes"
     },
     "instructions": {
-      "intro": "Define this agent's identity and working style. Injected into the agent's context for every task. Markdown is supported.",
+      "intro": "Define this agent's identity and working style. Written at the top of the AGENTS.md of every session this agent runs, in Chat and in Issues, and applies on every turn. Markdown is supported.",
       "placeholder": "Define this agent's role, expertise, and working style.\n\n# Example\nYou are a frontend engineer specializing in React and TypeScript.\n\n## Working Style\n- Write small, focused PRs — one commit per logical change\n- Prefer composition over inheritance\n- Always add unit tests for new components\n\n## Constraints\n- Do not modify shared/ types without explicit approval\n- Follow the existing component patterns in features/"
     },
     "env": {
@@ -451,6 +451,11 @@
     "prompt_loading": "Loading input prompt...",
     "prompt_not_recorded": "No input prompt was recorded. This task may have run on an older runtime.",
     "prompt_load_failed": "The input prompt could not be loaded. Try again later.",
+    "prompt_sent_title": "Sent to the agent this turn",
+    "prompt_messages_fallback": "This attempt did not record the exact text it sent; showing this turn's messages.",
+    "prompt_steers": "Sent during the turn",
+    "session_instructions": "Session instructions",
+    "session_instructions_note": "Remi's part of this session's AGENTS.md when the attempt ran. Instruction files in the local workspace stay on the machine and are not shown.",
     "status_queued": "Queued",
     "status_dispatched": "Waiting",
     "status_waiting_local_directory": "Waiting for local directory",

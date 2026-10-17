@@ -11,6 +11,8 @@ import { AgentTranscriptDialog } from "./agent-transcript-dialog";
 import type { TurnTraceReadInfo } from "./use-task-trace";
 
 const getTurnInput = vi.hoisted(() => vi.fn());
+const copyText = vi.hoisted(() => vi.fn());
+vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText }));
 vi.mock("@multiremi/core/api", () => ({
   api: {
     getTurnInput,
@@ -21,7 +23,20 @@ vi.mock("@multiremi/core/api", () => ({
 
 beforeEach(() => {
   getTurnInput.mockReset();
+  copyText.mockReset();
+  copyText.mockResolvedValue(true);
 });
+
+/** A `getTurnInput` result: the recorded prompt, or `sent_prompt: null` with the joined messages. */
+function turnInput(prompt: string, extra: { sent_prompt?: string | null; instructions?: string | null } = {}) {
+  return {
+    from_seq: 2, to_seq: 5, messages: [], legacy_prompt: null,
+    sent_attempt_id: extra.sent_prompt === null ? null : "task-1",
+    sent_prompt: extra.sent_prompt === undefined ? prompt : extra.sent_prompt,
+    instructions: extra.instructions ?? null,
+    prompt,
+  };
+}
 
 // agent_id / runtime_id are blank so the dialog skips its metadata fetches.
 const task: AgentTask = {
@@ -43,7 +58,7 @@ function renderTranscript(
   items: TraceItem[],
   overrides: {
     task?: Partial<AgentTask>; isLive?: boolean; initialView?: "execution" | "prompt"; promptFallback?: React.ReactNode;
-    turn?: TraceTurn | null; traceRead?: TurnTraceReadInfo | null; onTraceRetry?: () => void;
+    turn?: TraceTurn | null; traceRead?: TurnTraceReadInfo | null; onTraceRetry?: () => void; traceClosed?: boolean;
   } = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -61,6 +76,7 @@ function renderTranscript(
         turn={overrides.turn}
         traceRead={overrides.traceRead}
         onTraceRetry={overrides.onTraceRetry}
+        traceClosed={overrides.traceClosed}
       />
     </QueryClientProvider>,
   );
@@ -68,7 +84,7 @@ function renderTranscript(
 
 describe("transcript pending task state", () => {
   it("opens directly on Input Prompt when requested without an intermediate execution view", async () => {
-    getTurnInput.mockResolvedValue({ from_seq: 0, to_seq: 5, prompt: "Assignment instructions" });
+    getTurnInput.mockResolvedValue(turnInput("Assignment instructions"));
     renderTranscript([], { initialView: "prompt" });
     expect(screen.getByRole("button", { name: "Input Prompt" })).toHaveAttribute("aria-pressed", "true");
     expect(getTurnInput).toHaveBeenCalledWith("task-1");
@@ -100,6 +116,12 @@ describe("transcript pending task state", () => {
 });
 
 describe("task input prompt", () => {
+  const steer = (id: string, text: string, injected = true) => ({
+    ...userMessage(id, text), origin: "steer" as const, message_ids: [id],
+    steer: { steer_id: id, kind: "steer", injected, author_type: "user", author_id: null,
+      result: { via: injected ? "native" as const : "none" as const, native_outcome: injected ? "injected" as const : null, error: null } },
+  });
+
   it("shows supplied assignment content only when the audited input is not recorded", async () => {
     getTurnInput.mockRejectedValue(Object.assign(new Error("prompt not recorded"), { status: 404 }));
     renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
@@ -108,12 +130,21 @@ describe("task input prompt", () => {
     expect(screen.queryByText(/older runtime/)).toBeNull();
   });
 
-  it("prefers the audited input over the assignment fallback on a successful read", async () => {
-    getTurnInput.mockResolvedValue({ from_seq: 2, to_seq: 5, prompt: "Audited execution instructions", sha256: "b".repeat(64), assembled_at: "2026-08-17T12:00:00.000Z" });
+  it("treats a turn with nothing to show as not recorded", async () => {
+    getTurnInput.mockResolvedValue(turnInput("", { sent_prompt: null }));
+    renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
+    expect(await screen.findByText("Original assignment instructions")).toBeInTheDocument();
+    expect(screen.queryByText("Sent to the agent this turn")).toBeNull();
+  });
+
+  it("prefers the audited input over the assignment fallback, without a raw seq range", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Audited execution instructions"));
     renderTranscript([], { initialView: "prompt", promptFallback: <p>Original assignment instructions</p> });
     expect(await screen.findByText("Audited execution instructions")).toBeInTheDocument();
-    expect(screen.getByText("(2, 5]")).toBeInTheDocument();
+    expect(screen.getByText("Sent to the agent this turn")).toBeInTheDocument();
+    expect(screen.queryByText("(2, 5]")).toBeNull();
     expect(screen.queryByText(/SHA-256:/)).toBeNull();
+    expect(screen.queryByText(/did not record the exact text/)).toBeNull();
     expect(screen.queryByText("Original assignment instructions")).toBeNull();
   });
 
@@ -124,21 +155,93 @@ describe("task input prompt", () => {
     expect(screen.queryByText("Original assignment instructions")).toBeNull();
   });
 
-  it("loads the exact audited prompt on demand", async () => {
-    getTurnInput.mockResolvedValue({
-      from_seq: 2, to_seq: 5,
-      prompt: "# Delta Prompt\n\n## Current Request\nFix the review note.",
-      sha256: "a".repeat(64),
-      assembled_at: "2026-08-17T12:00:00.000Z",
-    });
-    renderTranscript([]);
+  it("loads this attempt's exact prompt on demand and copies it", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Fix the review note.\n\n(Reply to comment msg_1)"));
+    renderTranscript([], { task: { id: "attempt-2", turn_id: "turn-1" } });
 
     expect(getTurnInput).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Input Prompt" }));
 
-    await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith(task.id));
-    expect(await screen.findByText(/# Delta Prompt/)).toBeInTheDocument();
-    expect(screen.getByText("(2, 5]")).toBeInTheDocument();
+    await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith("turn-1", "attempt-2"));
+    expect(await screen.findByText(/Fix the review note\./)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Copy prompt" }));
+    expect(copyText).toHaveBeenCalledWith("Fix the review note.\n\n(Reply to comment msg_1)");
+  });
+
+  it("asks for the turn alone while the turn has no attempt yet", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Queued request"));
+    renderTranscript([], { task: { id: "turn-1", turn_id: "turn-1", status: "queued" }, initialView: "prompt" });
+    await waitFor(() => expect(getTurnInput).toHaveBeenCalledWith("turn-1"));
+  });
+
+  it("says when the exact text was not recorded and the turn's messages are shown", async () => {
+    getTurnInput.mockResolvedValue(turnInput("First\n\nSecond", { sent_prompt: null }));
+    renderTranscript([], { initialView: "prompt" });
+    expect(await screen.findByText(/did not record the exact text it sent/)).toBeInTheDocument();
+    expect(screen.getByText(/First/)).toBeInTheDocument();
+  });
+
+  it("shows the steers the agent received after the prompt, skipping one never delivered", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Initial request"));
+    renderTranscript([
+      userMessage("um_input", "Initial request"),
+      steer("st_1", "Also update the docs"),
+      steer("st_late", "Too late", false),
+      command("cmd_1", [unknown("bun test")]),
+      steer("st_2", "Skip the flaky test"),
+    ], { initialView: "prompt" });
+
+    const steers = await screen.findByRole("region", { name: "Sent during the turn" });
+    expect([...steers.querySelectorAll('[data-prompt-part="steer"]')].map((node) => node.textContent))
+      .toEqual(["Also update the docs", "Skip the flaky test"]);
+    expect(screen.queryByText("Too late")).toBeNull();
+  });
+
+  it("renders Chat input in the text font and other input in monospace", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Hello there"));
+    const { unmount } = renderTranscript([steer("st_1", "One more thing")], { task: { chat_session_id: "chat_1" }, initialView: "prompt" });
+    const chatPrompt = await screen.findByText("Hello there");
+    expect(chatPrompt.tagName).toBe("DIV");
+    expect(chatPrompt).toHaveClass("text-sm", "whitespace-pre-wrap");
+    expect(chatPrompt).not.toHaveClass("font-mono");
+    expect(screen.getByText("One more thing")).not.toHaveClass("font-mono");
+    unmount();
+
+    renderTranscript([], { initialView: "prompt" });
+    const issuePrompt = await screen.findByText("Hello there");
+    expect(issuePrompt.tagName).toBe("PRE");
+    expect(issuePrompt).toHaveClass("font-mono");
+  });
+
+  it("keeps the session instructions collapsed until asked", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Request", { instructions: "# Remi notes\n\nUse the remi CLI." }));
+    renderTranscript([], { initialView: "prompt" });
+
+    const toggle = await screen.findByRole("button", { name: "Session instructions" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText(/Use the remi CLI/)).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText(/Use the remi CLI/)).toBeInTheDocument();
+    expect(screen.getByText(/Remi's part of this session's AGENTS\.md/)).toBeInTheDocument();
+  });
+
+  it("offers no session instructions when the attempt recorded none", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Request"));
+    renderTranscript([], { initialView: "prompt" });
+    expect(await screen.findByText("Request")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Session instructions" })).toBeNull();
+  });
+
+  it("shows the trace status only on the execution tab", async () => {
+    getTurnInput.mockResolvedValue(turnInput("Request"));
+    renderTranscript([], { initialView: "prompt", traceRead: { state: "ok", format: "v2" }, onTraceRetry: () => {} });
+    expect(await screen.findByText("Request")).toBeInTheDocument();
+    expect(screen.queryByText("Live updates")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Execution" }));
+    expect(screen.getByText("Live updates")).toBeInTheDocument();
   });
 
   it("shows a clear legacy empty state when no prompt was recorded", async () => {

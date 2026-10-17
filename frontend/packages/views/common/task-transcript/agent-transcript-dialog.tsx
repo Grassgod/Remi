@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
-import type { TraceItem, TraceTurn } from "@multiremi/contracts/trace";
+import type { TraceItem, TraceItemOf, TraceTurn } from "@multiremi/contracts/trace";
 import { finalItem, turnTraceStats } from "@multiremi/shared/turn-trace";
 import {
   Bot,
@@ -20,11 +20,13 @@ import {
   Coins,
   FileInput,
   ScrollText,
+  ChevronRight,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
 import { Markdown } from "../markdown";
 import {
   DropdownMenu,
@@ -127,19 +129,18 @@ export function AgentTranscriptDialog({
   const setSortDirection = useTranscriptViewStore((s) => s.setSortDirection);
   const eventRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  // The turn's input for this attempt: exactly what it sent the agent when
+  // recorded, else the turn's messages. `task.id` is the turn itself until
+  // its first attempt exists, and the turn route rejects a foreign attempt.
+  const promptTurnId = task.turn_id ?? task.id;
+  const promptAttemptId = task.id !== promptTurnId ? task.id : undefined;
   const promptQuery = useQuery({
     queryKey: ["task-prompt", task.id],
-    queryFn: () => api.getTurnInput(task.turn_id ?? task.id),
+    queryFn: () => (promptAttemptId ? api.getTurnInput(promptTurnId, promptAttemptId) : api.getTurnInput(promptTurnId)),
     enabled: open && activeView === "prompt",
     retry: false,
     staleTime: Infinity,
   });
-  const promptNotRecorded = Boolean(
-    promptQuery.error
-    && typeof promptQuery.error === "object"
-    && "status" in promptQuery.error
-    && promptQuery.error.status === 404,
-  );
 
   // Redact for display and copy; ids, statuses and times stay intact.
   // `redactItem` caches per item, and the reducer keeps the identity of an
@@ -175,6 +176,24 @@ export function AgentTranscriptDialog({
     childrenIndex.current = next;
     return { topItems: top, childrenOf: next };
   }, [items]);
+
+  // Steers the agent received during this attempt: what it was sent after its
+  // first prompt. A steer that was never delivered did not reach it.
+  const promptSteers = useMemo(
+    () => topItems.filter((item): item is TraceItemOf<"user_message"> =>
+      item.type === "user_message" && item.origin === "steer" && item.steer?.injected !== false && item.text.trim() !== ""),
+    [topItems],
+  );
+  const promptInput = promptQuery.data ?? null;
+  const promptShown = !!promptInput && (promptInput.prompt.trim() !== "" || promptSteers.length > 0);
+  // Not recorded: no such turn (404), or a turn with nothing to show.
+  const promptNotRecorded = Boolean(
+    promptQuery.error
+    && typeof promptQuery.error === "object"
+    && "status" in promptQuery.error
+    && promptQuery.error.status === 404,
+  ) || (promptQuery.isSuccess && !promptShown);
+  const chatPrompt = Boolean(task.chat_session_id);
 
   // Filter options: tool items by their tool ("tool:Bash"), the rest by type.
   const filterOptions = useMemo(() => {
@@ -652,7 +671,7 @@ export function AgentTranscriptDialog({
 
         {headerSlot && <div className="shrink-0 border-b bg-muted/20 px-4 py-3">{headerSlot}</div>}
 
-        {onTraceRetry && (
+        {onTraceRetry && activeView === "execution" && (
           <div
             role={traceError || traceRead?.state === "unreachable" ? "alert" : "status"}
             className={cn(
@@ -689,20 +708,24 @@ export function AgentTranscriptDialog({
                 <Loader2 className="h-4 w-4 animate-spin" />
                 {t(($) => $.transcript.prompt_loading)}
               </div>
-            ) : promptQuery.data ? (
+            ) : promptInput && promptShown ? (
               <>
                 <div className="shrink-0 border-b px-4 py-2 text-xs text-muted-foreground">
-                  ({promptQuery.data.from_seq}, {promptQuery.data.to_seq}]
+                  {t(($) => $.transcript.prompt_sent_title)}
                 </div>
-                <div className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4">
-                  <pre className="whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">
-                    {promptQuery.data.prompt}
-                  </pre>
+                <div className="min-h-0 flex-1 space-y-4 overflow-auto bg-muted/10 p-4">
+                  {promptInput.instructions && <SessionInstructions text={promptInput.instructions} />}
+                  {promptInput.sent_prompt === null && (
+                    <p className="text-xs text-muted-foreground">{t(($) => $.transcript.prompt_messages_fallback)}</p>
+                  )}
+                  {promptInput.prompt.trim() !== "" && <PromptText chat={chatPrompt} text={promptInput.prompt} />}
+                  <PromptSteers steers={promptSteers} chat={chatPrompt} />
                 </div>
               </>
             ) : promptNotRecorded && promptFallback ? (
-              <div className="min-h-0 flex-1 overflow-auto bg-muted/10 p-4">
+              <div className="min-h-0 flex-1 space-y-4 overflow-auto bg-muted/10 p-4">
                 {promptFallback}
+                <PromptSteers steers={promptSteers} chat={chatPrompt} />
               </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center text-sm text-muted-foreground">
@@ -807,5 +830,59 @@ export function AgentTranscriptDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+/** Text sent to the agent. Chat input is the user's own words, so it reads as text, not as a log. */
+function PromptText({ chat, text, steer = false }: { chat: boolean; text: string; steer?: boolean }) {
+  const Element = chat ? "div" : "pre";
+  return (
+    <Element
+      data-prompt-part={steer ? "steer" : "prompt"}
+      className={cn(
+        "whitespace-pre-wrap break-words text-foreground",
+        chat ? "text-sm leading-6" : "font-mono text-xs leading-5",
+      )}
+    >
+      {text}
+    </Element>
+  );
+}
+
+/** The steers the agent received during the attempt, in order. */
+function PromptSteers({ steers, chat }: { steers: readonly TraceItemOf<"user_message">[]; chat: boolean }) {
+  const { t } = useT("agents");
+  if (steers.length === 0) return null;
+  return (
+    <section className="space-y-2" aria-label={t(($) => $.transcript.prompt_steers)}>
+      <h3 className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+        {t(($) => $.transcript.prompt_steers)}
+      </h3>
+      {steers.map((steer) => (
+        <div key={steer.id} className="border-l-2 border-border pl-3">
+          <PromptText chat={chat} text={steer.text} steer />
+        </div>
+      ))}
+    </section>
+  );
+}
+
+/** Remi's part of the session's AGENTS.md for the attempt, collapsed by default. */
+function SessionInstructions({ text }: { text: string }) {
+  const { t } = useT("agents");
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-md border bg-background">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-3 py-2 text-left text-xs font-medium text-foreground hover:bg-accent/40">
+        <ChevronRight className={cn("h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform", open && "rotate-90")} />
+        {t(($) => $.transcript.session_instructions)}
+      </CollapsibleTrigger>
+      <CollapsibleContent className="space-y-2 border-t px-3 py-2">
+        <p className="text-xs text-muted-foreground">{t(($) => $.transcript.session_instructions_note)}</p>
+        <pre className="max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono text-xs leading-5 text-foreground">
+          {text}
+        </pre>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

@@ -12,6 +12,7 @@ export const ProjectSchema = z.object({
   title: z.string(),
   description: z.string().nullable().optional().transform((value) => value ?? null),
   instructions: z.string().nullish().catch("").transform((value) => value ?? ""),
+  // Deprecated by ADR 0023 (merged into `instructions`); kept tolerant for older servers.
   delta_instructions: z.string().nullish().catch("").transform((value) => value ?? ""),
   instructions_revision: z.number().int().nonnegative().optional().catch(0).transform((value) => value ?? 0),
   instructions_updated_at: z.string().datetime().nullish().catch(null).transform((value) => value ?? null),

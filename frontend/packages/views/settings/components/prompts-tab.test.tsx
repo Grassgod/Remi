@@ -1,9 +1,8 @@
 import type { ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@multiremi/core/i18n/react";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
 import enCommon from "../../locales/en/common.json";
 import enSettings from "../../locales/en/settings.json";
 
@@ -17,8 +16,7 @@ vi.mock("@tanstack/react-query", () => ({
     if (options.queryKey?.[0] === "workspace-prompt-settings") {
       return {
         data: {
-          bootstrapPrompt: "Create a PR.",
-          deltaPrompt: "",
+          prompt: "Create a PR.",
           revision: 2,
           updatedAt: null,
           updatedBy: null,
@@ -31,9 +29,9 @@ vi.mock("@tanstack/react-query", () => ({
     if (options.queryKey?.[0] === "workspace-prompt-template") {
       return {
         data: {
-          bootstrap: "# Bootstrap Prompt\n\n{{issue_description}}",
-          delta: "# Delta Prompt\n\n{{session_jsonl}}",
-          sha256: { bootstrap: "a".repeat(64), delta: "b".repeat(64) },
+          instructions: "# Remi notes\n\n{{issue_description}}",
+          input: "{{current_request}}",
+          sha256: { instructions: "a".repeat(64), input: "b".repeat(64) },
         },
         isPending: false,
         isError: false,
@@ -73,73 +71,68 @@ describe("PromptsTab", () => {
     vi.clearAllMocks();
     roleRef.current = "owner";
     updatePrompts.mockResolvedValue({
-      bootstrapPrompt: "Create a PR.",
-      deltaPrompt: "Check new comments.",
+      prompt: "Workspace rule",
       revision: 3,
       updatedAt: null,
       updatedBy: null,
     });
   });
 
-  it("edits Bootstrap and Delta together under one revision", async () => {
+  it("edits the one workspace prompt and saves it under the shown revision", async () => {
     const user = userEvent.setup();
     render(<PromptsTab />, { wrapper: Wrapper });
 
-    await user.clear(screen.getByLabelText("Workspace Bootstrap Prompt"));
-    await user.type(screen.getByLabelText("Workspace Bootstrap Prompt"), "Bootstrap rule");
-    await user.click(screen.getByRole("tab", { name: "Delta" }));
-    await user.type(screen.getByLabelText("Workspace Delta Prompt"), "Check new comments.");
+    expect(screen.queryByRole("tab")).toBeNull();
+    const editor = screen.getByLabelText("Workspace prompt");
+    expect(editor).toHaveValue("Create a PR.");
+    expect(screen.getByText(/every turn of every Agent session, in Chat and in Issues/)).toBeInTheDocument();
+    expect(screen.getByText(/into every Agent session's instructions \(AGENTS\.md\)/)).toBeInTheDocument();
+
+    await user.clear(editor);
+    await user.type(editor, "Workspace rule  ");
     await user.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => expect(updatePrompts).toHaveBeenCalledWith("workspace-1", {
-      bootstrapPrompt: "Bootstrap rule",
-      deltaPrompt: "Check new comments.",
-      expectedRevision: 2,
+      prompt: "Workspace rule",
+      expected_revision: 2,
     }));
   });
 
-  it("keeps prompts read-only for a regular member", () => {
-    roleRef.current = "member";
+  it("enforces the 16,000 character limit", () => {
     render(<PromptsTab />, { wrapper: Wrapper });
 
-    expect(screen.getByLabelText("Workspace Bootstrap Prompt")).toBeDisabled();
+    fireEvent.change(screen.getByLabelText("Workspace prompt"), { target: { value: "x".repeat(16_001) } });
+
+    expect(screen.getByText("16001 / 16000")).toHaveClass("text-destructive");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
   });
 
-  it("shows and copies the read-only platform template", async () => {
+  it("keeps the prompt read-only for a regular member", () => {
+    roleRef.current = "member";
+    render(<PromptsTab />, { wrapper: Wrapper });
+
+    expect(screen.getByLabelText("Workspace prompt")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
+  });
+
+  it("shows the AGENTS.md and turn input templates with their hashes and copies each", async () => {
     const user = userEvent.setup();
     render(<PromptsTab />, { wrapper: Wrapper });
 
     await user.click(screen.getByRole("button", { name: "View template" }));
-    const bootstrap = screen.getByLabelText("Bootstrap platform prompt template");
-    expect(bootstrap).toHaveTextContent("{{issue_description}}");
-    expect(bootstrap).not.toHaveAttribute("contenteditable", "true");
+    const instructions = screen.getByLabelText("AGENTS.md platform template");
+    expect(instructions).toHaveTextContent("{{issue_description}}");
+    expect(instructions).not.toHaveAttribute("contenteditable", "true");
+    expect(screen.getByLabelText("Turn input platform template")).toHaveTextContent("{{current_request}}");
+    expect(screen.getByRole("heading", { name: "AGENTS.md" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Turn input" })).toBeInTheDocument();
+    expect(screen.getByText(`SHA-256 ${"a".repeat(64)}`)).toBeInTheDocument();
+    expect(screen.getByText(`SHA-256 ${"b".repeat(64)}`)).toBeInTheDocument();
 
-    await user.click(screen.getByRole("button", { name: "Copy" }));
-    expect(copyText).toHaveBeenCalledWith("# Bootstrap Prompt\n\n{{issue_description}}");
-
-    await user.click(screen.getByRole("tab", { name: "Delta" }));
-    expect(screen.getByLabelText("Delta platform prompt template")).toHaveTextContent("{{session_jsonl}}");
-  });
-
-  it("keeps horizontal prompt tabs horizontal inside vertical settings tabs", () => {
-    render(
-      <Tabs defaultValue="prompts" orientation="vertical">
-        <TabsList variant="line">
-          <TabsTrigger value="prompts">Prompts</TabsTrigger>
-        </TabsList>
-        <TabsContent value="prompts"><PromptsTab /></TabsContent>
-      </Tabs>,
-      { wrapper: Wrapper },
-    );
-
-    const tabLists = screen.getAllByRole("tablist");
-    const settingsTabs = tabLists[0];
-    const promptTabs = tabLists.at(-1);
-    expect(settingsTabs).toHaveAttribute("data-orientation", "vertical");
-    expect(settingsTabs?.className).toContain("data-vertical:flex-col");
-    expect(promptTabs).toHaveAttribute("data-orientation", "horizontal");
-    expect(promptTabs?.className).toContain("data-horizontal:h-8");
-    expect(promptTabs?.className).not.toContain("group-data-vertical/tabs:flex-col");
+    const [copyInstructions, copyInput] = screen.getAllByRole("button", { name: "Copy" });
+    await user.click(copyInstructions!);
+    expect(copyText).toHaveBeenLastCalledWith("# Remi notes\n\n{{issue_description}}");
+    await user.click(copyInput!);
+    expect(copyText).toHaveBeenLastCalledWith("{{current_request}}");
   });
 });

@@ -8,7 +8,7 @@ import { api, ApiError } from "@multiremi/core/api";
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { memberListOptions } from "@multiremi/core/workspace/queries";
-import type { WorkspacePromptSettings } from "@multiremi/core/types";
+import type { PlatformPromptTemplatePreview, WorkspacePromptSettings } from "@multiremi/core/types";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   Dialog,
@@ -18,12 +18,12 @@ import {
   DialogTitle,
 } from "@multiremi/ui/components/ui/dialog";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@multiremi/ui/components/ui/tabs";
 import { copyText } from "@multiremi/ui/lib/clipboard";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../../i18n";
 
-const MAX_LENGTH = 8_000;
+/** The server's limit for the workspace's own prompt (ADR 0023). */
+const MAX_LENGTH = 16_000;
 
 export function PromptsTab() {
   const { t } = useT("settings");
@@ -74,8 +74,7 @@ function PromptSettingsEditor({
   onSaved: (next: WorkspacePromptSettings) => unknown;
 }) {
   const { t } = useT("settings");
-  const [bootstrapPrompt, setBootstrapPrompt] = useState(initial.bootstrapPrompt);
-  const [deltaPrompt, setDeltaPrompt] = useState(initial.deltaPrompt);
+  const [prompt, setPrompt] = useState(initial.prompt);
   const [saving, setSaving] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const template = useQuery({
@@ -83,17 +82,17 @@ function PromptSettingsEditor({
     queryFn: () => api.getWorkspacePromptTemplate(workspaceId),
     enabled: templateOpen && Boolean(workspaceId),
   });
-  const dirty = bootstrapPrompt !== initial.bootstrapPrompt || deltaPrompt !== initial.deltaPrompt;
-  const overLimit = [...bootstrapPrompt].length > MAX_LENGTH || [...deltaPrompt].length > MAX_LENGTH;
+  const dirty = prompt !== initial.prompt;
+  const length = [...prompt].length;
+  const overLimit = length > MAX_LENGTH;
 
   async function save() {
     if (!dirty || overLimit || saving || !canManage) return;
     setSaving(true);
     try {
       const next = await api.updateWorkspacePromptSettings(workspaceId, {
-        bootstrapPrompt: bootstrapPrompt.trimEnd(),
-        deltaPrompt: deltaPrompt.trimEnd(),
-        expectedRevision: initial.revision,
+        prompt: prompt.trimEnd(),
+        expected_revision: initial.revision,
       });
       onSaved(next);
       toast.success(t(($) => $.prompts.saved));
@@ -136,30 +135,24 @@ function PromptSettingsEditor({
         onRetry={() => void template.refetch()}
       />
 
-      <Tabs defaultValue="bootstrap">
-        <TabsList>
-          <TabsTrigger value="bootstrap">{t(($) => $.prompts.bootstrap_tab)}</TabsTrigger>
-          <TabsTrigger value="delta">{t(($) => $.prompts.delta_tab)}</TabsTrigger>
-        </TabsList>
-        <PromptEditor
-          value="bootstrap"
-          prompt={bootstrapPrompt}
-          onChange={setBootstrapPrompt}
-          label={t(($) => $.prompts.bootstrap_label)}
-          hint={t(($) => $.prompts.bootstrap_hint)}
-          placeholder={t(($) => $.prompts.bootstrap_placeholder)}
+      <div className="space-y-3">
+        <div>
+          <label htmlFor="workspace-prompt" className="text-sm font-medium">{t(($) => $.prompts.prompt_label)}</label>
+          <p className="mt-1 text-xs text-muted-foreground">{t(($) => $.prompts.prompt_hint)}</p>
+        </div>
+        <Textarea
+          id="workspace-prompt"
+          value={prompt}
+          onChange={(event) => setPrompt(event.target.value)}
+          placeholder={t(($) => $.prompts.prompt_placeholder)}
           disabled={!canManage || saving}
+          aria-invalid={overLimit}
+          className={cn("min-h-80 resize-y font-mono text-xs leading-relaxed", overLimit && "border-destructive")}
         />
-        <PromptEditor
-          value="delta"
-          prompt={deltaPrompt}
-          onChange={setDeltaPrompt}
-          label={t(($) => $.prompts.delta_label)}
-          hint={t(($) => $.prompts.delta_hint)}
-          placeholder={t(($) => $.prompts.delta_placeholder)}
-          disabled={!canManage || saving}
-        />
-      </Tabs>
+        <p className={cn("text-right text-xs tabular-nums text-muted-foreground", overLimit && "text-destructive")}>
+          {t(($) => $.prompts.character_count, { count: length, max: MAX_LENGTH })}
+        </p>
+      </div>
 
       <div className="flex items-center justify-between gap-4 border-t pt-4">
         <p className="text-xs text-muted-foreground">
@@ -174,6 +167,8 @@ function PromptSettingsEditor({
   );
 }
 
+type TemplateBlock = "instructions" | "input";
+
 function PromptTemplateDialog({
   open,
   onOpenChange,
@@ -184,26 +179,40 @@ function PromptTemplateDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  template: { bootstrap: string; delta: string } | null;
+  template: PlatformPromptTemplatePreview | null;
   loading: boolean;
   failed: boolean;
   onRetry: () => void;
 }) {
   const { t } = useT("settings");
-  const [mode, setMode] = useState<"bootstrap" | "delta">("bootstrap");
-  const [copiedMode, setCopiedMode] = useState<"bootstrap" | "delta" | null>(null);
-  const prompt = template?.[mode] ?? "";
-  const unavailable = failed || (!loading && !prompt);
+  const [copiedBlock, setCopiedBlock] = useState<TemplateBlock | null>(null);
+  const unavailable = failed || (!loading && !template?.instructions);
 
-  async function copyPrompt() {
-    if (!prompt) return;
-    if (await copyText(prompt)) {
-      setCopiedMode(mode);
-      setTimeout(() => setCopiedMode(null), 1_500);
+  async function copyBlock(block: TemplateBlock) {
+    const text = template?.[block];
+    if (!text) return;
+    if (await copyText(text)) {
+      setCopiedBlock(block);
+      setTimeout(() => setCopiedBlock(null), 1_500);
     } else {
       toast.error(t(($) => $.prompts.copy_failed));
     }
   }
+
+  const blocks: { block: TemplateBlock; title: string; hint: string; label: string }[] = [
+    {
+      block: "instructions",
+      title: t(($) => $.prompts.template_instructions_title),
+      hint: t(($) => $.prompts.template_instructions_hint),
+      label: t(($) => $.prompts.template_instructions_label),
+    },
+    {
+      block: "input",
+      title: t(($) => $.prompts.template_input_title),
+      hint: t(($) => $.prompts.template_input_hint),
+      label: t(($) => $.prompts.template_input_label),
+    },
+  ];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -216,88 +225,43 @@ function PromptTemplateDialog({
           <div className="flex min-h-0 items-center justify-center">
             <Loader2 className="size-5 animate-spin text-muted-foreground" />
           </div>
-        ) : unavailable ? (
+        ) : unavailable || !template ? (
           <div className="flex min-h-0 flex-col items-center justify-center gap-3">
             <p className="text-sm text-destructive">{t(($) => $.prompts.template_load_failed)}</p>
             <Button variant="outline" size="sm" onClick={onRetry}>{t(($) => $.prompts.retry)}</Button>
           </div>
         ) : (
-          <Tabs
-            value={mode}
-            onValueChange={(value) => setMode(value === "delta" ? "delta" : "bootstrap")}
-            className="min-h-0 overflow-hidden"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <TabsList>
-                <TabsTrigger value="bootstrap">{t(($) => $.prompts.bootstrap_tab)}</TabsTrigger>
-                <TabsTrigger value="delta">{t(($) => $.prompts.delta_tab)}</TabsTrigger>
-              </TabsList>
-              <Button variant="outline" size="sm" onClick={() => void copyPrompt()}>
-                {copiedMode === mode ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-                {copiedMode === mode ? t(($) => $.prompts.copied) : t(($) => $.prompts.copy)}
-              </Button>
-            </div>
-            <TabsContent value="bootstrap" className="mt-3 min-h-0 overflow-auto border-t bg-muted/30">
-              <pre
-                aria-label={t(($) => $.prompts.bootstrap_preview_label)}
-                className="min-w-max p-4 font-mono text-xs leading-relaxed whitespace-pre"
-              >
-                {template?.bootstrap}
-              </pre>
-            </TabsContent>
-            <TabsContent value="delta" className="mt-3 min-h-0 overflow-auto border-t bg-muted/30">
-              <pre
-                aria-label={t(($) => $.prompts.delta_preview_label)}
-                className="min-w-max p-4 font-mono text-xs leading-relaxed whitespace-pre"
-              >
-                {template?.delta}
-              </pre>
-            </TabsContent>
-          </Tabs>
+          <div className="min-h-0 space-y-6 overflow-y-auto">
+            {blocks.map(({ block, title, hint, label }) => (
+              <section key={block} className="space-y-2">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium">{title}</h3>
+                    <p className="mt-0.5 text-xs text-muted-foreground">{hint}</p>
+                    {template.sha256[block] && (
+                      <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground/80" title={template.sha256[block]}>
+                        {t(($) => $.prompts.template_sha256, { hash: template.sha256[block] })}
+                      </p>
+                    )}
+                  </div>
+                  <Button variant="outline" size="sm" className="shrink-0" onClick={() => void copyBlock(block)}>
+                    {copiedBlock === block ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+                    {copiedBlock === block ? t(($) => $.prompts.copied) : t(($) => $.prompts.copy)}
+                  </Button>
+                </div>
+                <div className="overflow-x-auto rounded-md border bg-muted/30">
+                  <pre
+                    aria-label={label}
+                    className="min-w-max p-4 font-mono text-xs leading-relaxed whitespace-pre"
+                  >
+                    {template[block]}
+                  </pre>
+                </div>
+              </section>
+            ))}
+          </div>
         )}
       </DialogContent>
     </Dialog>
-  );
-}
-
-function PromptEditor({
-  value,
-  prompt,
-  onChange,
-  label,
-  hint,
-  placeholder,
-  disabled,
-}: {
-  value: string;
-  prompt: string;
-  onChange: (value: string) => void;
-  label: string;
-  hint: string;
-  placeholder: string;
-  disabled: boolean;
-}) {
-  const { t } = useT("settings");
-  const length = [...prompt].length;
-  const overLimit = length > MAX_LENGTH;
-  return (
-    <TabsContent value={value} className="mt-5 space-y-3">
-      <div>
-        <label htmlFor={`workspace-${value}-prompt`} className="text-sm font-medium">{label}</label>
-        <p className="mt-1 text-xs text-muted-foreground">{hint}</p>
-      </div>
-      <Textarea
-        id={`workspace-${value}-prompt`}
-        value={prompt}
-        onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder}
-        disabled={disabled}
-        aria-invalid={overLimit}
-        className={cn("min-h-80 resize-y font-mono text-xs leading-relaxed", overLimit && "border-destructive")}
-      />
-      <p className={cn("text-right text-xs tabular-nums text-muted-foreground", overLimit && "text-destructive")}>
-        {t(($) => $.prompts.character_count, { count: length, max: MAX_LENGTH })}
-      </p>
-    </TabsContent>
   );
 }

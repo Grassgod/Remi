@@ -42,6 +42,15 @@ describe("ProjectSchema", () => {
     }).archived_at).toBeNull();
   });
 
+  it("tolerates the deprecated delta_instructions field whether present, empty, or missing", () => {
+    expect(ProjectSchema.parse({ ...project, instructions: "Test first.", delta_instructions: "" })).toMatchObject({
+      instructions: "Test first.",
+      delta_instructions: "",
+    });
+    expect(ProjectSchema.parse({ ...project, instructions: "Test first." }).delta_instructions).toBe("");
+    expect(ProjectSchema.parse({ ...project, delta_instructions: null }).delta_instructions).toBe("");
+  });
+
   it("rejects rows without stable identity fields", () => {
     expect(ProjectSchema.safeParse({ title: "Missing id" }).success).toBe(false);
   });
