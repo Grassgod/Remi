@@ -5,6 +5,7 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import type { RepoSpec } from "@daemon/contracts/types.js";
 import { createLogger } from "@shared/logger.js";
 import { withoutRepositoryEnvironment } from "../workspace/git-ops.js";
+import { renameReadOnlyDirectory } from "../workspace/read-only-rename.js";
 import {
   appendGitCredentialBrokerEnv,
   preferredHttpsCloneUrl,
@@ -385,7 +386,9 @@ export class MultiremiRepoCache {
           throw new Error(`snapshot extraction failed${error ? `: ${error}` : ""}`);
         }
         makeTreeReadOnly(temporaryPath);
-        renameSync(temporaryPath, snapshotPath);
+        // A crash before the root regains 0555 at snapshotPath is repaired by
+        // the reuse branch above, which re-protects the tree under this lock.
+        renameReadOnlyDirectory(temporaryPath, snapshotPath);
         published = true;
         // Relative links survive the rename; absolute links must also remain
         // contained at the published location, not point back into staging.
