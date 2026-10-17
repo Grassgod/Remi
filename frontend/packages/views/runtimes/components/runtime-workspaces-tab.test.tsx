@@ -171,17 +171,17 @@ it("names Chat's unbound choice by what it does and opens from the keyboard", as
   const user = userEvent.setup();
   const onChange = vi.fn();
   show(<WorkLocationPicker wsId="ws-1" value={null} onChange={onChange} surface="chat" />);
-  const trigger = screen.getByRole("button", { name: "Work location: Don't pull code" });
+  const trigger = screen.getByRole("button", { name: "Work location: No project" });
   // The whole short label shows; the tooltip also says what it means.
-  expect(trigger).toHaveTextContent("Don't pull code");
-  expect(trigger).toHaveAttribute("title", "Don't pull code\nUses this chat's own folder");
+  expect(trigger).toHaveTextContent("No project");
+  expect(trigger).toHaveAttribute("title", "No project\nWorks in this chat's own folder; pulls no code");
   expect(trigger.parentElement?.className).toContain("shrink-0");
   expect(trigger.className).not.toContain("-mx-1");
   trigger.focus();
   await user.keyboard("{Enter}");
-  expect(await screen.findByText(/^No code is pulled by default\./)).toBeInTheDocument();
+  expect(await screen.findByText(/^By default there is no project:/)).toBeInTheDocument();
   expect(screen.queryByText("Choose a project or a local directory for this task.")).not.toBeInTheDocument();
-  expect(screen.getByRole("menuitem", { name: /Don't pull code/ })).toHaveTextContent("Uses this chat's own folder");
+  expect(screen.getByRole("menuitem", { name: /No project/ })).toHaveTextContent("Works in this chat's own folder; pulls no code");
   expect(screen.queryByRole("menuitem", { name: "Automatic" })).not.toBeInTheDocument();
   await user.click(await screen.findByRole("menuitem", { name: "Remi" }));
   expect(onChange).toHaveBeenCalledWith({ project_id: "project-1", runtime_workspace_id: null });
@@ -210,5 +210,5 @@ it("keeps the Issue surface's Automatic choice unchanged", async () => {
   await user.click(screen.getByRole("button", { name: "Work location: Automatic" }));
   expect(await screen.findByText("Choose a project or a local directory for this task.")).toBeInTheDocument();
   expect(screen.getByRole("menuitem", { name: "Automatic" })).toBeInTheDocument();
-  expect(screen.queryByText("Uses this chat's own folder")).not.toBeInTheDocument();
+  expect(screen.queryByText("Works in this chat's own folder; pulls no code")).not.toBeInTheDocument();
 });

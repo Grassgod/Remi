@@ -32,9 +32,9 @@ export function WorkLocationPicker({ wsId, projectId = null, value, onChange, di
   /** Detail sidebars use the full value column and show long names on multiple lines. */
   wrapLabel?: boolean;
   /**
-   * Chat sits in the composer footer and names its unbound choice by what it
-   * does: an unbound Chat pulls no code. Issues keep 「自动安排」, whose runs
-   * may still prepare repositories.
+   * Chat sits in the composer footer and calls its unbound choice 「无项目」,
+   * described as pulling no code. Issues keep 「自动安排」, whose runs may
+   * still prepare repositories.
    */
   surface?: "task" | "chat";
 }) {

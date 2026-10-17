@@ -346,7 +346,7 @@ describe("ChatWindow plain HTTP sends", () => {
 describe("ChatWindow project settings", () => {
   it("replaces a project draft with a fixed local working directory", async () => {
     const { store } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "Work location: Don't pull code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: No project" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
     expect(store.getState().draftProjectId).toBe("project-a");
     fireEvent.click(screen.getByRole("button", { name: "Work location: Remi" }));
@@ -361,7 +361,7 @@ describe("ChatWindow project settings", () => {
 
   it("replaces a local directory draft with a project without sending both bindings", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Work location: Don't pull code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: No project" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: /Local workbench/ }));
     fireEvent.click(screen.getByRole("button", { name: "Work location: Local workbench" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
@@ -371,7 +371,7 @@ describe("ChatWindow project settings", () => {
 
   it("creates a conversation with the selected draft project", async () => {
     const { store } = mount();
-    fireEvent.click(screen.getByRole("button", { name: "Work location: Don't pull code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: No project" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
     expect(screen.getByRole("button", { name: "Work location: Remi" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
@@ -392,10 +392,10 @@ describe("ChatWindow project settings", () => {
 
   it("can clear a project draft before creating a pure chat", async () => {
     mount();
-    fireEvent.click(screen.getByRole("button", { name: "Work location: Don't pull code" }));
+    fireEvent.click(screen.getByRole("button", { name: "Work location: No project" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
     fireEvent.click(screen.getByRole("button", { name: "Work location: Remi" }));
-    fireEvent.click(await screen.findByRole("menuitem", { name: /Don't pull code/ }));
+    fireEvent.click(await screen.findByRole("menuitem", { name: /No project/ }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
     // A started chat with nothing bound shows no location: the footer would
@@ -464,7 +464,7 @@ describe("ChatWindow project settings", () => {
     act(() => store.getState().setDraftProjectId("project-b"));
     fireEvent.click(screen.getByRole("button", { name: "New chat" }));
     expect(store.getState().draftProjectId).toBeNull();
-    expect(screen.getByRole("button", { name: "Work location: Don't pull code" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Work location: No project" })).toBeEnabled();
   });
 });
 
@@ -472,13 +472,13 @@ describe("ChatWindow work location in the composer footer", () => {
   it("offers a new chat's location beside the agent, with no row of its own", async () => {
     mount();
     const footer = screen.getByTestId("composer-footer");
-    const picker = within(footer).getByRole("button", { name: "Work location: Don't pull code" });
+    const picker = within(footer).getByRole("button", { name: "Work location: No project" });
     expect(picker).toBeEnabled();
     // The only picker on the page is the footer's.
     expect(screen.getAllByRole("button", { name: /^Work location:/ })).toEqual([picker]);
     fireEvent.click(picker);
-    expect(await screen.findByText(/No code is pulled by default/)).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Don't pull code/ })).toHaveTextContent("Uses this chat's own folder");
+    expect(await screen.findByText(/By default there is no project/)).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /No project/ })).toHaveTextContent("Works in this chat's own folder; pulls no code");
   });
 
   it("shows a started chat's bound location read-only in the floating window", async () => {
@@ -499,9 +499,9 @@ describe("ChatWindow work location in the composer footer", () => {
     expect(within(footer).queryByRole("button", { name: /^Work location:/ })).not.toBeInTheDocument();
   });
 
-  it("starts the next new chat at Don't pull code after a bound chat is created and deleted", async () => {
+  it("starts the next new chat at No project after a bound chat is created and deleted", async () => {
     const { store } = mountFloatingOpen(true, null);
-    fireEvent.click(within(screen.getByTestId("composer-footer")).getByRole("button", { name: "Work location: Don't pull code" }));
+    fireEvent.click(within(screen.getByTestId("composer-footer")).getByRole("button", { name: "Work location: No project" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: /Local workbench/ }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
@@ -509,7 +509,7 @@ describe("ChatWindow work location in the composer footer", () => {
     expect(store.getState().draftRuntimeWorkspaceId).toBeNull();
     // useDeleteChatSession and chat:session_deleted clear the active chat.
     act(() => store.getState().setActiveSession(null));
-    expect(await within(screen.getByTestId("composer-footer")).findByRole("button", { name: "Work location: Don't pull code" })).toBeEnabled();
+    expect(await within(screen.getByTestId("composer-footer")).findByRole("button", { name: "Work location: No project" })).toBeEnabled();
   });
 });
 
