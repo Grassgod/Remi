@@ -247,6 +247,30 @@ export class HubRingBuffer {
   }
 
   /**
+   * Replace the retained frame at `seq` with a newer whole row.
+   *
+   * An `entry` re-emitted at a sequence the ring already holds carries the full
+   * row (a Chat turn card that changed state, for instance), so unlike a patch it
+   * can stand in for the retained frame and a later replay serves it directly.
+   * A stale position stays stale: a patch the ring cannot rebuild may be newer.
+   *
+   * Returns false when the ring does not hold that sequence or it is stale.
+   */
+  replace(stream: HubRingStream, frame: HubFrame): boolean {
+    if (stream.staleSeqs.has(frame.seq)) return false;
+    const index = stream.entries.findIndex((entry) => entry.frame.seq === frame.seq);
+    if (index < 0) return false;
+    const { serialized, bytes } = serializeHubFrame(frame);
+    const previous = stream.entries[index]!;
+    stream.entries[index] = { frame: freezeHubFrame(frame), serialized, bytes };
+    stream.bytes += bytes - previous.bytes;
+    this.bytes += bytes - previous.bytes;
+    this.trim(stream);
+    this.touch(stream);
+    return true;
+  }
+
+  /**
    * Drop the retained window and restart it one frame before `seq`.
    *
    * Used only when a hole could not be closed: without this the stream would keep

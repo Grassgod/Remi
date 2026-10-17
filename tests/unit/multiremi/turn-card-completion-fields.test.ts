@@ -20,6 +20,9 @@ import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.j
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { traceBackfillBackends, type OpenedStore } from "./trace-backfill-backends.js";
+import { createHub } from "@multiremi/api/hub/hub-core.js";
+import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+import type { HubFrame, HubStreamKey } from "@multiremi/contracts/live-hub.js";
 
 const TIMEOUT = 60_000;
 const backends = await traceBackfillBackends("cardfields");
@@ -292,6 +295,43 @@ for (const backend of backends) {
         expect(replay.ok).toBe(true);
         expect(card(world, sent.task.id).revision).toBe(after.revision);
         expect(world.db.query("SELECT CAST(COUNT(*) AS INTEGER) AS n FROM multiremi_conversation_log WHERE session_id=? AND kind='turn'").get(chat.id).n).toBe(1);
+      });
+    }, TIMEOUT);
+
+    it("the live hub forwards the finished chat card to a subscriber that holds its hidden marker", async () => {
+      await withWorld(backend, async (world) => {
+        const scheduled: (() => void)[] = [];
+        const hub = createHub({ transport: createLocalHubTransport(), fill: null, scheduleFlush: (callback) => { scheduled.push(callback); } });
+        const flush = () => { while (scheduled.length > 0) scheduled.shift()!(); };
+        // Wired the way the API server wires its own hub.
+        const unsubscribe = world.store.subscribeConversationLog({ onEntry: (sessionId, payload) => {
+          hub.onEntry(sessionId, "target_seq" in payload ? { ...payload, session_id: sessionId } : payload);
+        } });
+        try {
+          const chat = world.store.createChatSession({ agentId: world.agentId, workspaceId: "local", creatorId: "local" });
+          const frames: HubFrame[] = [];
+          hub.subscribeWithSink(`log:${chat.id}` as HubStreamKey, 1, { getBufferedAmount: () => 0, send: (batch) => { frames.push(...batch); } });
+          const sent = world.store.sendChatMessage(chat.id, { content: "hello" });
+          expect(world.store.claimTask(world.runtimeId)?.id).toBe(sent.task.id);
+          world.store.startTask(sent.task.id);
+          flush();
+          const running = card(world, sent.task.id);
+          // The page holds the card's position as a hidden marker while the turn runs.
+          expect(frames.filter((frame) => frame.seq === running.seq).at(-1)?.payload).toMatchObject({ visibility: "hidden" });
+          const reply = await serverReport(world.store, world.runtimeId, "turn.complete",
+            turnCompletionPayload(world, sent.task.id, "chat answer"));
+          expect(reply.ok).toBe(true);
+          flush();
+          const message = world.store.listChatMessages(chat.id).find((row) => row.taskId === sent.task.id && row.role === "assistant")!;
+          expect(frames.some((frame) => frame.kind === "entry" && (frame.payload as { id?: string }).id === message.id)).toBe(true);
+          // The finished card reaches the subscriber live, at its old position.
+          expect(frames.filter((frame) => frame.seq === running.seq).at(-1)).toMatchObject({ kind: "entry", payload: {
+            id: running.id, kind: "turn", visibility: "shown", metadata: { status: "completed", final_entry_id: message.id, process_item_count: 4 },
+          } });
+        } finally {
+          unsubscribe();
+          hub.shutdown();
+        }
       });
     }, TIMEOUT);
 

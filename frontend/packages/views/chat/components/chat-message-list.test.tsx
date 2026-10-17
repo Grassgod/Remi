@@ -809,6 +809,35 @@ describe("finished turn steps fold (MUL-472)", () => {
     } finally { view.unmount(); client.clear(); }
   });
 
+  it("renders the fold and its header when the finished card lands after the reply, without a remount", async () => {
+    const getTaskTrace = vi.fn();
+    setApiInstance({ getTaskTrace, getTurn: vi.fn() } as never);
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+    const parse = (row: Record<string, unknown>) => SessionLogEntrySchema.parse({ session_id: "cs-1", revision: 1, body_html: null, render_version: null, ...row });
+    // A second turn: the first one finished long ago, the second one's reply
+    // streamed in while its card (seq 4) was still the hidden running marker.
+    const replica = new MemorySessionReplica({ "cs-1": { entries: [
+      { seq: 1, id: "msg_1", kind: "message", sender_type: "member", message_kind: "request", body_md: "First" },
+      { seq: 2, id: "msg_2", kind: "message", sender_type: "agent", message_kind: "final", task_id: "turn_1", body_md: "First answer" },
+      { seq: 3, id: "msg_3", kind: "message", sender_type: "member", message_kind: "request", body_md: "Second" },
+      { seq: 5, id: "msg_5", kind: "message", sender_type: "agent", message_kind: "final", task_id: "turn_2", body_md: "Second answer" },
+    ].map(parse) } });
+    const view = render(<QueryClientProvider client={client}><ChatMessageList sessionId="cs-1"
+      replica={replica} optimisticRows={[]} pendingTask={{ supports_queue: true }} availability={undefined} /></QueryClientProvider>);
+    try {
+      const reply = () => view.container.querySelector<HTMLElement>('[data-perf-key="msg_5"]')!;
+      expect(reply()).toHaveTextContent("Second answer");
+      expect(reply().querySelector("[data-chat-steps]")).toBeNull();
+      act(() => replica.append("cs-1", [parse({ seq: 4, id: "turn_2", kind: "turn", task_id: "attempt_2", revision: 6, body_md: "",
+        metadata: { turn_id: "turn_2", status: "completed", final_entry_id: "msg_5", process_item_count: 3, worked_ms: 12_000, elapsed_ms: 15_000 } })]));
+      await waitFor(() => expect(reply().querySelector('[data-chat-steps="finished"] [data-chat-steps-header]')).not.toBeNull());
+      // The card adds no row of its own; it folds above the reply it points at.
+      expect(view.container.querySelector('[data-perf-key="turn_2"]')).toBeNull();
+      expect(reply()).toHaveTextContent("Second answer");
+      expect(getTaskTrace).not.toHaveBeenCalled();
+    } finally { view.unmount(); client.clear(); }
+  });
+
   it("shows no fold for a turn that counted no process items", () => {
     setApiInstance({ getTaskTrace: vi.fn() } as never);
     const { view, client } = renderRows([
