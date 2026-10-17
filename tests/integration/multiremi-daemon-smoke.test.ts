@@ -31,6 +31,7 @@ import { MultiremiRepoCache } from "@multiremi/repo-cache.js";
 import { ManualDaemonProtocolClock } from "@multiremi/api/daemon-protocol/clock.js";
 import { isTraceEvent, type TraceEvent, type TraceItem } from "@multiremi/contracts/trace.js";
 import { applyTurnTraceEvents, EMPTY_TURN_TRACE } from "@shared/turn-trace.js";
+import { PROVIDER_INSTRUCTIONS_MARKER } from "@daemon/agent-runtime/workspace/runtime-context.js";
 
 /** The daemon's stored turn + items trace of a task, folded. */
 function foldedTrace(events: ReadonlyArray<{ seq: number; type: string }>) {
@@ -134,12 +135,16 @@ describe("Bun Multiremi daemon smoke", () => {
         onSend: (prompt, options) => {
           sends++;
           expect(options.cwd).toBe(sideWorkDir ?? cwd);
+          const notes = providerInstructions(options);
           if (sideWorkDir) {
             expect(options.env?.LOCAL_DEPENDENCY).toBeUndefined();
-            expect(prompt).not.toContain("## Runtime Workspace");
+            expect(notes).not.toContain("## Runtime Workspace");
+            expect(notes).not.toContain("PRIVATE_PARENT_CONTEXT");
           } else {
             expect(options.env?.LOCAL_DEPENDENCY).toBe("retained");
-            expect(readFileSync(join(options.env!.CLAUDE_CONFIG_DIR!, "CLAUDE.md"), "utf8")).toContain("PRIVATE_PARENT_CONTEXT");
+            // ADR 0023: the workspace's local context follows Remi's notes in the provider home's AGENTS.md.
+            expect(notes).toContain("## Runtime Workspace");
+            expect(notes).toContain("PRIVATE_PARENT_CONTEXT");
           }
           expect(prompt).not.toContain("PRIVATE_PARENT_CONTEXT");
           expect(existsSync(join(cwd, ".multiremi"))).toBe(false);
@@ -1378,7 +1383,7 @@ describe("Bun Multiremi daemon smoke", () => {
     const workspace = join(workspaces, "work", issue.id);
     const release = deferred<void>();
     const bothStarted = deferred<void>();
-    const executions: Array<{ cwd: string; workspaceRoot: string | undefined; prompt: string; context: string }> = [];
+    const executions: Array<{ cwd: string; workspaceRoot: string | undefined; prompt: string; instructions: string; context: string }> = [];
     const homes = new Set<string>();
     const daemon = new MultiremiDaemon({
       sshMeshManager: disabledSshMeshRuntime(),
@@ -1391,7 +1396,7 @@ describe("Bun Multiremi daemon smoke", () => {
         onSend: async (prompt) => {
           const contextPath = join(options.cwd!, ".multiremi", "task.json");
           const context = readFileSync(contextPath, "utf8");
-          executions.push({ cwd: options.cwd!, workspaceRoot: options.env!.MULTIREMI_WORKSPACE_ROOT, prompt, context });
+          executions.push({ cwd: options.cwd!, workspaceRoot: options.env!.MULTIREMI_WORKSPACE_ROOT, prompt, instructions: providerInstructions(options), context });
           homes.add(options.env!.CLAUDE_CONFIG_DIR!);
           if (executions.length === 2) bothStarted.resolve();
           const read = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${tasks[0]!.issueSessionId}/messages?from=0&to=${store.getConversationLogHead(tasks[0]!.issueSessionId!)!.headSeq}`, {
@@ -1450,10 +1455,14 @@ describe("Bun Multiremi daemon smoke", () => {
         expect(execution.workspaceRoot).toBe(workspace);
         expect(existsSync(join(execution.cwd, "repo"))).toBe(false);
         expect(existsSync(join(execution.cwd, "wiki"))).toBe(false);
-        expect(execution.prompt).toContain(`at \`${join(workspace, "repo")}\` on branch \`${branch}\``);
-        expect(execution.prompt).toContain(`Shared code root: \`${workspace}\``);
-        expect(execution.prompt).toContain(`Project Wiki is materialized in \`$MULTIREMI_WORKSPACE_ROOT/wiki\` (absolute path \`${join(workspace, "wiki")}\`)`);
-        expect(execution.prompt).not.toContain("`./wiki`");
+        // ADR 0023: the paths are session notes in each lane's own AGENTS.md, not part of the turn input.
+        expect(execution.instructions).toContain(`at \`${join(workspace, "repo")}\` on branch \`${branch}\``);
+        expect(execution.instructions).toContain(`Shared code root: \`${workspace}\``);
+        expect(execution.instructions).toContain(`Project Wiki is materialized in \`$MULTIREMI_WORKSPACE_ROOT/wiki\` (absolute path \`${join(workspace, "wiki")}\`)`);
+        expect(execution.instructions).not.toContain("`./wiki`");
+        expect(execution.prompt).not.toContain("Shared code root");
+        // The other delegation's wake arrives blanked: unread context to read, not this turn's request.
+        expect(execution.prompt).toMatch(/^\[Local User\] (one|two)\n\n\(1 earlier unread message isn't shown here\. /);
       }
       expect(store.getIssueWorkspace(issue.id)?.rootPath).toBe(workspace);
       release.resolve();
@@ -1684,9 +1693,11 @@ describe("Bun Multiremi daemon smoke", () => {
 
     let checkoutPath = "";
     const prompts: string[] = [];
+    const instructions: string[] = [];
     const providerFactory: MultiremiDaemonProviderFactory = (options) => ({
       async *sendStream(message) {
         prompts.push(message);
+        instructions.push(providerInstructions(options));
         const env = options.env ?? {};
         const response = await fetch(`http://127.0.0.1:${env.MULTIREMI_DAEMON_PORT}/repo/checkout`, {
           method: "POST",
@@ -1735,9 +1746,10 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(readFileSync(join(checkoutPath, "README.md"), "utf8")).toContain("hello from repo");
       expect(execFileSync("git", ["-C", checkoutPath, "branch", "--show-current"], { encoding: "utf8" }).trim().startsWith("agent/repo-claude/")).toBe(true);
       expect(existsSync(prepareCommitMsgHookPath(checkoutPath))).toBe(true);
-      expect(prompts[0]).toContain("## Available Repositories");
-      expect(prompts[0]).toContain("remi repo checkout <url>");
-      expect(prompts[0]).toContain(sourceRepo);
+      expect(instructions[0]).toContain("## Available Repositories");
+      expect(instructions[0]).toContain("remi repo checkout <url>");
+      expect(instructions[0]).toContain(sourceRepo);
+      expect(prompts[0]).not.toContain("## Available Repositories");
       expect(store.getTask(task.id)?.status).toBe("completed");
       expect(store.getTask(task.id)?.result).toContain("Checked out");
     } finally {
@@ -1776,6 +1788,7 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
     const prompts: string[] = [];
+    const instructions: string[] = [];
     let checkoutPath = "";
     let turn = 0;
     const providerFactory: MultiremiDaemonProviderFactory = (options) => {
@@ -1788,6 +1801,7 @@ describe("Bun Multiremi daemon smoke", () => {
       return {
         async *sendStream(message) {
           prompts.push(message);
+          instructions.push(providerInstructions(options));
           if (current === 1) {
             const response = await fetch(`http://127.0.0.1:${options.env?.MULTIREMI_DAEMON_PORT}/repo/checkout`, {
               method: "POST",
@@ -1840,12 +1854,14 @@ describe("Bun Multiremi daemon smoke", () => {
       await runDaemonOnce();
       expect(store.getTask(hello.task.id)?.status).toBe("completed");
       expect(existsSync(join(repoCacheRoot, "local"))).toBe(false);
-      expect(prompts[0]).toContain("## Remi Context");
-      expect(prompts[0]).toContain("`remi context`");
-      expect(prompts[0]).toContain("`remi repo list|get|search`");
-      expect(prompts[0]).not.toContain("## Available Repositories");
-      expect(prompts[0]).not.toContain(sourceRepo);
-      expect(prompts[0]).not.toContain(otherRepo);
+      // ADR 0023: a private Chat turn is the user's text; Remi's notes are in the provider home's AGENTS.md.
+      expect(prompts[0]).toBe("你好");
+      expect(instructions[0]).toContain("## Remi CLI");
+      expect(instructions[0]).toContain("`remi context`");
+      expect(instructions[0]).toContain("`remi repo list|get|search`");
+      expect(instructions[0]).not.toContain("## Available Repositories");
+      expect(instructions[0]).not.toContain(sourceRepo);
+      expect(instructions[0]).not.toContain(otherRepo);
 
       const checkout = store.sendChatMessage(chat.id, { body: "Check out only the primary repository" });
       runTurnExecutionMutation(db!, "UPDATE multiremi_turn_execution_records SET priority = 90 WHERE id = ?", [checkout.task.id]);
@@ -1859,8 +1875,8 @@ describe("Bun Multiremi daemon smoke", () => {
       await runDaemonOnce();
       expect(store.getTask(issueTask.id)?.status).toBe("completed");
       expect(existsSync(join(repoCacheRoot, "local"))).toBe(true);
-      expect(prompts[2]).toContain("## Available Repositories");
-      expect(prompts[2]).toContain(sourceRepo);
+      expect(instructions[2]).toContain("## Available Repositories");
+      expect(instructions[2]).toContain(sourceRepo);
       expect(store.getIssueWorkspace(issue.id)?.repos[0]).toMatchObject({ status: "ready" });
     } finally {
       now.mockRestore();
@@ -1893,12 +1909,12 @@ describe("Bun Multiremi daemon smoke", () => {
       port: 0,
     });
 
-    const prompts: string[] = [];
+    const instructions: string[] = [];
     const providerFactory = messageProviderFactory({
       text: "worked in checked-out repo",
       sessionId: "sess-auto-repo",
       requestId: "req-auto-repo",
-      onSend: (message) => { prompts.push(message); },
+      onSend: (_message, options) => { instructions.push(providerInstructions(options)); },
     });
 
     try {
@@ -1923,9 +1939,9 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(existsSync(join(worktree, "README.md"))).toBe(true);
       const branch = gitOutput(worktree, ["branch", "--show-current"]);
       expect(branch).toBe(`agent/${issue.key}`);
-      expect(prompts[0]).toContain("already checked out on the Issue branch");
-      expect(prompts[0]).toContain(`on branch \`${branch}\``);
-      expect(prompts[0]).not.toContain("For repositories without a path above");
+      expect(instructions[0]).toContain("already checked out on the Issue branch");
+      expect(instructions[0]).toContain(`on branch \`${branch}\``);
+      expect(instructions[0]).not.toContain("For repositories without a path above");
 
       expect(store.listIssueSessionResults(issue.id)).toHaveLength(0);
       expect(store.getIssueWorkspace(issue.id)).toMatchObject({
@@ -1971,7 +1987,7 @@ describe("Bun Multiremi daemon smoke", () => {
       hostname: "127.0.0.1",
       port: 0,
     });
-    const prompts: string[] = [];
+    const instructions: string[] = [];
 
     try {
       const daemon = new MultiremiDaemon({
@@ -1989,19 +2005,19 @@ describe("Bun Multiremi daemon smoke", () => {
           text: "reported unavailable repo",
           sessionId: "sess-repo-warning",
           requestId: "req-repo-warning",
-          onSend: (message) => { prompts.push(message); },
+          onSend: (_message, options) => { instructions.push(providerInstructions(options)); },
         }),
       });
 
       await daemon.start();
 
       expect(store.getTask(task.id)?.status).toBe("completed");
-      expect(prompts[0]).toContain("## Repository Availability Warnings");
-      expect(prompts[0]).toContain(sourceRepo);
-      expect(prompts[0]).toContain(unavailableRepo);
-      expect(prompts[0]).toContain("may use stale cached data");
-      expect(prompts[0]).toContain("checkout is unavailable");
-      expect(prompts[0]).toContain("Do not claim that you inspected its source code");
+      expect(instructions[0]).toContain("## Repository Availability Warnings");
+      expect(instructions[0]).toContain(sourceRepo);
+      expect(instructions[0]).toContain(unavailableRepo);
+      expect(instructions[0]).toContain("may use stale cached data");
+      expect(instructions[0]).toContain("checkout is unavailable");
+      expect(instructions[0]).toContain("Do not claim that you inspected its source code");
     } finally {
       server.stop(true);
     }
@@ -2053,7 +2069,7 @@ describe("Bun Multiremi daemon smoke", () => {
       hostname: "127.0.0.1",
       port: 0,
     });
-    const prompts: string[] = [];
+    const instructions: string[] = [];
 
     try {
       const daemon = new MultiremiDaemon({
@@ -2071,7 +2087,7 @@ describe("Bun Multiremi daemon smoke", () => {
           text: "triaged with degraded repos",
           sessionId: "sess-intake-degraded",
           requestId: "req-intake-degraded",
-          onSend: (message) => { prompts.push(message); },
+          onSend: (_message, options) => { instructions.push(providerInstructions(options)); },
         }),
       });
 
@@ -2079,9 +2095,9 @@ describe("Bun Multiremi daemon smoke", () => {
 
       // The intake round completes on the cached snapshot instead of failing.
       expect(store.getTask(task.id)?.status).toBe("completed");
-      expect(prompts[0]).toContain("## Repository Availability Warnings");
-      expect(prompts[0]).toContain("may use stale cached data");
-      expect(prompts[0]).toContain("checkout is unavailable");
+      expect(instructions[0]).toContain("## Repository Availability Warnings");
+      expect(instructions[0]).toContain("may use stale cached data");
+      expect(instructions[0]).toContain("checkout is unavailable");
       const workspace = store.getIssueWorkspace(issue.id);
       expect(workspace?.status).toBe("error");
       const statusByUrl = new Map((workspace?.repos ?? []).map((repo) => [repo.repoUrl, repo.status]));
@@ -2171,6 +2187,8 @@ describe("Bun Multiremi daemon smoke", () => {
     });
 
     const prompts: string[] = [];
+    const instructions: string[] = [];
+    const offeredInput = new Map<string, { from: number; to: number }>();
     const providerCwds: string[] = [];
     const providerHomes: Array<string | undefined> = [];
     const injectedMcpServers: unknown[] = [];
@@ -2187,9 +2205,10 @@ describe("Bun Multiremi daemon smoke", () => {
           ? "Second answer"
           : "Recovered answer";
       return {
-        async *sendStream(message, options) {
+        async *sendStream(message, sendOption) {
           prompts.push(message);
-          sendOptions.push(options ?? {});
+          instructions.push(providerInstructions(options));
+          sendOptions.push(sendOption ?? {});
           if (turn === 2) throw new Error("no conversation found for session sess-chat-2");
           yield {
             sessionUpdate: "agent_message_chunk",
@@ -2227,6 +2246,11 @@ describe("Bun Multiremi daemon smoke", () => {
       workspacesRoot,
       repoCacheRoot: join(workDir!, ".repo-cache"),
       providerFactory,
+      protocolClientOptions: { onFrame: frame => {
+        if (frame.type === "task.offer") {
+          offeredInput.set(String(frame.payload.attempt_id), { from: Number(frame.payload.input_from_seq), to: Number(frame.payload.input_to_seq) });
+        }
+      } },
       });
       try { await daemon.start(); }
       finally { await daemon.stopAndDrainTestWork(); }
@@ -2336,7 +2360,8 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(sendOptions).toHaveLength(4);
       expect(sendOptions[2]?.sessionId).toBe("sess-chat-2");
       expect(sendOptions[3]?.sessionId ?? null).toBeNull();
-      expect(prompts[3]).toContain("## Current Session Context");
+      // ADR 0023: no history JSONL is replayed; the fresh session's input names the cold-start range to read.
+      expect(prompts[3]).toContain("Read them before you answer: `remi message list");
       expect(prompts[3]).not.toContain(`"body":"Start the chat"`);
       expect(prompts[3]).not.toContain(`"body":"Second answer"`);
       expect(prompts[3]).not.toContain("你上次读到");
@@ -2350,8 +2375,9 @@ describe("Bun Multiremi daemon smoke", () => {
       expect(page.next_cursor).toBeNull();
       expect(page.entries.map((entry: any) => entry.body_md)).toContain("Start the chat");
       expect(prompts[3]?.match(/Recover from product history/g)).toHaveLength(1);
-      expect(prompts[3]).toContain("`remi context`");
-      expect(prompts[3]).not.toContain("## Available Repositories");
+      expect(instructions[3]).toContain("`remi context`");
+      expect(instructions[3]).not.toContain("## Available Repositories");
+      expect(prompts[3]).not.toContain("`remi context`");
       expect(store.listChatMessages(session.id).map((message) => message.role)).toEqual([
         "user",
         "assistant",
@@ -2368,15 +2394,17 @@ describe("Bun Multiremi daemon smoke", () => {
       await runDaemonOnce();
       expect(store.getTask(continued.task.id)?.status).toBe("completed");
       expect(sendOptions[4]?.sessionId).toBe("sess-chat-3");
-      expect(prompts[4]).toStartWith("# Delta Prompt");
+      expect(store.getTaskPrompt(continued.task.id)?.mode).toBe("delta");
+      // The resumed session keeps the same notes; only the new input changes.
+      expect(instructions[4]).toBe(instructions[3]!);
       // Its only unread message is inline in full: plain input, no range read, from the actual read high-water.
-      expect(prompts[4]).toContain("## Current Request\nContinue after cold recovery\n");
+      expect(prompts[4]).toBe("Continue after cold recovery");
       expect(prompts[4]).not.toContain(`remi message list ${session.id} --from`);
-      const continuedRange = prompts[4]!.match(/input seq \((\d+), (\d+)\]/)!;
-      expect(continuedRange[1]).toBe(range[3]);
+      const continuedRange = offeredInput.get(continued.task.id)!;
+      expect(continuedRange.from).toBe(Number(range[3]));
       const consumedTo = store.getTurnForAttempt(continued.task.id)!.input_to_seq;
       expect(Number.isSafeInteger(consumedTo)).toBe(true);
-      expect(Number(continuedRange[2])).toBe(consumedTo!);
+      expect(continuedRange.to).toBe(consumedTo!);
     } finally {
       unsubscribeRetries(); now.mockRestore();
       server.stop(true);
@@ -3984,6 +4012,20 @@ function messageProviderFactory(spec: {
       ...spec.response,
     }),
   });
+}
+
+/**
+ * ADR 0023: the session's fixed notes are the AGENTS.md the daemon writes into the provider
+ * home before every provider start; Claude reads it through a CLAUDE.md that only imports it.
+ */
+function providerInstructions(options: AcpProviderOptions): string {
+  const claudeHome = options.env?.CLAUDE_CONFIG_DIR;
+  const home = claudeHome ?? options.env?.CODEX_HOME;
+  if (!home) throw new Error("provider home is not set");
+  if (claudeHome) expect(readFileSync(join(claudeHome, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
+  const content = readFileSync(join(home, "AGENTS.md"), "utf8");
+  expect(content).toStartWith(`${PROVIDER_INSTRUCTIONS_MARKER}\n`);
+  return content;
 }
 
 function daemonRuntimeIdForTest(daemonId: string, provider: string): string {

@@ -83,7 +83,7 @@ describe("persisted inherited context diagnostics", () => {
     legacyDb.close();
   });
 
-  it("reports null before claim, then the actual inherited claim values rather than the untruncated own projection", async () => {
+  it("reports null before claim, then the bounds-only inherited claim values", async () => {
     const { store, runtime, agent, parent, side, task, app } = fixture(true);
     const path = `/api/sessions/${side.id}/inherited-context`;
     const before = await app.request(path, { headers });
@@ -119,7 +119,9 @@ describe("persisted inherited context diagnostics", () => {
     });
     expect(ownRange.status).toBe(200);
     expect(await ownRange.json()).toMatchObject({ entries: [], next_cursor: null });
-    expect(inherited.estimated_tokens).not.toBe(own.estimated_tokens);
+    // ADR 0023: the offer projection is bounds only, so nothing is projected or estimated for either Session.
+    expect(inherited.estimated_tokens).toBe(0);
+    expect(own.estimated_tokens).toBe(0);
     const budget = Math.floor(resolveProjectionTokenBudget({ provider: agent.provider, model: agent.model, degradeLevel: 0 }) * 0.4);
     expect(inherited.estimated_tokens).toBeLessThanOrEqual(budget);
     const stored = store.getTask(task.id)!;
@@ -316,7 +318,11 @@ describe("persisted inherited context diagnostics", () => {
     const inherited = second.inherited_session_projection;
     expect(inherited.omitted_events).toBe(0);
     expect(first.inherited_session_projection.omitted_events).toBe(0);
-    expect(inherited.estimated_tokens).not.toBe(first.inherited_session_projection.estimated_tokens);
+    // Bounds only (ADR 0023): both claims estimate nothing; the claims differ by task, agent, budget and time.
+    expect(inherited.estimated_tokens).toBe(0);
+    expect(first.inherited_session_projection.estimated_tokens).toBe(0);
+    expect(store.getTask(firstTask.id)!.inheritedProjectionTokenBudget)
+      .not.toBe(Math.floor(resolveProjectionTokenBudget({ provider: secondAgent.provider, model: secondAgent.model, degradeLevel: 0 }) * 0.4));
     const expected = {
       task_id: secondTask.id, agent_id: secondAgent.id, to_seq: inherited.to_seq,
       truncated: inherited.truncated, omitted_events: inherited.omitted_events,

@@ -3,6 +3,7 @@ import { runTurnExecutionMutation } from '@multiremi/store/turn-execution-record
 import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/postgres.js';
 import { beforeEach, expect, it, spyOn } from "bun:test";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { useTaskSessionInput } from "@multiremi/api/daemon-protocol/offer-budget.js";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { runMigrations } from "@multiremi/store/migrations.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
@@ -23,6 +24,35 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     const lane = () => f.store.getOrCreateSessionAgentLane(session.id, agent.id, `relay:${chat.id}`);
     const reports = () => f.store.listChatMessages(chat.id).filter(message => message.role === "system" && message.body.includes(issue.key));
     return { ...f, agent, issue, session, chat, runtime, lane, reports, legacyRows };
+  }
+
+  type BoundIssueLog = { session_id: string; from_seq: number; to_seq: number; next_seq: number; has_more: boolean; content_jsonl: string };
+  type UnreadRange = { type: string; session_id: string; from_seq: number; to_seq: number; unread_count: number; instruction: string };
+
+  /**
+   * The relay's bound Issue log as the offer sends it (ADR 0023): the claim's
+   * window, then the session input writes the Issue Session's unread range
+   * record into it in place of the log bodies.
+   */
+  function offeredBoundIssueLog(f: ReturnType<typeof setup>, taskId: string) {
+    const task = f.store.getTaskWithAgent(taskId)!;
+    const response = daemonTaskClaimResponse(f.store, task);
+    useTaskSessionInput(f.store, task, response);
+    const log = response.bound_issue_log as BoundIssueLog;
+    const lines = log.content_jsonl.split("\n");
+    return { log, lines, range: JSON.parse(lines[0]!) as UnreadRange };
+  }
+
+  /** The Issue Session log entry with this body; the range must reach it. */
+  function issueLogSeq(f: ReturnType<typeof setup>, body: string): number {
+    return f.store.listConversationLogEntries(f.session.id).find(entry => entry.body_md === body)!.seq;
+  }
+
+  function expectRangeCovers(range: UnreadRange, seqs: number[]) {
+    for (const seq of seqs) {
+      expect(seq).toBeGreaterThan(range.from_seq);
+      expect(seq).toBeLessThanOrEqual(range.to_seq);
+    }
   }
 
   function claimRelayAfterCompletedIssueRound(f: ReturnType<typeof setup>) {
@@ -52,14 +82,17 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
       expect(relay).toBeDefined();
       expect(f.lane()?.cursorSeq).toBe(0);
       expect(f.store.claimTask(f.runtime.id)?.id).toBe(relay.id);
-      const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
-        session_id: string; from_seq: number; to_seq: number; content_jsonl: string;
-      };
+      const { log, lines, range } = offeredBoundIssueLog(f, relay.id);
       expect(log.session_id).toBe(f.session.id);
       expect(log.from_seq).toBe(0);
       expect(log.to_seq).toBeGreaterThan(0);
-      expect(log.content_jsonl).toContain("inbox_toc");
-      expect(log.content_jsonl).toContain(`"status":"${status}"`);
+      // The offer carries the unread range and its read command, not the log itself.
+      expect(lines).toHaveLength(1);
+      expect(range).toMatchObject({ type: "unread_range", session_id: f.session.id, from_seq: 0, to_seq: log.to_seq });
+      expect(range.instruction).toContain(`remi message list ${f.session.id} --from 0 --to ${log.to_seq}`);
+      const round = f.store.listConversationLogEntries(f.session.id)
+        .find(entry => entry.kind === "turn" && entry.metadata.status === status)!;
+      expectRangeCovers(range, [round.seq]);
       expect(f.lane()?.cursorSeq).toBe(0);
       f.store.startTask(relay.id);
       f.store.completeTask(relay.id, { output: "Reported to Feishu" });
@@ -94,14 +127,12 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     f.store.completeTask(second.id, { output: "Second result" });
     const nextRelay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.status === "queued")!;
     f.store.claimTask(f.runtime.id);
-    const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
-      from_seq: number; to_seq: number; content_jsonl: string;
-    };
+    const { log: nextLog, range } = offeredBoundIssueLog(f, nextRelay.id);
     expect(nextLog.from_seq).toBe(0);
     expect(nextLog.to_seq).toBeGreaterThan(firstLog.to_seq);
-    expect(nextLog.content_jsonl).toContain("Second result");
-    expect(nextLog.content_jsonl).toContain("First result");
-    expect(JSON.parse(nextLog.content_jsonl.split("\n")[0]!).from_seq).toBe(0);
+    // Without a range read the cursor stayed put: the range replays both rounds.
+    expect(range).toMatchObject({ type: "unread_range", from_seq: 0, to_seq: nextLog.to_seq });
+    expectRangeCovers(range, [issueLogSeq(f, "First result"), issueLogSeq(f, "Second result")]);
   });
 
   it("keeps the relay cursor when claim log reading fails and replays the unread interval", () => {
@@ -124,16 +155,11 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(f.lane()?.cursorSeq).toBe(0);
 
     const nextRelay = claimRelayAfterCompletedIssueRound(f);
-    const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
-      from_seq: number; to_seq: number; content_jsonl: string;
-    };
+    const { log: nextLog, range } = offeredBoundIssueLog(f, nextRelay.id);
     expect(nextLog.from_seq).toBe(0);
     expect(nextLog.to_seq).toBeGreaterThan(toSeq);
-    const deliveredSeqs = nextLog.content_jsonl.split("\n")
-      .map(line => JSON.parse(line) as { type: string; seq?: number })
-      .filter(line => line.type === "session_event")
-      .map(line => line.seq);
-    expect(deliveredSeqs).toEqual(expect.arrayContaining(unreadSeqs));
+    expect(range).toMatchObject({ type: "unread_range", from_seq: 0, to_seq: nextLog.to_seq });
+    expectRangeCovers(range, unreadSeqs);
   });
 
   it("keeps the relay cursor when the claim delivery marker write fails", () => {
@@ -272,36 +298,32 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     f.store.completeTask(second.id, { output: "Second result" });
     const nextRelay = f.store.listTasks().find(task => task.chatSessionId === f.chat.id && task.status === "queued")!;
     f.store.claimTask(f.runtime.id);
-    const nextLog = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(nextRelay.id)!).bound_issue_log as {
-      from_seq: number; to_seq: number; content_jsonl: string;
-    };
+    const { log: nextLog, range } = offeredBoundIssueLog(f, nextRelay.id);
     expect(nextLog.from_seq).toBe(0);
     expect(nextLog.to_seq).toBeGreaterThan(firstLog.to_seq);
-    expect(nextLog.content_jsonl).toContain("First result");
-    expect(nextLog.content_jsonl).toContain("Second result");
+    expect(range).toMatchObject({ type: "unread_range", from_seq: 0, to_seq: nextLog.to_seq });
+    expectRangeCovers(range, [issueLogSeq(f, "First result"), issueLogSeq(f, "Second result")]);
   });
 
-  it("folds only expandable relay log bodies and keeps the full entry readable", () => {
+  it("keeps a long relay log body out of the offer and readable through the range", () => {
     const f = setup();
     const body = "Relay detail: " + "x".repeat(4_001);
     const entry = f.store.appendConversationLog({
       sessionId: f.session.id, kind: "message", authorType: "member", bodyMd: body,
     });
     const relay = claimRelayAfterCompletedIssueRound(f);
-    const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
-      content_jsonl: string;
-    };
-    const lines = log.content_jsonl.split("\n").map((line) => JSON.parse(line));
-    const projected = lines.find((line) => line.type === "session_event" && line.seq === entry.seq);
-    expect(projected).toMatchObject({
-      body_folded: true,
-      expand: `remi message get ${entry.id}`,
-    });
-    expect(projected.body).toBeUndefined();
+    const { log, lines, range } = offeredBoundIssueLog(f, relay.id);
+    // No log body rides in the offer (folded or not); the range points at the entry instead.
+    expect(lines).toHaveLength(1);
+    expect(log.content_jsonl).not.toContain("Relay detail");
+    expect(range).toMatchObject({ type: "unread_range", session_id: f.session.id, from_seq: 0, to_seq: log.to_seq });
+    expect(range.unread_count).toBeGreaterThanOrEqual(1);
+    expectRangeCovers(range, [entry.seq]);
+    expect(range.instruction).toContain(`remi message list ${f.session.id} --from 0 --to ${log.to_seq}`);
     expect(f.store.getConversationLogEntry(f.session.id, entry.seq)?.body_md).toBe(body);
   });
 
-  it("caps claimed Issue log rows at 100 and provides a continuation cursor", () => {
+  it("keeps a long Issue log out of the offer and points the range at the whole unread interval", () => {
     const f = setup();
     for (let index = 0; index < 110; index++) {
       f.store.createIssueComment(f.issue.id, {
@@ -315,14 +337,16 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     f.store.completeTask(task.id, { output: "Done" });
     const relay = f.store.listTasks().find(item => item.chatSessionId === f.chat.id && item.wakeSource === "platform_to_owner")!;
     f.store.claimTask(f.runtime.id);
-    const log = daemonTaskClaimResponse(f.store, f.store.getTaskWithAgent(relay.id)!).bound_issue_log as {
-      from_seq: number; to_seq: number; next_seq: number; has_more: boolean; content_jsonl: string;
-    };
+    const { log, lines, range } = offeredBoundIssueLog(f, relay.id);
+    // The claim window still reports that it is longer than one 100-row page.
     expect(log.has_more).toBe(true);
     expect(log.next_seq).toBeLessThan(log.to_seq);
-    const directory = JSON.parse(log.content_jsonl.split("\n")[1]!) as { entries: Array<{ seq: number }> };
-    expect(directory.entries.length).toBeLessThanOrEqual(100);
-    expect(log.content_jsonl).not.toContain("Log item 109");
+    // The offer inlines none of it: one range record covering every unread log item.
+    expect(lines).toHaveLength(1);
+    expect(log.content_jsonl).not.toContain("Log item");
+    expect(range).toMatchObject({ type: "unread_range", session_id: f.session.id, from_seq: 0, to_seq: log.to_seq });
+    expect(range.unread_count).toBeGreaterThanOrEqual(110);
+    expectRangeCovers(range, [issueLogSeq(f, "Log item 000"), issueLogSeq(f, "Log item 109")]);
     f.store.startTask(relay.id);
     f.store.completeTask(relay.id, { output: "Window summary" });
     expect(f.lane()?.cursorSeq).toBe(0);

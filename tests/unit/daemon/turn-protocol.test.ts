@@ -10,7 +10,7 @@ import { MultiremiDaemonClient } from "@multiremi/worker/client.js";
 import { captureReports, reportFrame } from "../../fixtures/report-session.js";
 import { createLocalStore, resetMultiremiTestEnv } from "../multiremi/helpers.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
-import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
+import { buildTaskPromptArtifact } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import { normalizeDaemonTurnOffer } from "@multiremi/worker/daemon-offers.js";
 import { daemonTurnOfferPayload } from "@multiremi/api/daemon-protocol/task-offers.js";
 import { checkHandshakeVersion } from "@multiremi/api/daemon-protocol/handshake.js";
@@ -304,16 +304,18 @@ describe("unified store transport boundary", () => {
   });
 });
 
-it("renders message-range input and canonical inbox/message/turn guidance", () => {
+it("sends only the message input and keeps canonical message/turn guidance in AGENTS.md (ADR 0023)", () => {
   const task = normalizeDaemonTurnOffer({ ...turn, input_to_seq: 3, input_messages: [message(2), message(3)],
     issue_id: "iss_one", issue_session_id: "ises_one", issue: { id: "iss_one", key: "UNIT-1", title: "unit", metadata: {} },
     session_projection: { mode: "bootstrap", session_id: "ises_one", jsonl: '{"type":"session_projection"}\n{"type":"inbox_toc","entries":[{"id":"msg_2","seq":2,"priority":1,"folded":true,"title":"input","chars":8}]}' },
     squad_context: { id: "sq_one", name: "team", leaderAgentId: "agt_one", members: [{ agentId: "agt_other", name: "other" }] },
     agent_id: "agt_one", agent: { id: "agt_one", name: "unit", provider: "claude", skills: [] } });
-  const prompt = buildTaskPrompt(task);
-  expect(prompt).toContain("Turn: turn_one; attempt: tsk_one; input seq (0, 3].");
+  const { prompt, instructions } = buildTaskPromptArtifact(task);
+  // The ids are in the environment and the task context file; the input carries no turn line or inbox directory.
+  expect(prompt).not.toContain("turn_one");
+  expect(prompt).not.toContain("inbox_toc");
   expect(prompt).toContain("input 2"); expect(prompt).toContain("input 3");
-  expect(prompt).toContain("remi message get msg_2"); expect(prompt).toContain("remi inbox read");
-  expect(prompt).toContain("remi message send ises_one --to agt_other --kind request");
-  expect(prompt).not.toMatch(/remi (?:task (?:create|continue|steer)|comment |session (?:task |log ))/);
+  expect(instructions).toContain("`remi inbox` to read addressed messages");
+  expect(instructions).toContain("remi message send ises_one --to agt_other --kind request");
+  for (const text of [prompt, instructions]) expect(text).not.toMatch(/remi (?:task (?:create|continue|steer)|comment |session (?:task |log ))/);
 });

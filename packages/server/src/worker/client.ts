@@ -1429,6 +1429,8 @@ export function normalizeDaemonClaimTask(raw: any | null): (MultiremiTaskWithAge
     scmRevision: stringOrNull(raw.scm_revision ?? raw.scmRevision),
     quickCreatePrompt: stringOrNull(raw.quick_create_prompt ?? raw.quickCreatePrompt),
     workspaceContext: stringOrNull(raw.workspace_context ?? raw.workspaceContext),
+    // "" is a value: a server with ADR 0023 always sends it, so its absence marks an older server.
+    workspacePrompt: typeof (raw.workspace_prompt ?? raw.workspacePrompt) === "string" ? raw.workspace_prompt ?? raw.workspacePrompt : null,
     workspaceBootstrapPrompt: stringOrNull(raw.workspace_bootstrap_prompt ?? raw.workspaceBootstrapPrompt),
     workspaceDeltaPrompt: stringOrNull(raw.workspace_delta_prompt ?? raw.workspaceDeltaPrompt),
     workspaceEnv: objectOrDefault(raw.workspace_env ?? raw.workspaceEnv),

@@ -6,7 +6,7 @@ import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js
 import { RepositoryWikiService } from "@multiremi/repository-wiki/service.js";
 import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact } from "@multiremi/prompt.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -22,7 +22,7 @@ function fixture() {
 }
 
 describe("claim knowledge budget", () => {
-  it("bounds stalled hydration, cancels requests, and warns on both prompt modes", async () => {
+  it("bounds stalled hydration, cancels requests, and warns in the instructions of new and resumed sessions", async () => {
     const { task, project, repository } = fixture();
     let signal: AbortSignal | undefined;
     project.hydrateTaskKnowledge = async (_, s) => { signal = s; return new Promise(() => {}); };
@@ -32,14 +32,16 @@ describe("claim knowledge budget", () => {
     expect(signal?.aborted).toBe(true);
     expect(hydrated.knowledgeWarnings).toHaveLength(2);
     expect(hydrated.projectWikiDocs).toEqual([]);
-    for (const mode of ["bootstrap", "delta"]) {
-      const prompt = buildTaskPrompt({ ...hydrated, sessionProjection: { mode, jsonl: "" } } as any);
-      expect(prompt).toContain("Knowledge Availability Warnings");
-      expect(prompt).toContain("Wiki暂不可用，用 remi wiki 取");
-      expect(prompt.match(/暂不可用/g)).toHaveLength(1);
-      expect(prompt).not.toContain("Project Wiki loading failed");
-      expect(prompt).not.toContain("Repository Wiki loading failed");
-    }
+    // The warning is session context (AGENTS.md), identical whether the provider session is new or resumed.
+    const instructions = (["bootstrap", "delta"] as const).map(mode =>
+      buildTaskPromptArtifact({ ...hydrated, sessionProjection: { mode, jsonl: "" } } as any).instructions);
+    expect(instructions[1]).toBe(instructions[0]!);
+    const text = instructions[0]!;
+    expect(text).toContain("## Knowledge Availability Warnings");
+    expect(text).toContain("Wiki暂不可用，用 remi wiki 取");
+    expect(text.match(/暂不可用/g)).toHaveLength(1);
+    expect(text).not.toContain("Project Wiki loading failed");
+    expect(text).not.toContain("Repository Wiki loading failed");
   });
 
   it("retains the completed knowledge stage if the next stage times out", async () => {

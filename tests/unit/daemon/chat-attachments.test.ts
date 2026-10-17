@@ -3,7 +3,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { CHAT_ATTACHMENT_MAX_BYTES, materializeChatAttachments, readChatAttachmentBytes } from "@daemon/agent-runtime/workspace/chat-attachments.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPrompt, buildTaskPromptArtifact } from "@multiremi/prompt.js";
 import { buildSteerInjectionPrompt, materializeTaskSteerAttachments } from "@multiremi/worker/steer.js";
 
 const roots: string[] = [];
@@ -26,8 +26,7 @@ describe("Chat attachment materialization", () => {
     const prompt = buildSteerInjectionPrompt(messages);
     expect(fetched).toEqual(["att_steered_image"]);
     expect(prompt).toContain("Also inspect this image");
-    expect(prompt).toContain("Local path:");
-    expect(prompt).toContain("att_steered_image-photo.png");
+    expect(prompt).toMatch(/Attachments:\n- photo\.png: \/.*att_steered_image-photo\.png/);
     expect(prompt).not.toContain("remi attachment download att_steered_image");
   });
 
@@ -45,15 +44,19 @@ describe("Chat attachment materialization", () => {
     expect(dirname(dirname(attachments[0]!.localPath))).toBe(workDir);
     expect(attachments[2]!.localPath).toBe(attachments[0]!.localPath);
     expect(await readFile(attachments[1]!.localPath, "utf8")).toBe("att_image");
-    const prompt = buildTaskPrompt({
-      id: "tsk_1", prompt: "Read my files", chatSessionId: "chat_1", issue: null, project: null,
+    const { prompt, instructions } = buildTaskPromptArtifact({
+      id: "tsk_1", workspaceId: "local", prompt: "Read my files", chatSessionId: "chat_1", issue: null, project: null,
       repos: [], projectResources: [], projectContexts: [], chatMessageAttachments: attachments,
     } as any);
-    expect(prompt).toContain(`Local path: ${JSON.stringify(attachments[0]!.localPath)}`);
-    expect(prompt).toContain("content-type: image/png; size: 4 bytes");
+    // The turn names each file once, by its safe local path; control characters in a name never reach the agent.
+    expect(prompt).toContain(`- brief.pdf: ${attachments[0]!.localPath}`);
+    expect(prompt).toContain(`- photo.png: ${attachments[1]!.localPath}`);
+    expect(prompt).not.toContain("\u0000");
     expect(prompt).not.toContain("remi attachment download att_pdf");
-    expect(prompt).toContain("remi message send --attachment <path>");
-    expect(prompt).toContain("raw logs");
+    // The delivery rules are Remi's notes in AGENTS.md, not per-turn text.
+    expect(prompt).not.toContain("remi message send --attachment <path>");
+    expect(instructions).toContain("remi message send --attachment <path>");
+    expect(instructions).toContain("raw logs");
   });
 
   it("does not trust a stale local path and preserves a visible fallback after errors or oversize", async () => {

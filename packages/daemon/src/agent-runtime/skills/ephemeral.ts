@@ -8,7 +8,7 @@
  */
 
 import { join } from "node:path";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 export function writeTaskContext(workDir: string, task: AgentTask): void {
@@ -97,29 +97,79 @@ export function agentSkillRoot(workDir: string, provider: string | undefined): s
     : join(workDir, ".claude", "skills");
 }
 
+/**
+ * Skill root a provider discovers in its provider home, for runtime
+ * workspaces whose working directory is the user's own (ADR 0023): Claude reads
+ * `$CLAUDE_CONFIG_DIR/skills`, Codex `$CODEX_HOME/skills`; Antigravity keeps the
+ * `.agents/skills` it has always used.
+ */
+export function providerHomeSkillRoot(home: string, provider: string | undefined): string {
+  return provider === "antigravity" ? join(home, ".agents", "skills") : join(home, "skills");
+}
+
+/** The skill directories Remi wrote into a root, so a later sync removes only its own. */
+const SKILL_MANIFEST = ".remi-skills.json";
+
+function writtenSkillDirs(root: string): string[] {
+  try {
+    const value = JSON.parse(readFileSync(join(root, SKILL_MANIFEST), "utf8")) as { skills?: unknown };
+    return Array.isArray(value.skills) ? value.skills.filter((name): name is string => typeof name === "string" && SAFE_DIR.test(name)) : [];
+  } catch {
+    return [];
+  }
+}
+
+const SAFE_DIR = /^[a-z0-9_][a-z0-9._-]*$/;
+
+/**
+ * Install the Agent's skills where the provider discovers them natively, every
+ * turn (ADR 0023): each skill is rewritten whole, and a skill the Agent no
+ * longer has is removed. Only directories Remi wrote are touched; others in the
+ * same root (the provider's own, the agent's) stay.
+ */
+export function syncAgentSkills(root: string, task: AgentTask): void {
+  const skills = task.agent?.skills ?? [];
+  const previous = writtenSkillDirs(root);
+  const current = skills.map((skill) => safeSkillDirName(skill.name));
+  for (const dir of previous) if (!current.includes(dir)) rmSync(join(root, dir), { recursive: true, force: true });
+  if (!skills.length) {
+    if (previous.length) rmSync(join(root, SKILL_MANIFEST), { force: true });
+    return;
+  }
+  mkdirSync(root, { recursive: true });
+  for (const skill of skills) {
+    const dir = join(root, safeSkillDirName(skill.name));
+    // A removed supporting file must not survive the rewrite.
+    if (previous.includes(safeSkillDirName(skill.name))) rmSync(dir, { recursive: true, force: true });
+    writeSkill(dir, skill);
+  }
+  writeFileSync(join(root, SKILL_MANIFEST), `${JSON.stringify({ skills: [...new Set(current)] })}\n`, { mode: 0o644 });
+}
+
 export function writeAgentSkillContext(workDir: string, task: AgentTask): void {
   const skills = task.agent?.skills ?? [];
   if (!skills.length) return;
   const root = agentSkillRoot(workDir, task.agent?.provider);
   mkdirSync(root, { recursive: true });
-  for (const skill of skills) {
-    const dir = join(root, safeSkillDirName(skill.name));
-    mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "SKILL.md"), renderSkillMarkdown(skill), { mode: 0o644 });
-    for (const file of skill.files ?? []) {
-      const path = normalizeSkillFilePath(file.path);
-      const target = join(dir, path);
-      mkdirSync(join(target, ".."), { recursive: true });
-      const content = file.content ?? "";
-      if (file.encoding === "base64") {
-        if (typeof file.content !== "string") throw new Error(`Invalid base64 skill file: ${path}`);
-        const bytes = Buffer.from(content, "base64");
-        if (bytes.toString("base64") !== content) throw new Error(`Invalid base64 skill file: ${path}`);
-        writeFileSync(target, bytes, { mode: 0o644 });
-      } else {
-        if (file.encoding !== undefined && file.encoding !== "utf8") throw new Error(`Unsupported skill file encoding: ${path}`);
-        writeFileSync(target, content, { mode: 0o644 });
-      }
+  for (const skill of skills) writeSkill(join(root, safeSkillDirName(skill.name)), skill);
+}
+
+function writeSkill(dir: string, skill: NonNullable<AgentTask["agent"]>["skills"][number]): void {
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "SKILL.md"), renderSkillMarkdown(skill), { mode: 0o644 });
+  for (const file of skill.files ?? []) {
+    const path = normalizeSkillFilePath(file.path);
+    const target = join(dir, path);
+    mkdirSync(join(target, ".."), { recursive: true });
+    const content = file.content ?? "";
+    if (file.encoding === "base64") {
+      if (typeof file.content !== "string") throw new Error(`Invalid base64 skill file: ${path}`);
+      const bytes = Buffer.from(content, "base64");
+      if (bytes.toString("base64") !== content) throw new Error(`Invalid base64 skill file: ${path}`);
+      writeFileSync(target, bytes, { mode: 0o644 });
+    } else {
+      if (file.encoding !== undefined && file.encoding !== "utf8") throw new Error(`Unsupported skill file encoding: ${path}`);
+      writeFileSync(target, content, { mode: 0o644 });
     }
   }
 }
@@ -132,9 +182,9 @@ function renderSkillMarkdown(skill: NonNullable<AgentTask["agent"]>["skills"][nu
     `name: ${yamlQuote(skill.name)}`,
     skill.description ? `description: ${yamlQuote(skill.description)}` : "",
     "---",
-    "",
   ].filter((line) => line !== "").join("\n");
-  return `${frontmatter}${content}`;
+  // The closing `---` must end its line: Codex skips a SKILL.md whose frontmatter runs into the body.
+  return `${frontmatter}\n${content}`;
 }
 
 function yamlQuote(value: string): string {
@@ -142,7 +192,8 @@ function yamlQuote(value: string): string {
 }
 
 function safeSkillDirName(value: string): string {
-  return String(value || "skill").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+  // No leading dot: never `.` or `..`, and never a hidden directory the provider skips.
+  return String(value || "skill").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "") || "skill";
 }
 
 export function normalizeSkillFilePath(value: string): string {

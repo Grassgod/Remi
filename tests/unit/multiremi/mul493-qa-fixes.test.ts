@@ -211,9 +211,16 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
         type: 'unread_range', session_id: target.session.id, from_seq: from, to_seq: to, unread_count: unreadCount,
         instruction,
       }]);
+      // ADR 0023: the turn input names the bound Issue's new log entries and the range read, only when there are any.
       const prompt = buildTaskPrompt(normalizeDaemonClaimTask(offered)!);
-      expect(prompt).toContain(bound.content_jsonl);
-      expect(prompt).toContain(`Session ${target.session.id}, seq (${from}, ${to}].`);
+      const readCommand = `remi message list ${target.session.id} --from ${from} --to ${to}`;
+      if (unreadCount) {
+        expect(prompt).toContain(`(Issue ${target.issue.key} has ${unreadCount} new log entr${unreadCount === 1 ? 'y' : 'ies'}`
+          + ` since you last read it: \`${readCommand}\`)`);
+      } else {
+        expect(prompt).not.toContain(`remi message list ${target.session.id}`);
+      }
+      expect(prompt).not.toContain('"type":"unread_range"');
     }
     try {
       expect(head).toBe(1);

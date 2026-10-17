@@ -9,7 +9,13 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { MultiremiDaemonClient, normalizeDaemonClaimTask } from "@multiremi/client.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact } from "@multiremi/prompt.js";
+
+/** ADR 0023: what a session holds (its AGENTS.md notes) and what the turn sends, as one text to search. */
+function buildTaskPrompt(task: Parameters<typeof buildTaskPromptArtifact>[0]): string {
+  const { instructions, prompt } = buildTaskPromptArtifact(task);
+  return `${instructions}\n${prompt}`;
+}
 import { prepareFeishuIssueTopic as prepareIssueTopic } from "../../fixtures/multiremi-feishu-topic.js";
 import { configureRepositoryWikiAutomation, createLocalStore as createStore, db, jsonResponse, mockFetch, resetMultiremiTestEnv } from "./helpers.js";
 import { captureReports } from "../../fixtures/report-session.js";
@@ -71,9 +77,10 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(claimed?.chatProjectId).toBe(project.id);
     expect(claimed?.issue).toBeNull();
     expect(claimed?.repos).toEqual([]);
+    // ADR 0023: the two halves are one Project instructions field, in the notes of every turn.
     for (const mode of ["bootstrap", "delta"] as const) {
       const prompt = buildTaskPrompt({ ...claimed!, sessionProjection: { mode, jsonl: "" } } as any);
-      expect(prompt).toContain(mode === "bootstrap" ? "CHAT_PROJECT_BOOTSTRAP" : "CHAT_PROJECT_DELTA");
+      expect(prompt).toContain("CHAT_PROJECT_BOOTSTRAP\n\nCHAT_PROJECT_DELTA");
       expect(prompt).not.toContain("## Issue");
     }
     const unrelated = store.createProject({ title: "Old Issue project", instructions: "STALE_ISSUE_PROJECT" });
@@ -529,13 +536,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
         size_bytes: 789,
       }],
     } as any);
+    // The Issue's own attachments are session notes; the comment's are this turn's input.
     expect(prompt).toContain("id: att_issue_prompt; filename: issue.png; content-type: image/png; size: 123 bytes");
     expect(prompt).toContain("remi attachment download att_issue_prompt --output-dir <dir>");
-    expect(prompt).toContain("id: att_comment_prompt; filename: comment.jpg; content-type: image/jpeg; size: 456 bytes");
-    expect(prompt).toContain("remi attachment download att_comment_prompt --output-dir <dir>");
+    expect(prompt).toContain("- comment.jpg: run `remi attachment download att_comment_prompt --output-dir <dir>`");
     expect(prompt).toContain("id: att_unlinked_fallback; filename: unavailable; content-type: unavailable; size: unavailable");
     expect(prompt).toContain("remi attachment download att_unlinked_fallback --output-dir <dir>");
-    expect(prompt).toContain("id: att_chat_prompt; filename: chat.txt; content-type: text/plain; size: 789 bytes");
+    expect(prompt).toContain("- chat.txt: run `remi attachment download att_chat_prompt --output-dir <dir>`");
   });
 
   it("uses the latest Project Instructions when a queued task is first claimed", async () => {
@@ -947,12 +954,12 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       "project", "project_id", "project_resources", "project_contexts", "project_wiki_docs",
       "repository_wiki_contexts", "repos", "bound_issue", "bound_issue_updates", "squad_context",
     ]) expect(wire).not.toHaveProperty(field);
-    expect(wire.issue_session_results).toEqual([]);
+    expect(wire).not.toHaveProperty("issue_session_results");
     expect(JSON.stringify(wire)).not.toContain("MUST_NOT_SHIP");
     expect(store.listChatMessages(chat.id).map(message => message.body)).toEqual(["Just this conversation"]);
   });
 
-  it("switches a Feishu Issue topic from bootstrap to delta and removes repeated static prompt bytes", async () => {
+  it("keeps a Feishu Issue topic's static content in AGENTS.md and sends only the new request every turn", async () => {
     const store = createStore();
     const runtime = store.registerRuntime({ id: "rt_chat_delta", name: "chat delta", provider: "codex", workspaceId: "local" });
     const agent = store.createAgent({
@@ -975,10 +982,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(firstResponse.status).toBe(200);
     const firstClaim = (await firstResponse.json()).task;
     expect(firstClaim.session_projection.mode).toBe("bootstrap");
-    const firstPrompt = buildTaskPrompt(normalizeDaemonTurnOffer(firstClaim));
-    expect(firstPrompt.match(/First bound request/g)).toHaveLength(1);
-    expect(firstPrompt).toContain("## Agent Instructions");
-    expect(firstPrompt).toContain("## Skills");
+    const firstTurn = buildTaskPromptArtifact(normalizeDaemonTurnOffer(firstClaim));
+    expect(firstTurn.prompt).toContain("First bound request");
+    expect(firstTurn.prompt).not.toContain("Follow the workspace rules.");
+    expect(firstTurn.instructions).toContain("# Chat Delta\n\nFollow the workspace rules.");
+    // Skills load natively from the execution directory; neither the notes nor the input carry them.
+    expect(firstTurn.instructions).not.toContain("Inspect the repository carefully.");
+    expect(firstTurn.prompt).not.toContain("Inspect the repository carefully.");
 
     store.startTask(first.task.id);
     readOfferedTurnInput(store, first.task.id);
@@ -988,13 +998,13 @@ describe("Multiremi store — Go daemon wire shapes", () => {
     expect(secondResponse.status).toBe(200);
     const secondClaim = (await secondResponse.json()).task;
     expect(secondClaim.session_projection.mode).toBe("delta");
-    const secondPrompt = buildTaskPrompt(normalizeDaemonTurnOffer(secondClaim));
-    expect(secondPrompt).toContain("# Delta Prompt");
-    expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
-    expect(secondPrompt.match(/Second bound request/g)).toHaveLength(1);
-    expect(secondPrompt).not.toContain("## Agent Instructions");
-    expect(secondPrompt).not.toContain("## Skills");
-    expect(Buffer.byteLength(secondPrompt)).toBeLessThan(Buffer.byteLength(firstPrompt) / 2);
+    const secondTurn = buildTaskPromptArtifact(normalizeDaemonTurnOffer(secondClaim));
+    expect(secondTurn.prompt).not.toContain("Delta Prompt");
+    expect(secondTurn.prompt).toContain("Second bound request");
+    expect(secondTurn.prompt).not.toContain("First bound request");
+    expect(secondTurn.instructions).toContain(`## Issue\nKey: ${issue.key}`);
+    expect(secondTurn.instructions).toBe(firstTurn.instructions);
+    expect(Buffer.byteLength(secondTurn.prompt)).toBeLessThan(1_000);
   });
 
   it("ships Issue identity only for Feishu topics and keeps private Chat independent", async () => {
@@ -1018,8 +1028,8 @@ describe("Multiremi store — Go daemon wire shapes", () => {
       boundIssue: boundWire.bound_issue,
     } as any);
     expect(boundPrompt).toContain("## Bound Issue");
-    expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title} (status: ${issue.status}).`);
-    expect(boundPrompt).toContain("The Bound Issue Log covers the interval shown above.");
+    expect(boundPrompt).toContain(`This Feishu topic is bound to ${issue.key} — ${issue.title} (status when this turn started: ${issue.status}).`);
+    expect(boundPrompt).not.toContain("Write the summary from the log");
     expect(boundPrompt).toContain(`remi issue get ${issue.id} --output json`);
     expect(boundPrompt).toContain("remi message list <issue-session-id> --output json");
     expect(boundPrompt).not.toContain("--tail");

@@ -129,9 +129,10 @@ describe("steer worker helpers", () => {
     expect(prompt).toContain("finish");
   });
 
-  it("continuation wording only appears without force answer", () => {
+  it("a plain steer injects only the message text, without steering framing or wrap-up", () => {
     const prompt = buildSteerInjectionPrompt([steerMessage({ id: "s1", content: "keep going differently" })]);
-    expect(prompt).toContain("continue the task");
+    expect(prompt).toBe("keep going differently");
+    expect(prompt).not.toContain("Mid-run user steering");
     expect(prompt).not.toContain("Deliver now");
   });
 

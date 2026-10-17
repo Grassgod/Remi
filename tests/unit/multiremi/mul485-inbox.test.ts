@@ -460,7 +460,7 @@ describe("MUL-485 SQLite", () => {
   });
 });
 
-it("orders the inbox by priority then seq and leaves old daemon JSONL readable", () => {
+it("orders the inbox by priority then seq; the daemon renders no inbox or history from projection JSONL", () => {
   verifyPriorityAndCompatibility();
 });
 
@@ -491,20 +491,19 @@ function verifyPriorityAndCompatibility(): void {
       prompt: "Read inbox", issueSession: { id: "ises_priority", title: "Inbox" },
       sessionProjection: projection, repos: [], projectResources: [], project: null,
       agent: { id: "agt_reader", name: "Reader", provider: "codex", skills: [], instructions: "", customEnv: {} } };
-    const prompt = buildTaskPrompt(task as never);
-    expect(prompt).toContain("## Inbox");
-    expect(prompt.indexOf("## Inbox")).toBeLessThan(prompt.indexOf("## Current Session Context"));
+    // ADR 0023: the daemon's Inbox TOC and history rendering were removed as unreachable (offers carry
+    // range records). A full projection, with, without or with an unknown directory record, is never
+    // rendered: the turn input is only the task's own text.
+    expect(buildTaskPrompt(task as never)).toBe("Read inbox");
     const old = buildTaskPrompt({ ...task, id: "tsk_old", prompt: "Read history", sessionProjection: {
       ...projection, jsonl: projection.jsonl.split("\n").filter((line) => !line.includes('"type":"inbox_toc"')).join("\n"),
     } } as never);
-    expect(old).toContain("## Current Session Context");
-    expect(old).not.toContain("## Inbox");
+    expect(old).toBe("Read history");
     const unknown = buildTaskPrompt({ ...task, id: "tsk_unknown", sessionProjection: {
       ...projection,
       jsonl: projection.jsonl.replace('"type":"inbox_toc"', '"type":"future_directory"'),
     } } as never);
-    expect(unknown).toContain("## Current Session Context");
-    expect(unknown).not.toContain("## Inbox");
+    expect(unknown).toBe("Read inbox");
 }
 
 function makeEvent(seq: number, kind: string, body: string, authorType: string, metadata: Record<string, unknown> = {}): MultiremiSessionEvent {
