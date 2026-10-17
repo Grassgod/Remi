@@ -126,10 +126,13 @@ export function useTurnTrace(attemptId: string | null | undefined, options: UseT
     // A live reader is kept current by the socket; anyone else rereads an
     // unsealed trace when it mounts, so a fold opened after the run never
     // shows a partial snapshot left behind by a live view. A cache that only
-    // holds frames (no read has landed) is always stale.
+    // holds frames (no read has landed) is always stale, and so is one whose
+    // read was not ok: a live view's first read can land before the daemon
+    // claims the attempt (`not_found`) while the stream then supplies every
+    // item, and the next reader must not inherit that answer.
     staleTime: (q) => {
       const cache = isCache(q.state.data) ? q.state.data : null;
-      if (!cache?.read) return 0;
+      if (!cache?.read || cache.read.state !== "ok") return 0;
       return live || cache.state.closed ? Infinity : 0;
     },
     queryFn: async (): Promise<TurnTraceCache> => {
@@ -147,6 +150,9 @@ export function useTurnTrace(attemptId: string | null | undefined, options: UseT
       // Frames that arrived while the pages were in flight go on top, in order;
       // the seq rules make the ones the pages already hold no-ops.
       const current = cacheOf(qc, attemptId);
+      // A reread that is not ok (its daemon went offline) keeps what the
+      // earlier read and the stream delivered instead of emptying it.
+      if (read.state !== "ok" && current.read) return { state: current.state, read, pending: [] };
       let next = current.pending.length ? applyTurnTraceEvents(state, current.pending) : state;
       if (current.state.closed && read.state === "ok") next = closeTurnTrace(next);
       return { state: next, read, pending: [] };

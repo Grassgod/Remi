@@ -216,21 +216,29 @@ describe("subagent panel", () => {
     expect(screen.queryByRole("status")).toBeNull();
   });
 
-  it("shows what the stream delivered when a live attempt's first read found no trace yet", () => {
+  it("shows what the stream delivered when a live attempt's first read found no trace yet", async () => {
     // The read can land while the turn is still queued (`not_found`, pointer_missing); live frames fill the items.
-    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(turnPage(traceTurn({ status: "running" }), claudeLiveItems())), read: { state: "not_found", format: "v2" } });
+    const page = turnPage(traceTurn({ status: "running" }), claudeLiveItems());
+    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(page), read: { state: "not_found", format: "v2" } });
+    getTaskTrace.mockResolvedValue(page);
     renderLayout();
     open({ path: ["sa:gp"] });
     expect(document.querySelector('[data-subagent-detail="sa:gp"]')).not.toBeNull();
     expect(screen.queryByText("暂无执行过程记录")).toBeNull();
+    // That read is not kept: the panel reads the trace again.
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(1));
     act(() => { useChatStore.getState().setSubagentPath([]); });
     expect(overviewRow("sa:explore")).toBeInTheDocument();
   });
 
-  it("still explains an empty panel with a read that found no trace", () => {
-    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(turnPage(traceTurn({ status: "completed" }), [])), read: { state: "not_found", format: "v2" } });
+  it("still explains an empty panel with a read that found no trace", async () => {
+    const empty = turnPage(traceTurn({ status: "completed" }), []);
+    client.setQueryData(["task-trace", "att_1"], { ...turnTraceCache(empty), read: { state: "not_found", format: "v2" } });
+    getTaskTrace.mockResolvedValue({ ...empty, turn: null, state: "not_found", source: null });
     renderLayout();
     open({ live: false });
+    expect(screen.getByText("暂无执行过程记录")).toBeInTheDocument();
+    await waitFor(() => expect(getTaskTrace).toHaveBeenCalledTimes(1));
     expect(screen.getByText("暂无执行过程记录")).toBeInTheDocument();
   });
 
