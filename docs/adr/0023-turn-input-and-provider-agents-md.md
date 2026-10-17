@@ -62,7 +62,7 @@
 6. **工作区与 Project 的提示词各合成一份。**
    - **工作区提示词**改存 `settings.prompt_appendix`，只保存工作区自己的文字，上限 16,000 字符。旧的 `prompt_bootstrap_appendix` 和 `prompt_delta_appendix` 由迁移 `20261019_merge_prompt_halves` 合并：bootstrap 在前，空一行，再接 delta；以旧默认值开头的 bootstrap 只保留其后的部分。
    - 两个旧键继续保存，内容为「旧默认值 + 自定义文字」和空字符串，供回滚后的旧镜像读取。
-   - API `/api/workspaces/:id/prompts` 读写 `{ prompt, revision, updatedAt, updatedBy }`，仍接受旧字段并把它们合并成一份。
+   - API `/api/workspaces/:id/prompts` 读写 `{ prompt, revision, updatedAt, updatedBy }`，仍接受旧字段并把它们合并成一份；只发一半时另一半取自存着的旧键。响应同时带旧网页读取的 `bootstrapPrompt`（旧默认值加自定义文字）和空的 `deltaPrompt`，API 先部署时旧网页照常可用。
    - offer 新增 `workspace_prompt`，只含自定义文字，总是发送。旧 daemon 读 `workspace_bootstrap_prompt`，现在它等于旧默认值加自定义文字；不再发送 `workspace_delta_prompt`。新 daemon 遇到不发 `workspace_prompt` 的旧服务端，会合并收到的两份提示词，并去掉旧默认值前缀。
    - **Project**：同一迁移把 `delta_instructions` 追加到 `instructions` 后清空，列本身保留，上限改为 8,000 字符。写入接口仍接受 `delta_instructions` 并把它追加进去；追加后超过 8,000 字符时返回 400。
 

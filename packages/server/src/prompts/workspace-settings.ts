@@ -75,6 +75,16 @@ function legacyPromptKeys(prompt: string): Record<string, string> {
   };
 }
 
+/**
+ * What `/api/workspaces/:id/prompts` returns: the prompt, plus the two fields a
+ * web from before ADR 0023 reads, in the shape its tab expects (Remi's former
+ * default with the workspace's text after it, and an empty delta). Its save
+ * sends them back and they merge into the one prompt again.
+ */
+export function workspacePromptsResponse(prompts: MultiremiPromptSettings): MultiremiPromptSettings & { bootstrapPrompt: string; deltaPrompt: string } {
+  return { ...prompts, bootstrapPrompt: legacyPromptKeys(prompts.prompt)[KEYS.legacyBootstrap]!, deltaPrompt: "" };
+}
+
 export function mergeWorkspacePromptSettings(
   workspace: MultiremiWorkspace,
   input: UpdateMultiremiPromptSettingsInput,

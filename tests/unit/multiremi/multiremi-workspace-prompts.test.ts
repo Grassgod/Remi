@@ -41,7 +41,9 @@ describe("workspace prompt settings", () => {
     // ADR 0023: Remi's delivery rules are not a default the setting freezes.
     const initial = await app.request("/api/workspaces/local/prompts", { headers: MASTER });
     expect(initial.status).toBe(200);
-    expect(await initial.json()).toEqual({ prompt: "", revision: 0, updatedAt: null, updatedBy: null });
+    // A web from before ADR 0023 still reads its two fields, with Remi's former default the way it showed it.
+    expect(await initial.json()).toEqual({ prompt: "", revision: 0, updatedAt: null, updatedBy: null,
+      bootstrapPrompt: DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT, deltaPrompt: "" });
 
     const updated = await app.request("/api/workspaces/local/prompts", {
       method: "PUT",
@@ -49,7 +51,8 @@ describe("workspace prompt settings", () => {
       body: JSON.stringify({ prompt: "Answer in Chinese.\r\nCreate a PR.", expectedRevision: 0 }),
     });
     expect(updated.status).toBe(200);
-    expect(await updated.json()).toMatchObject({ prompt: "Answer in Chinese.\nCreate a PR.", revision: 1 });
+    expect(await updated.json()).toMatchObject({ prompt: "Answer in Chinese.\nCreate a PR.", revision: 1,
+      bootstrapPrompt: `${DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nAnswer in Chinese.\nCreate a PR.`, deltaPrompt: "" });
     expect(store.getWorkspace("local")!.settings).toMatchObject({
       prompt_appendix: "Answer in Chinese.\nCreate a PR.",
       prompt_bootstrap_appendix: `${DEFAULT_WORKSPACE_BOOTSTRAP_PROMPT}\n\nAnswer in Chinese.\nCreate a PR.`,
