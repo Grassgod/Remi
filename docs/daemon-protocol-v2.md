@@ -46,17 +46,21 @@ daemon 的任务回复只取一条顶层 `agent_message` 条目，由 `settle()`
 `<KEY> 有新日志：`、`状态 <x>` 及 envelope metadata 保持原格式，供前端解析。
 
 服务端在既有 `session_projection.jsonl` 中提供两类记录：`unread_range` 和
-`triggering_message`。会话 prompt 只包含本轮触发消息、未读范围和读取命令，
+`triggering_message`。本轮输入只包含触发消息，未读部分没有全部内联时加一句读取说明，
 合并唤醒保留每条触发消息。其他未读消息的正文、标题、摘要和 inbox 目录均不内联。
 触发消息通常内联 8,000 个 JavaScript 字符，超长保留开头、准确省略数和
 `remi session log get <session> <seq>`。冷启动范围从 0 开始，未读统计与范围读取
-排除 agent 自己的历史消息；提示词明确要求动手前先读未读部分。
+排除 agent 自己的历史消息；那句说明要求先读未读部分，因为输入回执依赖这次读取。
 例外是完整输入：范围内每条需读的条目都是完整内联的触发消息（自己的消息不需读）时，
 `unread_range` 带加法字段 `complete: true`，规则与输入确认的 `assertOfferedInputRead` 相同；
-冷 replacement 回放原始输入、budget 折叠任一正文后都不带。新 daemon 只在 offer 输入与会话投影的
-范围记录都为 complete、且不是旁支会话时，把输入作为普通消息交给 agent：一对一 Chat 的单条成员消息
-只给正文，其余每条保留 `[seq · 作者 · kind]` 标签（agent 自己的消息标 `(you)`，只列入范围的自身空正文消息省略），
-不渲染范围记录、读取指令和「动手前先执行…」。插话批次同理只看它自己的范围记录。旧 daemon 忽略该字段，照旧提示读取。
+冷 replacement 回放原始输入、budget 折叠任一正文后都不带。daemon 按
+[ADR 0023](adr/0023-turn-input-and-provider-agents-md.md) 只把新输入交给 agent：范围记录不出现，
+一对一 Chat 的成员消息就是原文；多作者时每条前加 `[Agent <id>]`、`[Remi]` 等标签，Issue、绑定话题与旁支会话总带作者标签。
+offer 输入与会话投影的范围记录都为 complete 时什么也不加；否则加一句
+`(N earlier unread messages aren't shown here. Read them before you answer: remi message list …)`。
+插话批次同理只看它自己的范围记录。Issue 的触发评论另加一行 `(Reply to comment <id>: …)`。
+会话里不变的内容（Agent 定义、Remi 规则、工作区、项目、Issue 等）由 daemon 写进 provider home 的 `AGENTS.md`，不进每轮输入。
+旧 daemon 仍按范围记录拼接自己的提示词。
 
 现有命令增加 `remi session log get <session> --from X --to Y`，语义为 `X < seq ≤ Y`。
 沿用 `GET /api/sessions/:id/log/entry`，不新增 API 或 CLI 命令路径。
@@ -211,7 +215,13 @@ head 续传与事件 seq 幂等，不来自外层 `seq`；下行 `trace.push` �
 
 `task.offer` 不再携带 `id`/`prompt`，而是 `turn_id`、`attempt_id`、`input_from_seq`、
 `input_to_seq` 和区间 `(input_from_seq, input_to_seq]` 的 `input_messages`。
-统一 offer 的消息正文由 Current Request 渲染一次；同 ID 不再重复渲染为 Chat Message 或旧 Session projection 的 Triggering Message。
+统一 offer 的消息正文只在本轮输入中出现一次（ADR 0023）。服务端为 offer 只计算会话投影的边界与模式（`boundsOnly`），
+`session_projection.jsonl` 与 `bound_issue_log.content_jsonl` 是发送前写入的未读范围记录，不再拼出完整历史；
+`chat_message` 与已发布结果 `issue_session_results` 不再发送（`remi session result list` 可读）。
+加法字段：`workspace_prompt`（工作区自己的提示词，总是发送，可能为空；旧 daemon 读的 `workspace_bootstrap_prompt` 现为 Remi 旧默认值加该文字，
+不再发 `workspace_delta_prompt`），`agent.description`（写进 `AGENTS.md` 的 Agent 简介）。
+上行 `task.prompt` 增加可选 `instructions`：Remi 那部分 `AGENTS.md`（不含 Runtime 工作区本地上下文），服务端存入 `multiremi_task_prompts.instructions`，
+`GET /api/turns/:id?input=true[&attempt=<id>]` 以 `sent_attempt_id`、`sent_prompt`、`instructions` 返回该尝试实际发出的内容。
 trace、usage、附件与 outbox 分区仍以 attempt id（原 `tsk_` id）关联。
 `turn.message` 携带同一对 ID、投影消息正文和该消息关联的 `attachments`；附件由当前 attempt
 凭证下载到其工作目录，再注入 provider。`turn.wrap_up` 携带同一对 ID 与 `requested_at`，

@@ -14,7 +14,7 @@ Unavailable content remains explicitly marked unavailable.
 Task claim shares a five-second budget across Project and Repository Wiki loading.
 In-flight OpenViking requests and retries are cancelled when it expires. A completed
 stage is retained; an incomplete stage is omitted with `knowledge_warnings` in the
-claim and in both Bootstrap/Delta prompts. Agents use `remi wiki project` and
+claim and in the session's `AGENTS.md` (ADR 0023). Agents use `remi wiki project` and
 `remi wiki repository` to retrieve missing context when needed. Repository checkout
 scope is resolved independently so a slow Wiki does not strip an automation's repo.
 Concurrent claim requests on one runtime share preparation within the API process;
