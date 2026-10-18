@@ -38,6 +38,7 @@
     "sending": "보내는 중…",
     "sent": "전송됨",
     "send_failed": "전송 실패 ·",
+    "unconfirmed": "전송 미확인 ·",
     "retry": "다시 시도",
     "retry_send": "이 메시지 다시 보내기"
   },

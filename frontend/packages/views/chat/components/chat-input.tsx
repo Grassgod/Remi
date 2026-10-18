@@ -56,6 +56,11 @@ export function chatSendMode(isRunning: boolean, preference: ChatFollowUpMode, i
 }
 
 interface ChatInputProps {
+  /**
+   * The chat on screen, or null for a new one. Its draft is the composer's,
+   * so the draft can never belong to a different chat than the one shown.
+   */
+  sessionId: string | null;
   onSend: (
     content: string,
     attachmentIds?: string[],
@@ -104,6 +109,7 @@ interface ChatInputProps {
 }
 
 export function ChatInput({
+  sessionId,
   onSend,
   onSaveQueueEdit,
   onUploadFile,
@@ -119,18 +125,20 @@ export function ChatInput({
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
-  const activeSessionId = useChatStore((s) => s.activeSessionId);
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
-  // Draft storage follows the session. Editor identity changes when the
-  // user switches chats, while lazy creation during upload/send keeps the
+  // Draft storage follows the session shown. Editor identity changes when
+  // the user switches chats, while lazy creation during upload/send keeps the
   // same editor mounted so in-flight attachment previews are retained.
   const draftKey =
-    activeSessionId ?? `${DRAFT_NEW_SESSION}:${selectedAgentId ?? ""}`;
+    sessionId ?? `${DRAFT_NEW_SESSION}:${selectedAgentId ?? ""}`;
+  const draftKeyRef = useRef(draftKey);
+  draftKeyRef.current = draftKey;
 
   // Select a primitive — empty-string fallback keeps referential stability.
   const inputDraft = useChatStore((s) => s.inputDrafts[draftKey] ?? "");
   const setInputDraft = useChatStore((s) => s.setInputDraft);
   const clearInputDraft = useChatStore((s) => s.clearInputDraft);
+  const restoreToDraft = useChatStore((s) => s.restoreToDraft);
   const [isEmpty, setIsEmpty] = useState(!inputDraft.trim());
   // Number of in-flight uploads. We track this explicitly (rather than
   // peeking at the editor on every render) so the SubmitButton visibly
@@ -145,21 +153,23 @@ export function ChatInput({
   const [sendError, setSendError] = useState<"send" | "save" | "full" | "archived" | null>(null);
   const followUpMode = useChatStore((s) => s.followUpMode);
   const queueEdit = useChatStore((s) =>
-    activeSessionId ? s.queueEdit[activeSessionId] : undefined,
+    sessionId ? s.queueEdit[sessionId] : undefined,
   );
   const finishQueueEdit = useChatStore((s) => s.finishQueueEdit);
-  const editorIdentity = useRef({ sessionId: activeSessionId, version: 0 });
-  if (editorIdentity.current.sessionId !== activeSessionId) {
+  const editorIdentity = useRef({ sessionId, version: 0 });
+  if (editorIdentity.current.sessionId !== sessionId) {
     const lazyCreation =
       !editorIdentity.current.sessionId &&
-      !!activeSessionId &&
+      !!sessionId &&
       (pendingUploads > 0 || sendingRef.current);
     editorIdentity.current = {
-      sessionId: activeSessionId,
+      sessionId,
       version: editorIdentity.current.version + (lazyCreation ? 0 : 1),
     };
   }
   const editorKey = `${selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}`;
+  const currentEditorKey = () =>
+    `${useChatStore.getState().selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}`;
 
   // URL bindings share the draft store so opening the full page, reopening
   // the floating panel or switching sessions retains uploaded attachments.
@@ -200,7 +210,7 @@ export function ChatInput({
   }, [editingItemId]);
 
   const cancelQueueEdit = () => {
-    if (activeSessionId) finishQueueEdit(activeSessionId, "restore");
+    if (sessionId) finishQueueEdit(sessionId, "restore");
   };
 
   const handleUpload = useCallback(
@@ -266,28 +276,28 @@ export function ChatInput({
     }
     // Only send attachment IDs for uploads still present in the content.
     // Edits / deletions that remove the markdown URL also drop the binding.
-    const activeIds: string[] = [];
-    for (const [url, id] of Object.entries(
-      useChatStore.getState().inputDraftAttachments[draftKey] ?? {},
-    )) {
-      if (content.includes(url)) activeIds.push(id);
-    }
-    // Capture draft key BEFORE onSend — creating a new session mutates
-    // activeSessionId synchronously, so reading it after onSend would point
-    // at the new session and leave the old draft orphaned.
+    const store = useChatStore.getState();
+    const bindings = Object.entries(store.inputDraftAttachments[draftKey] ?? {})
+      .filter(([url]) => content.includes(url));
+    const activeIds = bindings.map(([, id]) => id);
+    const localAttachments = activeIds
+      .map((id) => store.localAttachmentDetails[id])
+      .filter((item): item is Attachment => !!item);
+    // Capture draft key BEFORE onSend — creating a new session changes the
+    // chat shown, so reading it after onSend would point at the new session.
     const keyAtSend = draftKey;
     const workspaceAtSend = getCurrentWsId();
     const editorAtSend = editorKey;
     // Saving an edited queued message settles the draft through the store
     // (the stash comes back); nothing is cleared here.
-    const edit = activeSessionId ? useChatStore.getState().queueEdit[activeSessionId] : undefined;
-    if (edit && activeSessionId) {
+    const edit = sessionId ? store.queueEdit[sessionId] : undefined;
+    if (edit && sessionId) {
       logger.info("input.save_queued", { contentLength: content.length, attachmentCount: activeIds.length });
       sendingRef.current = true;
       setIsSending(true);
       setSendError(null);
       try {
-        await onSaveQueueEdit?.(activeSessionId, edit, content, activeIds);
+        await onSaveQueueEdit?.(sessionId, edit, content, activeIds);
       } catch (error) {
         logger.error("input.save_queued.error", { error: toSafeErrorDetails(error) });
         if (getCurrentWsId() === workspaceAtSend) setSendError(errorKind(error, "save"));
@@ -307,27 +317,16 @@ export function ChatInput({
     sendingRef.current = true;
     setIsSending(true);
     setSendError(null);
+    // The message leaves the composer as it is submitted, from the draft it was
+    // typed in; a failure puts it back. The editor shows exactly the sent text
+    // here, and nothing later clears it, so whatever the user types while the
+    // send is in flight stays, whichever chat the send lands in.
+    editorRef.current?.clearContent();
+    editorDraftRef.current = { key: keyAtSend, draft: "" };
+    clearInputDraft(keyAtSend);
+    setIsEmpty(true);
     try {
-      await onSend(content, activeIds.length > 0 ? activeIds : undefined,
-        activeIds.map(id => useChatStore.getState().localAttachmentDetails[id]).filter((item): item is Attachment => !!item),
-        mode);
-      if (getCurrentWsId() !== workspaceAtSend) return;
-      // A user may keep typing while the request is in flight. Only clear
-      // the submitted content; retain subsequent edits and their attachments.
-      const current = editorRef.current?.getMarkdown()?.trim();
-      if (
-        `${useChatStore.getState().selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}` ===
-          editorAtSend &&
-        current === content
-      ) {
-        editorRef.current?.clearContent();
-        editorDraftRef.current = { key: editorDraftRef.current.key, draft: "" };
-        clearInputDraft(keyAtSend);
-        const currentSession = useChatStore.getState().activeSessionId;
-        if (currentSession && currentSession !== keyAtSend)
-          clearInputDraft(currentSession);
-        setIsEmpty(true);
-      }
+      await onSend(content, activeIds.length > 0 ? activeIds : undefined, localAttachments, mode);
     } catch (error) {
       logger.error("input.send.error", {
         draftKey: keyAtSend,
@@ -336,18 +335,26 @@ export function ChatInput({
         error: toSafeErrorDetails(error),
       });
       if (getCurrentWsId() !== workspaceAtSend) return;
-      if (
-        `${useChatStore.getState().selectedAgentId ?? "no-agent"}:${editorIdentity.current.version}` !==
-        editorAtSend
-      )
-        return;
-      setSendError(errorKind(error, "send"));
-      const currentSession = useChatStore.getState().activeSessionId;
-      if (currentSession)
-        setInputDraft(
-          currentSession,
-          editorRef.current?.getMarkdown() ?? content,
-        );
+      for (const attachment of localAttachments) setLocalAttachmentDetail(attachment);
+      // The same editor puts the text back under the chat it shows now (the
+      // lazily created one included), before anything typed since. After a
+      // switch to another chat the text returns to the draft it was typed in.
+      const sameEditor = currentEditorKey() === editorAtSend;
+      const key = sameEditor ? draftKeyRef.current : keyAtSend;
+      const editor = sameEditor ? editorRef.current : null;
+      if (sameEditor) setSendError(errorKind(error, "send"));
+      if (editor && !useChatStore.getState().queueEdit[key]) {
+        const typed = editor.getMarkdown().trim();
+        const text = typed ? `${content}\n\n${typed}` : content;
+        editor.setContent(text);
+        editorDraftRef.current = { key, draft: text };
+        setInputDraft(key, text);
+        for (const [url, id] of bindings) setInputDraftAttachment(key, url, id);
+        setIsEmpty(false);
+      } else {
+        // A stored draft (or a queued edit's stash) takes it after its own text.
+        restoreToDraft(key, content, Object.fromEntries(bindings));
+      }
     } finally {
       sendingRef.current = false;
       setIsSending(false);

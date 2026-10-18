@@ -16,9 +16,11 @@ export class MessagesEndpoints {
     const path = `/api/sessions/${encodeURIComponent(sessionId)}/messages${params.size ? `?${params}` : ""}`;
     return parseStrictResponse<z.infer<typeof MessagesPageSchema>>(await this.http.fetch<unknown>(path), MessagesPageSchema, { endpoint: path });
   }
-  async sendMessage(sessionId: string, body: SendMessageBody) {
+  async sendMessage(sessionId: string, body: SendMessageBody, options: { signal?: AbortSignal } = {}) {
     const path = `/api/sessions/${encodeURIComponent(sessionId)}/messages`;
-    return parseStrictResponse<z.infer<typeof SendMessageResponseSchema>>(await this.http.fetch<unknown>(path, { method: "POST", body: JSON.stringify(body) }), SendMessageResponseSchema, { endpoint: path });
+    return parseStrictResponse<z.infer<typeof SendMessageResponseSchema>>(await this.http.fetch<unknown>(path, {
+      method: "POST", body: JSON.stringify(body), ...(options.signal ? { signal: options.signal } : {}),
+    }), SendMessageResponseSchema, { endpoint: path });
   }
   async getMessage(id: string) {
     const path = `/api/messages/${encodeURIComponent(id)}`;

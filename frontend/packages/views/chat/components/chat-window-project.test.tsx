@@ -289,7 +289,7 @@ describe("ChatWindow plain HTTP sends", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
     await waitFor(() => expect(backend.refresh).toHaveBeenCalledOnce());
   });
 
@@ -301,7 +301,7 @@ describe("ChatWindow plain HTTP sends", () => {
     expect(globalThis.crypto.randomUUID).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
     expect(backend.create).not.toHaveBeenCalled();
   });
 
@@ -376,7 +376,7 @@ describe("ChatWindow project settings", () => {
     expect(screen.getByRole("button", { name: "Work location: Remi" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
     await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
     expect(await screen.findByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
     // The created chat consumed the draft: the next new chat starts unbound.
@@ -416,7 +416,7 @@ describe("ChatWindow project settings", () => {
     expect(backend.update).not.toHaveBeenCalled();
     expect(backend.create).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
   });
 
   it("keeps no location strip for an existing chat with nothing bound", async () => {
@@ -628,7 +628,7 @@ describe("ChatWindow follow-up delivery", () => {
     const { client } = mount(true);
     await agentsLoaded(client);
     fireEvent.click(await screen.findByRole("button", { name: "Steer test message" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Steer this", undefined, expect.any(String)));
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Steer this", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
     expect(backend.enqueue).not.toHaveBeenCalled();
   });
 

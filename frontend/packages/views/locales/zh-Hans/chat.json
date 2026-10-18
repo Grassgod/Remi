@@ -37,6 +37,7 @@
     "sending": "发送中…",
     "sent": "已发送",
     "send_failed": "发送失败 ·",
+    "unconfirmed": "未确认送达 ·",
     "retry": "重试",
     "retry_send": "重新发送这条消息"
   },

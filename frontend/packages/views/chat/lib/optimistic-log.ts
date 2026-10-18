@@ -9,7 +9,13 @@ export interface OptimisticChatRow {
   attachments?: Attachment[];
   createdAt: string;
   localSeq: number;
-  status: "sending" | "sent" | "failed" | "hidden";
+  /**
+   * `sent` once the server accepted the message (its answer, or its row in the
+   * log); `unconfirmed` when the send got no answer and the log has not shown
+   * it yet; `failed` when the server refused it.
+   */
+  status: "sending" | "sent" | "unconfirmed" | "failed" | "hidden";
+  /** When the log first held the server's row; only that row renders after it. */
   confirmedAt?: number;
 }
 

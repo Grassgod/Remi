@@ -638,7 +638,7 @@ describe("ApiClient", () => {
 
       const client = new ApiClient("https://api.example.test");
       await expect(client.sendChatMessage("session-1", "hello", ["att-1", "att-2"]))
-        .resolves.toMatchObject({ message_id: "m1", task_id: "attempt-1", turn_id: "t1" });
+        .resolves.toMatchObject({ message_id: "m1", turn_id: "t1" });
 
       const [url, init] = fetchMock.mock.calls.find(([, init]) => init?.method === "POST")!;
       expect(url).toBe("https://api.example.test/api/sessions/session-1/messages");

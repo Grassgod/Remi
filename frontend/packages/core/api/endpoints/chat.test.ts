@@ -94,27 +94,44 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse({ ...session, pinned: undefined }).updateChatSession("chat-1", { pinned: false })).rejects.toBeInstanceOf(ApiContractError);
   });
 
-  it("keeps an accepted message successful when the supplemental turn read fails", async () => {
+  it("settles once the message is accepted, without reading its turn", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(response(session))
-      .mockResolvedValueOnce(response({ message: messageFixture({ dedupe_key: "send-1" }), wake_applied: "next_turn", wake_reason: "agent_pair_not_privileged", turn_id: "turn_1" }))
-      .mockRejectedValueOnce(new Error("offline"));
+      .mockResolvedValueOnce(response({ message: messageFixture({ dedupe_key: "send-1" }), wake_applied: "next_turn", wake_reason: "agent_pair_not_privileged", turn_id: "turn_1" }));
     vi.stubGlobal("fetch", fetchMock);
     const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
-    await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1")).resolves.toMatchObject({ message_id: "msg_1", turn_id: "turn_1", created_at: "2026-10-04T00:00:00Z" });
-    expect(fetchMock.mock.calls.filter(([, init]) => init?.method === "POST")).toHaveLength(1);
+    await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1"))
+      .resolves.toEqual({ message_id: "msg_1", turn_id: "turn_1", created_at: "2026-10-04T00:00:00Z" });
+    // A turn read that hangs or fails can no longer hold or fail the send.
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).not.toHaveBeenCalledWith(expect.stringContaining("/api/turns/"), expect.anything());
     expect(JSON.parse(fetchMock.mock.calls[1]![1]!.body).dedupe_key).toBe("send-1");
   });
-  it("sends a canonical message, preserving dedupe and the active attempt identity", async () => {
+  it("sends a canonical message, preserving dedupe, with the caller's abort signal on every request", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response(session))
-      .mockResolvedValueOnce(response({ message: messageFixture(), wake_applied: "next_turn", wake_reason: "agent_pair_not_privileged", turn_id: "turn_1" }))
-      .mockResolvedValueOnce(response({ turn: turnFixture() }));
+      .mockResolvedValueOnce(response({ message: messageFixture(), wake_applied: "next_turn", wake_reason: "agent_pair_not_privileged", turn_id: "turn_1" }));
     vi.stubGlobal("fetch", fetchMock);
     const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
-    await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1")).resolves.toMatchObject({ message_id: "msg_1", task_id: "attempt_2", turn_id: "turn_1" });
+    const { signal } = new AbortController();
+    await expect(api.sendChatMessage("chat_1", "Follow up", undefined, "send-1", { signal })).resolves.toMatchObject({ message_id: "msg_1", turn_id: "turn_1" });
     expect(fetchMock).toHaveBeenCalledWith("https://api.example.test/api/sessions/chat_1/messages", expect.objectContaining({
-      method: "POST", body: JSON.stringify({ body_md: "Follow up", message_kind: "request", to: { type: "agent", ref: "agent-1" }, wake_requested: "now", dedupe_key: "send-1" }),
+      method: "POST", signal, body: JSON.stringify({ body_md: "Follow up", message_kind: "request", to: { type: "agent", ref: "agent-1" }, wake_requested: "now", dedupe_key: "send-1" }),
     }));
+    expect(fetchMock.mock.calls.map(([, init]) => init?.signal)).toEqual([signal, signal]);
+  });
+  it("reads a sent message's turn as the pending task: its attempt while in flight, none once it ended", async () => {
+    for (const [fields, expected] of [
+      [{ status: "pending" }, { task_id: "attempt_2", turn_id: "turn_1", status: "queued", created_at: "2026-10-04T00:00:00Z", supports_queue: true }],
+      [{ status: "running", current_attempt_id: null }, { task_id: "turn_1", turn_id: "turn_1", status: "running", supports_queue: true }],
+      [{ status: "completed" }, { supports_queue: true }],
+    ] as const) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ turn: turnFixture(fields) })));
+      const api = new ChatEndpoints(new HttpClient("https://api.example.test"));
+      const task = await api.getChatTurnPendingTask("turn_1");
+      expect(task).toMatchObject(expected);
+      if (!("task_id" in expected)) expect(task).toEqual(expected);
+      expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/turns/turn_1", expect.anything());
+    }
   });
   it("reads the active turn through status-filtered pages, without a legacy queue", async () => {
     vi.stubGlobal("fetch", vi.fn(async (url: string) => {

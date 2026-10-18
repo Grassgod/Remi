@@ -120,18 +120,14 @@ export interface ChatMessagesPage {
   next_cursor?: ChatMessagesCursor | null;
 }
 
+/**
+ * The server accepted the message. The turn it started or joined is read
+ * afterwards (`getChatTurnPendingTask`), never as part of the send.
+ */
 export interface SendChatMessageResponse {
-  turn_id?: string;
   message_id: string;
-  task_id: string;
-  supports_queue: true;
-  queued: boolean;
-  /**
-   * Server-authoritative task creation time. Optimistic StatusPill seed
-   * uses this as its anchor so the timer starts from the real `0s` —
-   * without it the front-end falls back to its local clock and the
-   * timer "snaps backwards" later when WS events update the cache.
-   */
+  turn_id?: string;
+  /** Server time of the message. */
   created_at: string;
 }
 
