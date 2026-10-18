@@ -533,6 +533,7 @@ bun run tests/integration/zero-jump-session-log-check.ts
 | 仓库根 | `MUL357_TASKS=6000 bun run tests/manual/bench-task-list-pagination.ts --out <path>` | `GET /api/multiremi/tasks` 的 `limit` / 无 limit / 带 status / 普通成员四类请求在 6000 条种子数据下的 p50/p95、响应字节、SQL 条数与序列化耗时。内存 SQLite + `app.request()`，不含真实 HTTP 与 PostgreSQL；改前数字用同一文件在父提交上运行。 |
 | 仓库根 | `MULTIREMI_TEST_POSTGRES_URL=postgres://… MUL357_TASKS=6000 bun run tests/manual/bench-task-list-pagination-pg.ts --out <path>` | 同一接口在**真实 PostgreSQL** 上的对照：混合分布与两个尾部最坏分布（可见集中在最新 / 最旧）各跑一遍，输出 p50/p95、响应字节、SQL 条数、以及**过桥字节**（worker 序列化回主线程的 JSON 体积，`SELECT *` 与窄投影的差别就体现在这里）。改前数字用同一文件在父提交上运行；需要可创建临时库的 PG 实例。 |
 | 仓库根 | `bun run tests/manual/bench-issue-detail-first-screen.ts --out <path>` | MUL-385 的 Issue 详情首屏三路由（`/api/issues/:id`、`/sessions`、`/timeline?issue_session_id=@default&limit=40`，外加只留档的 `/comments`）：每个路由的 `dbq`、db 耗时、**过桥字节**（按 worker 的 `JSON.stringify({ rows, count })` 口径模拟）、响应字节与 p50/p95，并附带 1/5/20 个 session 的查询数规模扫描和鉴权链查询数。fixture 是 MUL-307 规模（173 条评论 / 多个 session / 50+ task，见 `tests/fixtures/multiremi/issue-detail-first-screen-fixture.ts`）。默认内存 SQLite + `app.request()`；设置 `MULTIREMI_TEST_POSTGRES_URL` 指向可一次性创建的测试 PG 时改用真实桥，不可达时回落 SQLite 并在报告里注明。响应形状由 `tests/unit/multiremi/issue-detail-first-screen-query-count.test.ts` 对 golden 比对。改前数字用同一文件在父提交上运行。 |
+| 仓库根 | `bun run tests/manual/session-log-window-query-count.ts --verbose` | `GET /api/sessions/:sessionId/log` 的 Chat/Issue 窗口、head、task 凭证与成员变体逐探针的语句数和按 SQL 分组明细；内存 SQLite + `app.request()`，只计语句数，不测延迟或 PG 桥。改前数字把 `packages/` 换成父提交后运行同一脚本，结果见下文“会话日志窗口”。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-store-issues.test.ts tests/unit/multiremi/multiremi-api-issues.test.ts` | 列表、搜索及 API 行为；功能测试不是性能基线。 |
 | 仓库根 | `bun test tests/unit/multiremi/multiremi-api-search-inbox.test.ts` | 收件箱游标、摘要和原有读/归档契约；不产出性能数据。 |
 | 仓库根 | `bun run tests/manual/bench-first-screen-hotspots-pr2.ts --out <path>` | 在已隔离的临时 HOME/state/config 环境运行；该独立 harness 不加载含 `bun:test` 生命周期 hook 的测试 preload。采集 inbox 摘要、附件内容（完整响应与条件请求）、workspace Runtime 列表的同口径 dbq、db、过桥字节及响应字节。显式 `MULTIREMI_TEST_POSTGRES_URL` 启用真实 PG，否则使用 SQLite；PG 失败不回落。摘要按全部未归档 selection 聚合，附件 `/content` 在鉴权后比较 id ETag；三条上传路径统一排他创建，使用完整 UUID id，碰撞最多重试三次，失败只清理本次创建的文件。Runtime usage/group/model 各一次批量读，两条列表查询固定按 `updated_at DESC, id DESC` 排序。基线与 golden 复现见 `reports/performance/MUL-473-pr2-first-screen-hotspots.md`。 |
@@ -589,6 +590,27 @@ HTTP 或 app.request p50/p95（ms） / 错误率 / SQL数 / 响应 bytes：
 ### S9-6：Project 列表投影
 
 `GET /api/projects` 使用专用摘要投影，保持原 issue/done/resource 聚合、排序、null/归档及权限行为；instructions、delta_instructions 和修订元数据不跨桥。详情、native 列表及搜索仍用完整 Project。正式双方言用例逐字段对拍，增大两条说明至各64KiB后摘要内容和回包字节不变，详情仍返回完整说明。
+
+### 会话日志窗口：批量轮卡片与来源可见性
+
+`GET /api/sessions/:sessionId/log` 是 Chat 每次切换会话、Issue 会话打开时的读取。原实现每张轮卡片 3 条语句（turn+当前 attempt、回复正文、usage），每个受保护来源再读 turn、attempt 回退、task 行、usage 与 autopilot run，Issue 回复另逐条读被回复消息。
+
+- **实现事实：** 多行读取（window、listShown、listAll、range 页、按 task 列出）经 [projectTurnCards](../../packages/server/src/store/turn-attempts.ts) 每批各一条语句读取 turn+attempt、Chat 回复正文（仅 Chat 卡片使用）与 usage。turn+attempt 与回复正文每批 50 个 id：这些行带 legacy prompt、进度摘要和 trace/usage JSON，PG 下整条结果作为一次桥回复返回，小批次避免触发 1 MiB 日志与回复上限，窗口最多约 34 张卡片，仍是一条语句；卡片由与单行 `projectTurnCard` 相同的函数构造，缺失 turn 仍抛同一错误，单行读取不变。
+- **实现事实：** 路由把窗口交给 [conversationEntryVisibility](../../packages/server/src/api/helpers/conversations.ts) 的 `prefetch`：被回复消息按层用 `getMessages` 批量读取（与 `getMessage` 同一 SQL 条件与转换，整行消息每批 50 条），来源 subject 用 `getConversationSourceSubjects` 每 400 个 id 一条 UNION 语句读取（只返回 id 类窄列），按 `getTurn(id) ?? getTurnForAttempt(id)` 的优先级取 turn 的当前 attempt，并与 `getTask` 读同一执行记录视图，字段为 id/workspace/agent/Chat/Issue 会话，覆盖访问判定读取的全部字段。判定仍逐来源调用 `canAccessConversationTask`；批量未覆盖的来源（`target_seq` 标记等）走原逐条读取。守卫已读的 Chat 行写入本请求 memo；Chat task 的判定只比较创建者，因此 `canUserViewTaskMessages` 对 Chat task 不再读取 Agent（所有调用方，结论不变）。Issue 会话分支与 `with_activity` 复用守卫读到的会话行。
+- **未改变的逐条读取：** 问题通知、决策与 `target_seq` 关联；成员被私有 Agent 拒绝时，每个被拒来源仍读一次 workspace 角色；Agent 的 `/messages?from&to` 范围读只批量卡片，可见性仍逐条。
+
+2026-10-18 在 macOS arm64、Bun 1.3.14、内存 SQLite 上的**本地语句数**（不是生产延迟，不含 PG 桥耗时）。数据为 [session-log-window fixture](../../tests/fixtures/multiremi/session-log-window-fixture.ts)：40 个已完成 Chat 轮（1 个重试、部分带 usage/附件）与 12 轮 Issue 评论、公开/私有 Agent 轮、反应、附件、活动；PAT 鉴权，`last_used_at` 写入先预热。改前为本树换回 f4a2161a5 的 `packages/` 后运行同一脚本：
+
+| 读取 | 改前 | 改后 |
+| --- | --- | --- |
+| Chat `?before=30`（30 行） | 87 | 15 |
+| Chat `?anchor=0&before=1`（head） | 10 | 9 |
+| Chat task 凭证 `?before=9` | 35 | 17 |
+| Issue `?before=30&with_activity=1`（30 行） | 81 | 20 |
+| Issue 成员（私有 Agent 不可见）`?before=12&with_activity=1` | 43 | 22 |
+| Agent 范围读 `/messages?from=90&to=110` | 61 | 41 |
+
+复现：`bun run tests/manual/session-log-window-query-count.ts --verbose`。[回归测试](../../tests/unit/multiremi/session-log-window-query-count.test.ts)固定 Chat 窗口 15、head 9、Issue 窗口 20 条语句，窗口扩大到 90/45 行时语句数不变，并要求全部探针的响应字节与[改前采集的 golden](../../tests/fixtures/multiremi/capture-session-log-window-golden.ts)一致，包括他人 Chat 403、task 凭证只见自身轮卡片、成员看不到私有 Agent 的轮。该测试在本地 SQLite 与一次性 PostgreSQL 17 上均通过；PG 下的延迟未测。
 
 
 ## S9-6 本地详情复核

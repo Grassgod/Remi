@@ -5353,6 +5353,8 @@ runMigrations(this.db);
   closeQuestion(...args: Parameters<Questions['close']>) { return new Questions(this.ctx).close(...args); }
   reconcileQuestionWaits(...args: Parameters<Questions['reconcileRuntimeWaits']>) { return new Questions(this.ctx).reconcileRuntimeWaits(...args); }
   getMessage(...args: Parameters<InboxRepo["getMessage"]>) { return this.inbox.getMessage(...args); }
+  /** `getMessage` for many ids in bounded batches; ids without a message are absent. */
+  getMessages(...args: Parameters<InboxRepo["getMessages"]>) { return this.inbox.getMessages(...args); }
   getDaemonTurnBridge() {return new DaemonTurnBridge(this.ctx);}
   sendMessage(input:import("@multiremi/contracts/unified-model.js").SendMessageInput, uploads: CreateAttachmentInput[] = [],
     authorizeRecipient?:(agent:MultiremiAgent)=>void) {
@@ -5474,6 +5476,11 @@ runMigrations(this.db);
   getTaskIdentity(id: string, projection: "fanout"): import("@multiremi/store/context.js").TaskMessageFanoutSubject | null;
   getTaskIdentity(id: string, projection?: "fanout") {
     return projection ? this.tasks.getTaskIdentity(id, projection) : this.tasks.getTaskIdentity(id);
+  }
+
+  /** Conversation-visibility subjects for many source ids; see TasksRepo.getConversationSourceSubjects. */
+  getConversationSourceSubjects(sourceIds: readonly string[]) {
+    return this.tasks.getConversationSourceSubjects(sourceIds);
   }
 
   taskOfferRetryDeadlines(runtimeId: string) { return this.tasks.taskOfferRetryDeadlines(runtimeId); }
