@@ -177,6 +177,8 @@ export interface TraceTranslatorStart {
   provider: string;
   requestedModel: string | null;
   input: UnifiedMessage[];
+  /** What the provider was prompted with; the input item records it in place of the projected bodies. */
+  text?: string | null;
   /** Used when the attempt carries no input messages (a direct `handleTask`). */
   fallbackText?: string | null;
   attachments?: Array<{ id: string; name: string | null }>;
@@ -1514,8 +1516,8 @@ export function createTraceTranslator(
         turnStarted = true;
         emitter.event({ type: "turn.started", turn });
         const id = uniqueId(`in:${input.attemptId}`);
-        const text = capItemText(input.input.length
-          ? input.input.map((message) => message.body_md).join("\n\n") : input.fallbackText ?? "");
+        const text = capItemText(input.text ?? (input.input.length
+          ? input.input.map((message) => message.body_md).join("\n\n") : input.fallbackText ?? ""));
         // PR 6 §2.5: the doorbells among the input say why the agent speaks on its own (Feishu).
         const doorbells = doorbellsOf(input.input);
         write("item.completed", {

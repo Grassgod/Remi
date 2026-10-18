@@ -167,7 +167,7 @@ test("PPE ASK waits for a real elicitation answer and records the original busin
   } finally { await f.close(); }
 }, 20_000);
 
-test("PPE actual daemon Bootstrap reads its range and consumes a normalized native Q answered by a member", async () => {
+test("PPE actual daemon first turn reads its range and consumes a normalized native Q answered by a member", async () => {
   let evidenceDirectory: string;
   const h = await DaemonProtocolHarness.create({ database: "sqlite", providerFactory: options => new AcpProvider({
     ...options, executable: process.execPath, args: [join(root, "deploy/zadig/ppe/fake-acp.ts")], privateTmpDirectory: undefined,
@@ -185,8 +185,13 @@ test("PPE actual daemon Bootstrap reads its range and consumes a normalized nati
     const question = h.store.listIssueQuestions(issue.id)[0]!;
     const attemptId = h.store.getTurn(sent.turn_id!)!.current_attempt_id!;
     const prompt = h.store.getTaskPrompt(attemptId)!;
-    expect(prompt.prompt).toStartWith("# Bootstrap Prompt");
-    expect(prompt.prompt).toContain(`Turn: ${sent.turn_id}; attempt: ${attemptId};`);
+    // ADR 0023: a fresh provider session records mode "bootstrap"; the prompt is only the turn input,
+    // and the Issue notes travel in the provider home's AGENTS.md (recorded as instructions).
+    expect(prompt.mode).toBe("bootstrap");
+    expect(prompt.prompt).toStartWith(`[Local User] ${issue.title}`);
+    expect(prompt.prompt).not.toContain("# Bootstrap Prompt");
+    expect(prompt.instructions).toContain("## Issue");
+    expect(prompt.instructions).toContain(`Title: ${issue.title}`);
     expect(question.original_message).toBe("PR404/RESP/ASK: Should this PPE Issue continue?\n\nPR404/RESP/ASK: Should this PPE Issue continue?");
     expect(question.wait_status).toBe("waiting");
     // The asking execution owner of a root is skipped: the Q waits at the human stage.

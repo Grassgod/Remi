@@ -283,11 +283,20 @@ export class InboxOperations {
   }
   getTurnTrace(id:string){const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');
     return {turn_id:id,attempt_id:turn.current_attempt_id,trace:this.ctx.taskTraces().getTaskTrace(turn.current_attempt_id)};}
-  getTurnInput(id:string){const turn=this.getTurn(id);if(!turn)throw new Error('Turn not found');
+  /**
+   * The turn's input range and messages, and (ADR 0023) what one attempt actually sent the agent: its
+   * first prompt (`sent_prompt`) and Remi's part of the AGENTS.md in effect (`instructions`), as its
+   * daemon recorded them. `attemptId` picks an attempt of this turn; the current one by default.
+   */
+  getTurnInput(id:string,attemptId?:string|null){const turn=this.getTurn(id);if(!turn)throw new Error('Turn not found');
     const from=turn.input_from_seq??0,to=turn.input_to_seq??turn.wake_seq,messages:UnifiedMessage[]=[];
     let after=from;
     for(;;){const page=this.listMessages(turn.session_id,{from:after,to,limit:1000});messages.push(...page);if(page.length<1000)break;after=page.at(-1)!.seq;}
-    return {from_seq:from,to_seq:to,messages,legacy_prompt:turn.legacy_prompt};}
+    const attempt=attemptId??turn.current_attempt_id;
+    const owned=attempt?this.ctx.db.query('SELECT id FROM multiremi_turn_attempts WHERE id=? AND turn_id=?').get(attempt,turn.id):null;
+    const sent=owned?this.ctx.db.query('SELECT prompt,instructions FROM multiremi_task_prompts WHERE task_id=?').get(attempt) as {prompt:string;instructions:string|null}|null:null;
+    return {from_seq:from,to_seq:to,messages,legacy_prompt:turn.legacy_prompt,
+      sent_attempt_id:sent?attempt!:null,sent_prompt:sent?.prompt??null,instructions:sent?.instructions||null};}
   /** `byMember`: a member's stop pauses the Chat follow-up queue (ADR 0020). */
   cancelTurn(id:string,opts:{byMember?:boolean}={}):MultiremiTurn {
     return this.transaction(events=>{const turn=this.getTurn(id);if(!turn?.current_attempt_id)throw new Error('Turn not found');

@@ -104,6 +104,7 @@ import {
 } from "@connectors/feishu/outbound-images.js";
 import {
   buildSteerInjectionPrompt,
+  steerMessageText,
   materializeTaskSteerAttachments,
   DEFAULT_FORCE_ANSWER_GRACE_MS,
   DEFAULT_STEER_POLL_MS,
@@ -130,6 +131,7 @@ import {
 import { hasReadOnlyCodeSnapshot, isSideConversation } from "@daemon/agent-runtime/prompts/side-conversation.js";
 import type { TaskRepoSnapshot } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import { buildTaskPromptArtifact, type TaskRepoCheckout, type TaskRepoWarning } from "@multiremi/prompt.js";
+import { isPrivateChatTask, turnImages } from "@daemon/agent-runtime/prompts/turn-input.js";
 import {
   MultiremiRepoCache,
   normalizeRepoList,
@@ -149,6 +151,9 @@ import {
   writeTaskContext,
   writeProjectResourceContext,
   writeAgentSkillContext,
+  syncAgentSkills,
+  agentSkillRoot,
+  providerHomeSkillRoot,
 } from "@daemon/agent-runtime/skills/ephemeral.js";
 import {
   runSnapshotGcOnce,
@@ -180,7 +185,7 @@ import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat
 import { cleanProcessEnv } from "@daemon/agent-runtime/env/injector.js";
 import { mergeCodexSessionConfig, type CodexModelCatalogState } from "@daemon/agent-runtime/relay-sync.js";
 import { AgentRuntime } from "@daemon/agent-runtime/runtime.js";
-import { prepareRuntimeWorkspaceContext } from "@daemon/agent-runtime/workspace/runtime-context.js";
+import { remiInstructionsBudget, runtimeWorkspaceContext, writeProviderInstructions } from "@daemon/agent-runtime/workspace/runtime-context.js";
 import { AgentSession } from "@daemon/agent-runtime/session.js";
 import type { EphemeralContext } from "@daemon/agent-runtime/types.js";
 import { AgentPluginCache } from "@daemon/agent-runtime/agent-plugins/cache.js";
@@ -735,11 +740,14 @@ const ATTEMPT_ENV_KEYS = new Set(["MULTIREMI_TOKEN", "MULTIREMI_TURN_ID", "MULTI
 function backgroundLaunchFingerprint(input: {
   agentType: string; executable?: string | null; args?: string[]; env?: Record<string, string>; mcpServers?: unknown;
   allowedTools?: string[]; systemPrompt?: string | null; claudeSettings?: unknown; claudeOneMillionModels?: readonly string[];
+  instructions?: string | null;
 }): string {
   const env = Object.entries(input.env ?? {}).filter(([key]) => !ATTEMPT_ENV_KEYS.has(key)).sort(([a], [b]) => a.localeCompare(b));
   return createHash("sha256").update(JSON.stringify([input.agentType, input.executable ?? null, input.args ?? [], env,
     input.mcpServers ?? [], input.allowedTools ?? null, input.systemPrompt ?? null, input.claudeSettings ?? null,
-    [...input.claudeOneMillionModels ?? []]])).digest("hex");
+    [...input.claudeOneMillionModels ?? []],
+    // Only when there is a file, so every other lane keeps the fingerprint it had.
+    ...(input.instructions ? [createHash("sha256").update(input.instructions).digest("hex")] : [])])).digest("hex");
 }
 
 interface PreparedIssueWorkspace {
@@ -3519,6 +3527,8 @@ export class MultiremiDaemon {
     ]);
     let providerInstallEnv: Record<string, string> | undefined;
     let antigravity: AntigravityRunGateway | null = null;
+    /** The runtime workspace's local instructions, read on this host; written with the Chat block in `runAgent`. */
+    let localInstructions: string | null = null;
     let releaseIssueWorkspaceLifecycle: (() => void) | null = null;
     let progressSummarizer: TaskProgressSummarizer | null = null;
     let providerEntered = false;
@@ -3696,9 +3706,9 @@ export class MultiremiDaemon {
           await this.prepareCodexModelCatalog(codexProfile, relay!.auth_token, providerHome.home, abort.signal, task.id);
         }
         if (task.runtimeWorkspaceId) {
-          writeAgentSkillContext(providerHome.home, task);
-          const localEnv = prepareRuntimeWorkspaceContext(task, providerHome, resolvedWorkDir.workDir);
-          providerEnv = { ...localEnv, ...providerEnv };
+          const local = runtimeWorkspaceContext(task, providerHome, resolvedWorkDir.workDir);
+          localInstructions = local?.instructions ?? null;
+          providerEnv = { ...local?.env, ...providerEnv };
         }
       }
       if (!providerHome) throw new Error(`Task ${task.id} has no isolated provider home`);
@@ -3753,6 +3763,7 @@ export class MultiremiDaemon {
         () => { providerEntered = true; },
         antigravity,
         background,
+        localInstructions,
       );
       if (!summary.completed) {
         const failureReason = summary.failureReason
@@ -4615,6 +4626,7 @@ export class MultiremiDaemon {
     onProviderEntry?: () => void,
     antigravity: AntigravityRunGateway | null = null,
     background: BackgroundAttempt | null = null,
+    localInstructions: string | null = null,
   ): Promise<RunSummary> {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
@@ -4674,7 +4686,13 @@ export class MultiremiDaemon {
       const contextDir = task.runtimeWorkspaceId ? providerHome?.root : workDir;
       if (!contextDir) throw new Error("Runtime workspace requires an isolated provider home");
       writeTaskContext(contextDir, task);
-      if (!task.runtimeWorkspaceId) writeAgentSkillContext(workDir, task);
+      // ADR 0023: skills load natively. Remi writes them only where it owns the folder: the daemon's execution
+      // directory, or the provider home when the working directory is the user's own (a runtime workspace or a
+      // Project's local_directory).
+      const userFolder = Boolean(task.runtimeWorkspaceId) || (resolvedWorkDir.localDirectory && workDir === workspaceDir);
+      if (!userFolder) syncAgentSkills(agentSkillRoot(workDir, agent.provider), task);
+      else if (providerHome) syncAgentSkills(providerHomeSkillRoot(providerHome.home, agent.provider), task);
+      else if (agent.skills?.length) log.warn(`Task ${task.id}: no provider home for skills; the user's folder is left as it is`);
       writeProjectResourceContext(contextDir, task);
     } catch (err) {
       log.warn(`Failed to write task context for ${task.id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -4682,6 +4700,24 @@ export class MultiremiDaemon {
     if (task.sessionId || workDir) {
       this.enqueueTaskReport(task.id, "session_pin", { sessionId: task.sessionId, workDir });
     }
+    const promptOptions = {
+      wikiMaterialized,
+      repoCheckouts: preparedWorkspace.checkouts,
+      repoSnapshots: preparedWorkspace.snapshots,
+      repoWarnings: preparedWorkspace.warnings,
+      chatRepoAutoCheckout,
+      workspacePath: workspaceDir,
+      sessionHistoryPaths: task.issueId
+        ? listIssueConversationRoots(this.options.workspacesRoot, task.issueId)
+        : undefined,
+    };
+    // ADR 0023: everything fixed for the session is in the provider home's AGENTS.md, rewritten
+    // before every provider start; the turn sends only its new input.
+    const privateChat = isPrivateChatTask(task);
+    const promptArtifact = buildTaskPromptArtifact(task, { ...promptOptions, instructionsMaxBytes: remiInstructionsBudget(localInstructions) });
+    const providerInstructions = providerHome
+      ? writeProviderInstructions(providerHome, { remi: promptArtifact.instructions, local: localInstructions })
+      : null;
 
     // Assemble config via AgentRuntime
     const runtime = new AgentRuntime();
@@ -4732,6 +4768,8 @@ export class MultiremiDaemon {
       agentType: config.agentType, executable: config.executable, args: config.customArgs, env: config.env,
       mcpServers: config.mcpServers, allowedTools: config.allowedTools, systemPrompt: config.systemPrompt ?? null,
       claudeSettings, claudeOneMillionModels,
+      // A process loads its instruction file when it starts: a changed file needs a new one.
+      instructions: providerInstructions,
     }) : "";
     // PR 6 §2.4: the lane's parked process is adopted when nothing it fixed at launch changed; else it
     // is released, and has exited, before another process starts on the same provider session.
@@ -4905,28 +4943,23 @@ export class MultiremiDaemon {
         attemptId: task.id, turnId: turnInput.turn_id ?? null, agentId: agent.id, agentName: agent.name ?? null,
         provider: config.agentType, requestedModel: task.claudeProfile?.model ?? config.model ?? null,
         input: Array.isArray(turnInput.input_messages) ? turnInput.input_messages : [],
+        // What the provider is prompted with, not the projected bodies with their range record.
+        text: promptArtifact.prompt,
         fallbackText: task.prompt ?? null, attachments: traceAttachments(task.chatMessageAttachments),
       });
-      const promptOptions = {
-        wikiMaterialized,
-        repoCheckouts: preparedWorkspace.checkouts,
-        repoSnapshots: preparedWorkspace.snapshots,
-        repoWarnings: preparedWorkspace.warnings,
-        chatRepoAutoCheckout,
-        workspacePath: workspaceDir,
-        sessionHistoryPaths: task.issueId
-          ? listIssueConversationRoots(this.options.workspacesRoot, task.issueId)
-          : undefined,
-      };
-      const promptArtifact = buildTaskPromptArtifact(task, promptOptions);
       this.enqueueTaskReport(task.id, "prompt", {
         mode: promptArtifact.mode,
         prompt: promptArtifact.prompt,
         sha256: promptArtifact.sha256,
+        // ADR 0023: Remi's part of the AGENTS.md in effect, for the transcript's session notes. Never the local context.
+        instructions: promptArtifact.instructions,
       });
       signal.throwIfAborted();
       steerFeed.start();
       let prompt = promptArtifact.prompt;
+      // ADR 0023: a steer is the new messages, labelled as the turn input labels them.
+      const steerPrompt = (messages: Parameters<typeof buildSteerInjectionPrompt>[0]) =>
+        buildSteerInjectionPrompt(messages, { agentId: agent.id, alwaysLabel: !privateChat });
 
       // Every steer batch flows through here exactly once: injected into the
       // running prompt (`native`), sent as the next prompt (`reprompt`), or —
@@ -4952,7 +4985,9 @@ export class MultiremiDaemon {
         // them, or the stale duplicate would trip the next turn's interrupt.
         steerFeed.markHandled(messages.map((m) => m.id));
         for (const [result, group] of steerResultGroups(messages, via, (id) => pump?.takeFallback(id) ?? null)) {
-          this.recordTrace(task.id, () => trace.steer(group, result));
+          // Each message as the agent got it: no range record where the input is native or complete.
+          const received = group.map((message) => ({ ...message, content: steerMessageText(message.content) }));
+          this.recordTrace(task.id, () => trace.steer(received, result));
         }
       };
       onDoorbellSteer = (message) => {
@@ -4969,7 +5004,7 @@ export class MultiremiDaemon {
           messages, workDir, task.id,
           (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal), signal,
         );
-        prompt = buildSteerInjectionPrompt(preparedMessages);
+        prompt = steerPrompt(preparedMessages);
         await recordSteerBatch(messages, "reprompt");
         log.info(`Injected ${messages.length} steer message(s) into task ${task.id}`);
       };
@@ -4979,7 +5014,7 @@ export class MultiremiDaemon {
           feed: steerFeed,
           steer: (text) => steer(text, { chatId: config.chatId }),
           // Same framing as the re-prompt; attachments become text references.
-          prepare: async (messages) => buildSteerInjectionPrompt(await materializeTaskSteerAttachments(
+          prepare: async (messages) => steerPrompt(await materializeTaskSteerAttachments(
             messages, workDir, task.id,
             (id) => this.client.downloadTaskAttachment(id, task.authToken ?? "", signal), signal,
           )),
@@ -5125,8 +5160,11 @@ export class MultiremiDaemon {
         }
       }
 
+      // ADR 0023: the turn's images go with its first prompt as image blocks; their lines stay in the text.
+      const firstPromptImages = turnImages(task.chatMessageAttachments);
       while (true) {
         turnIndex++;
+        config.media = turnIndex === 1 && firstPromptImages.length ? firstPromptImages : undefined;
         const turnAbort = new AbortController();
         // Before any abort can fire: the bridge's reports of the calls the abort
         // cuts short arrive between here and `promptEnded`.

@@ -330,11 +330,12 @@ export function workspaceCommandSpecs(): CommandSpec[] {
       const response = await client.request({ method: "DELETE", path: `/api/workspaces/${encodePath(String(workspace.id))}/feishu-bot` });
       renderResource(invocation, response.data);
     }),
-    scopedRead("workspace.prompt.get", ["workspace", "prompt", "get"], "Read workspace prompt appendices", "/prompts"),
+    scopedRead("workspace.prompt.get", ["workspace", "prompt", "get"], "Read the workspace prompt", "/prompts"),
     scopedRead("workspace.prompt.template", ["workspace", "prompt", "template"], "Read the platform prompt template", "/prompt-template"),
-    scopedWrite("workspace.prompt.update", ["workspace", "prompt", "update"], "Update workspace prompt appendices", "/prompts", "PUT", [
-      { name: "bootstrap-prompt", type: "string", valueName: "text", description: "Bootstrap prompt appendix" },
-      { name: "delta-prompt", type: "string", valueName: "text", description: "Delta prompt appendix" },
+    scopedWrite("workspace.prompt.update", ["workspace", "prompt", "update"], "Update the workspace prompt", "/prompts", "PUT", [
+      { name: "prompt", type: "string", valueName: "text", description: "Workspace prompt: the workspace's own instructions for every Agent session" },
+      { name: "bootstrap-prompt", type: "string", valueName: "text", description: "Deprecated: merged with --delta-prompt into the workspace prompt" },
+      { name: "delta-prompt", type: "string", valueName: "text", description: "Deprecated: see --bootstrap-prompt" },
       { name: "expected-revision", type: "integer", valueName: "n", description: "Expected prompt revision" },
     ], promptBody),
     scopedRead("workspace.issue-archive.get", ["workspace", "issue-archive", "get"], "Read issue archive retention settings", "/issue-archive"),
@@ -663,6 +664,7 @@ async function feishuBotBody(invocation: CommandInvocation): Promise<Record<stri
 
 async function promptBody(invocation: CommandInvocation): Promise<Record<string, unknown>> {
   return requestBody(invocation, {
+    prompt: rawStringOption(invocation, "prompt"),
     bootstrap_prompt: rawStringOption(invocation, "bootstrap-prompt"),
     delta_prompt: rawStringOption(invocation, "delta-prompt"),
     expected_revision: integerOption(invocation, "expected-revision") ?? undefined,

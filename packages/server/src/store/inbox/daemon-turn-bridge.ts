@@ -11,8 +11,8 @@ import { deriveIssueStatusWithinTransaction } from './issue-status.js';
 import { patchDecisionRecord } from './decision-records.js';
 import { Questions, QuestionError } from './questions.js';
 import { nowIso } from '@multiremi/ids.js';
-import { taskSessionInput } from '../task-session-input.js';
-import { TRIGGER_MESSAGE_INLINE_CHARS, expandHint } from '@multiremi/contracts/session-input.js';
+import { taskSessionInput, unreadInputInline } from '../task-session-input.js';
+import { TRIGGER_MESSAGE_INLINE_CHARS, expandHint, replayInputHint } from '@multiremi/contracts/session-input.js';
 import { readBackgroundDoorbell } from '@shared/background-tasks.js';
 
 // Structurally identical to S3's transport interface, without coupling the store to API routers.
@@ -69,11 +69,18 @@ export class DaemonTurnBridge {
     return attemptInputState(this.ctx,turn).ack;
   }
   /** Offers carry receipts for every visible message, but only inline triggering bodies.
-   * The original bodies remain in the log and range reads own partial-body progress. */
-  private project(messages:UnifiedMessage[],turn:any,from:number,to:number):UnifiedMessage[] {
-    const triggers=new Set(messages.filter(m=>m.to_agent_id===turn.agent_id&&m.wake_applied==='now'&&(m.metadata.execution_scope??'')===turn.execution_scope).map(m=>m.seq));
-    const entries=messages.map(m=>({...m,author_type:m.sender_type,author_id:m.sender_id,parent_id:m.reply_to_id}));
-    const range=taskSessionInput({sessionId:turn.session_id,agentId:turn.agent_id,fromSeq:from,toSeq:to,entries,triggerSeqs:triggers,coldStart:from===0}).split('\n')[0]!.replaceAll('remi session log get','remi message list');
+   * The original bodies remain in the log and range reads own partial-body progress.
+   * `window` holds every message in (from,to]. The range record is `complete` only when none of
+   * them still needs a read under the acknowledgement rule, so the agent can skip the range read. */
+  private project(messages:UnifiedMessage[],turn:any,from:number,to:number,window:UnifiedMessage[]=messages):UnifiedMessage[] {
+    const isTrigger=(m:UnifiedMessage)=>m.to_agent_id===turn.agent_id&&m.wake_applied==='now'&&(m.metadata.execution_scope??'')===turn.execution_scope;
+    const triggers=new Set(messages.filter(isTrigger).map(m=>m.seq));
+    const asEntries=(list:UnifiedMessage[])=>list.map(m=>({...m,author_type:m.sender_type,author_id:m.sender_id,parent_id:m.reply_to_id}));
+    const entries=asEntries(messages);
+    // A cold replacement's replayed original input sits before the range and is read by its pointer.
+    const complete=!messages.some(m=>m.seq<=from)&&unreadInputInline({agentId:turn.agent_id,fromSeq:from,toSeq:to,
+      readSeq:attemptInputState(this.ctx,turn).read,entries:asEntries(window),triggerSeqs:new Set(window.filter(isTrigger).map(m=>m.seq))});
+    const range=taskSessionInput({sessionId:turn.session_id,agentId:turn.agent_id,fromSeq:from,toSeq:to,entries,triggerSeqs:triggers,coldStart:from===0,complete}).split('\n')[0]!.replaceAll('remi session log get','remi message list');
     return messages.map((message,index)=>{
       let body=triggers.has(message.seq)?message.body_md:'';
       const omitted=Math.max(0,body.length-TRIGGER_MESSAGE_INLINE_CHARS);
@@ -81,7 +88,7 @@ export class DaemonTurnBridge {
       // PR 6: a platform doorbell keeps its `background_task` (and only that), so the attaching
       // attempt can acknowledge it without prompting it. Any other metadata stays out of the frame.
       const doorbell=message.sender_type==='platform'&&message.message_kind==='status'?readBackgroundDoorbell(message.metadata):null;
-      return {...message,body_md:(index===0?range+'\n'+(message.seq<=from?`原始输入：remi message list ${turn.session_id} --from ${Number(turn.input_from_seq??0)} --to ${from}\n`:''):'')+body,body_html:null,
+      return {...message,body_md:(index===0?range+'\n'+(message.seq<=from?replayInputHint(turn.session_id,Number(turn.input_from_seq??0),from)+'\n':''):'')+body,body_html:null,
         metadata:{execution_scope:turn.execution_scope,...(doorbell?{background_task:doorbell}:{})},
         options:null,card_token_hash:null,card_token_recipient:null,card_token_consumed_at:null};
     });
@@ -103,9 +110,10 @@ export class DaemonTurnBridge {
         let row:any;try{row=this.authorized(turn.turn_id,id,scope);}catch{continue;}
         const head=this.ctx.conversationLog().getConversationLogHead(row.session_id)?.headSeq??0;
         const from=this.cursor(row);
-        const interrupts=this.messages(row.session_id,from,head).filter(m=>m.wake_applied==='now'&&m.to_agent_id===row.agent_id
+        const window=this.messages(row.session_id,from,head);
+        const interrupts=window.filter(m=>m.wake_applied==='now'&&m.to_agent_id===row.agent_id
           &&(m.metadata.execution_scope??'')===row.execution_scope&&m.seq>Number(row.wake_seq));
-        for(const message of this.project(interrupts,row,from,head))messages.push({turn_id:row.id,attempt_id:id,message});
+        for(const message of this.project(interrupts,row,from,head,window))messages.push({turn_id:row.id,attempt_id:id,message});
         this.ctx.db.run('UPDATE multiremi_turn_attempts SET projection_to_seq=CASE WHEN COALESCE(projection_to_seq,0)<? THEN ? ELSE projection_to_seq END WHERE id=?',[head,head,id]);
         if(row.wrap_up_requested_at)wrapUps.push({turn_id:row.id,attempt_id:id,requested_at:row.wrap_up_requested_at});
       }

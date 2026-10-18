@@ -12,7 +12,7 @@ remi workspace prompt update --help
 
 工作区命令里的位置参数是被操作的工作区；全局 `--workspace` 是请求上下文，保持二者一致。设置的影响范围大于单个 Agent，更新时保留没有要求改变的字段。
 
-公共提示词有 bootstrap 和 delta 两部分。先 get 得到当前内容及版本，修改对应部分；`workspace prompt update` 支持 `--bootstrap-prompt`、`--delta-prompt`、`--expected-revision` 和 JSON 文件。发生版本冲突时重读并合并，不去掉版本条件覆盖别人刚写的内容。Agent 的个性化 instructions 不应全塞进工作区公共提示词。
+公共提示词只有一份，只存工作区自己的文字；Remi 的交付契约等规则由 daemon 写进每个会话的 `AGENTS.md`，不在这里。先 get 得到当前内容及版本再修改；`workspace prompt update` 支持 `--prompt`、`--expected-revision` 和 JSON 文件（旧的 `--bootstrap-prompt`、`--delta-prompt` 会被合并成一份）。发生版本冲突时重读并合并，不去掉版本条件覆盖别人刚写的内容。Agent 的个性化 instructions 不应全塞进工作区公共提示词。
 
 按需检查其他配置入口：
 

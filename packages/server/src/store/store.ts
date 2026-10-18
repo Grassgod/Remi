@@ -4489,13 +4489,13 @@ runMigrations(this.db);
     return this.sessions.getSessionAgentMaxCursorSeq(sessionId, agentId);
   }
 
-  buildTaskSessionProjection(taskId: string): MultiremiSessionProjection | null {
+  buildTaskSessionProjection(taskId: string, options: { boundsOnly?: boolean } = {}): MultiremiSessionProjection | null {
     const task = this.tasks.getTask(taskId);
     if (task?.chatSessionId && !this.feishuBot.getIssueIdForChatSession(task.chatSessionId)) {
-      return this.chat.buildTaskSessionProjection(taskId);
+      return this.chat.buildTaskSessionProjection(taskId, options);
     }
-    if (task?.issueSessionId) return this.sessions.buildTaskSessionProjection(taskId);
-    if (task?.chatSessionId) return this.chat.buildTaskSessionProjection(taskId);
+    if (task?.issueSessionId) return this.sessions.buildTaskSessionProjection(taskId, options);
+    if (task?.chatSessionId) return this.chat.buildTaskSessionProjection(taskId, options);
     return null;
   }
 

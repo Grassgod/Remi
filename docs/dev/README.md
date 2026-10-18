@@ -26,6 +26,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 修改登录、租户隔离或 token 权限 | [认证与权限](auth.md) | 身份来源、资源 guard 和生产启动约束 |
 | 修改 ACP 后端或 token-sync | [Codex 接入](../design/acp-codex-via-codex-acp.md)、[Claude Code 接入](../design/acp-claude-via-claude-agent-acp.md)、[认证插件与同步](../design/1passport-bytedance-sso.md) | 实际启动、认证、会话和凭据隔离边界 |
 | 改原生子代理、子会话路由、Claude 迟到回答（自主轮）或子代理呈现 | [ADR 0021](../adr/0021-subagent-sessions-and-autonomous-rounds.md)、[Chat 契约](../chat.md#子代理)、[前端](frontend.md) | 子会话登记与帧隔离、权限路由、`owesAutonomousRound` 与 60 s 等待、桥补丁 `claude-subagents-v1`、`late_subagents` / `running_subagents`、两个开关 |
+| 改 agent 每轮收到的内容、会话设定（`AGENTS.md`）、Skill 加载或工作区/Project 提示词 | [ADR 0023](../adr/0023-turn-input-and-provider-agents-md.md)、[daemon 协议](../daemon-protocol-v2.md)、[Runtime 工作区](runtime-workspaces.md) | 两部分的划分、指令文件位置与刷新、标签与未读说明、Skill 原生目录与同步、提示词合并迁移、实际发出内容的记录 |
 | 改后台任务、驻留进程、门铃或后台任务呈现 | [ADR 0022](../adr/0022-background-tasks-keep-alive-on-demand.md)、[Chat 契约](../chat.md#后台任务)、[daemon 协议](../daemon-protocol-v2.md)、[前端](frontend.md) | 驻留条件与资源交接、接手与释放（一个会话一个进程）、门铃与 attach、任务上下文文件、上限与崩溃清扫、共享本地文件夹锁、`lane.background` 能力位与下行、三个开关 |
 | 改 turn 失败检测、备用模型恢复或能力排队切换 | [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md) | AIR 失败 metadata、失败分类、单次切换、5 分钟能力等待与提交后事件 |
 | 修改 Antigravity 执行 | [Antigravity Runtime](../antigravity.md) | 按机器安装与条款同意、接入配置（环境、网关垫片、用量）、能力边界 |

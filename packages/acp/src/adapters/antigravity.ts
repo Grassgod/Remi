@@ -19,7 +19,7 @@ import { mapAntigravityPermissionMode } from "../access/antigravity.js";
 import { ANTIGRAVITY_SERVER_BINARY } from "../antigravity-install.js";
 import { antigravityToolName, normalizeToolInput } from "./trace-vendor.js";
 
-/** The runtime-context file is capped at 24 KiB; anything larger is not ours. */
+/** The instruction file Remi writes is capped at 32 KiB; anything larger is not ours. */
 const MAX_HOME_INSTRUCTIONS_BYTES = 256 * 1024;
 
 function homeInstructions(home: unknown): string | null {
@@ -108,9 +108,9 @@ export class AntigravityAdapter implements AgentAdapter {
    * `_meta.antigravity.systemPrompt.append` (advertised in `initialize`
    * `_meta.antigravity.systemPrompt.append`; read on new, load and resume):
    * the session notes (working directory, foreground commands), Remi's system prompt, then the
-   * runtime-context instructions the daemon writes to `$GEMINI_HOME/AGENTS.md`.
-   * Server 1.4.0 reads neither that file nor the cwd's AGENTS.md on its own
-   * (live probe), so nothing is duplicated.
+   * instruction file the daemon writes to `$GEMINI_HOME/AGENTS.md`: a native Chat's Remi Chat
+   * block (ADR 0023) and the runtime workspace's local context. Server 1.4.0 reads neither that
+   * file nor the cwd's AGENTS.md on its own (live probe), so nothing is duplicated.
    */
   buildSessionMeta(options: AgentSessionOptions): NewSessionMeta | undefined {
     const plugins = options.pluginPaths;

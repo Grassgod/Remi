@@ -34,6 +34,25 @@ describe("unified messages and turns", () => {
     await api().getTurn("turn_1", true);
     expect(fetch).toHaveBeenLastCalledWith("https://api.example.test/api/turns/turn_1?attempts=true", expect.anything());
   });
+  it("reads the exact prompt an attempt sent, with its session instructions", async () => {
+    const input = { from_seq: 2, to_seq: 5, messages: [messageFixture({ body_md: "Fix the bug." })], legacy_prompt: null,
+      sent_attempt_id: "attempt_2", sent_prompt: "Fix the bug.\n\n(Reply to comment msg_1)", instructions: "# Remi notes" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json({ turn: turnFixture(), input })));
+    await expect(api().getTurnInput("turn/1", "attempt_2")).resolves.toMatchObject({
+      prompt: "Fix the bug.\n\n(Reply to comment msg_1)", sent_prompt: "Fix the bug.\n\n(Reply to comment msg_1)",
+      sent_attempt_id: "attempt_2", instructions: "# Remi notes",
+    });
+    expect(fetch).toHaveBeenLastCalledWith("https://api.example.test/api/turns/turn%2F1?input=true&attempt=attempt_2", expect.anything());
+  });
+  it("falls back to the joined messages when the attempt recorded no prompt or the server predates it", async () => {
+    const messages = [messageFixture({ body_md: "First" }), messageFixture({ id: "msg_2", body_md: "Second" })];
+    vi.stubGlobal("fetch", vi.fn()
+      .mockResolvedValueOnce(json({ turn: turnFixture(), input: { from_seq: 0, to_seq: 2, messages, legacy_prompt: null, sent_attempt_id: null, sent_prompt: null, instructions: null } }))
+      .mockResolvedValueOnce(json({ turn: turnFixture(), input: { from_seq: 0, to_seq: 2, messages, legacy_prompt: null } })));
+    await expect(api().getTurnInput("turn_1")).resolves.toMatchObject({ prompt: "First\n\nSecond", sent_prompt: null, instructions: null });
+    expect(fetch).toHaveBeenLastCalledWith("https://api.example.test/api/turns/turn_1?input=true", expect.anything());
+    await expect(api().getTurnInput("turn_1")).resolves.toMatchObject({ prompt: "First\n\nSecond", sent_prompt: null, sent_attempt_id: null, instructions: null });
+  });
   it("retains future display enums and rejects malformed command data", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(json({ message: messageFixture({ wake_applied: "future_wake" }) })).mockResolvedValueOnce(json({ message: { id: "msg_1" } })));
     await expect(api().editMessage("msg_1", "edited")).resolves.toMatchObject({ wake_applied: "future_wake" });

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import { lstatSync, readdirSync, readlinkSync, symlinkSync, unlinkSync } from "node:fs";
+import { lstatSync, readdirSync, readlinkSync, realpathSync, statSync, symlinkSync, unlinkSync } from "node:fs";
 import { access, chmod, lstat, mkdir, mkdtemp, readFile, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
@@ -87,6 +87,8 @@ export interface PrepareIssueSessionProviderHomeOptions {
   linkCodexAuth?: boolean;
   /** Link the base Claude credentials file for subscription OAuth. Defaults to true. */
   linkClaudeCredentials?: boolean;
+  /** The home whose personal `.agents/skills` Codex must not load (ADR 0023); defaults to the user's. */
+  personalSkillsHome?: string;
 }
 
 export interface IssueSessionProviderEnvOptions {
@@ -488,17 +490,50 @@ async function reconcileIssueSessionProviderConfig(
     options.codexRelayUsesEnvApiKey === true,
     catalogState.status === "loaded" ? catalogPath : undefined,
   );
-  if (options.sideConversation) {
+  const personalSkills = personalCodexSkillFiles(options.personalSkillsHome ?? homedir());
+  if (options.sideConversation || personalSkills.length) {
     const config = parseToml(merged);
-    const inheritedInstructions = typeof config.developer_instructions === "string"
-      ? config.developer_instructions : "";
-    config.developer_instructions = [inheritedInstructions, SIDE_CONVERSATION_INSTRUCTIONS]
-      .filter(Boolean).join("\n\n");
+    if (options.sideConversation) {
+      const inheritedInstructions = typeof config.developer_instructions === "string"
+        ? config.developer_instructions : "";
+      config.developer_instructions = [inheritedInstructions, SIDE_CONVERSATION_INSTRUCTIONS]
+        .filter(Boolean).join("\n\n");
+    }
+    if (personalSkills.length) {
+      // Codex 0.163 always loads `$HOME/.agents/skills` (user scope) and has no switch for that root, only
+      // per-skill `[[skills.config]] enabled = false`. Rebuilt on every start, so a newly added one is covered next turn.
+      const skills = (config.skills && typeof config.skills === "object" && !Array.isArray(config.skills)
+        ? config.skills : {}) as Record<string, unknown>;
+      const entries = Array.isArray(skills.config) ? skills.config as Array<Record<string, unknown>> : [];
+      skills.config = [...entries.filter((entry) => !personalSkills.includes(String(entry?.path ?? ""))),
+        ...personalSkills.map((path) => ({ path, enabled: false }))];
+      config.skills = skills as typeof config[string];
+    }
     await writePrivateFileIfChanged(target, stringifyToml(config));
   } else {
     await writePrivateFileIfChanged(target, merged);
   }
   return catalogState;
+}
+
+/**
+ * The user's personal Codex skills (`$HOME/.agents/skills/<name>/SKILL.md`). An
+ * Agent's definition must not depend on whose machine runs it, so each session
+ * config disables them by path (ADR 0023).
+ */
+function personalCodexSkillFiles(home: string): string[] {
+  const root = join(home, ".agents", "skills");
+  let names: string[];
+  let real: string;
+  try {
+    real = realpathSync(root);
+    names = readdirSync(real).sort();
+  } catch {
+    return [];
+  }
+  return names.map((name) => join(real, name, "SKILL.md")).filter((file) => {
+    try { return lstatSync(file).isFile() || statSync(file).isFile(); } catch { return false; }
+  });
 }
 
 interface ProviderConfigBaseline {

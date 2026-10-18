@@ -1,35 +1,33 @@
 import type { AgentTask } from "@daemon/contracts/types.js";
-import {
-  buildTaskPromptArtifact,
-  type BuildTaskPromptOptions,
-  type TaskPromptMode,
-} from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact, type BuildTaskPromptOptions } from "@multiremi/prompt.js";
+import { createHash } from "node:crypto";
 
+/**
+ * The platform template (ADR 0023): the `AGENTS.md` Remi writes into the
+ * provider home, and one turn's input, with every field a placeholder.
+ */
 export interface PlatformPromptTemplatePreview {
-  bootstrap: string;
-  delta: string;
+  instructions: string;
+  input: string;
   sha256: {
-    bootstrap: string;
-    delta: string;
+    instructions: string;
+    input: string;
   };
 }
 
 const placeholder = (name: string): string => `{{${name}}}`;
 
 export function buildPlatformPromptTemplatePreview(): PlatformPromptTemplatePreview {
-  const bootstrap = buildPreviewArtifact("bootstrap");
-  const delta = buildPreviewArtifact("delta");
+  const artifact = buildPreviewArtifact();
+  const sha = (text: string) => createHash("sha256").update(text).digest("hex");
   return {
-    bootstrap: bootstrap.prompt,
-    delta: delta.prompt,
-    sha256: {
-      bootstrap: bootstrap.sha256,
-      delta: delta.sha256,
-    },
+    instructions: artifact.instructions,
+    input: artifact.prompt,
+    sha256: { instructions: sha(artifact.instructions), input: sha(artifact.prompt) },
   };
 }
 
-function buildPreviewArtifact(mode: TaskPromptMode) {
+function buildPreviewArtifact() {
   const repoUrl = placeholder("repository_url");
   const task: AgentTask = {
     id: placeholder("task_id"),
@@ -78,23 +76,18 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
       issueId: placeholder("issue_id"),
       title: placeholder("issue_session_title"),
     },
-    sessionProjection: {
-      sessionId: placeholder("provider_session_id"),
-      targetAgentId: placeholder("agent_id"),
-      mode,
-      jsonl: `{"type":"session_projection"}\n{"type":"inbox_toc","entries":[{"seq":1,"priority":1,"author_name":"{{inbox_author}}","created_at":"{{inbox_time}}","title":"{{inbox_title}}","chars":1,"folded":true}]}\n${placeholder("session_jsonl")}`,
-    },
-    issueSessionResults: [{
-      id: placeholder("published_result_id"),
-      title: placeholder("published_result_title"),
-      body: placeholder("published_result_body"),
-    }],
+    // One turn's input: an earlier message the range only lists (so the unread note shows) and the triggering comment.
+    input_messages: [
+      previewMessage(1, placeholder("earlier_message_id"), `${JSON.stringify({ type: "unread_range",
+        session_id: placeholder("chat_session_id"), from_seq: 0, to_seq: 2, unread_count: 2,
+        instruction: placeholder("unread_instruction") })}\n`, false),
+      previewMessage(2, placeholder("trigger_comment_id"), placeholder("message_body"), true),
+    ] as never,
     project: {
       id: placeholder("project_id"),
       title: placeholder("project_title"),
       description: placeholder("project_description"),
       instructions: placeholder("project_instructions"),
-      deltaInstructions: placeholder("project_delta_instructions"),
     },
     projectResources: [{
       id: placeholder("project_resource_id"),
@@ -123,11 +116,12 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
     workDir: placeholder("work_dir"),
     runtimeId: placeholder("runtime_id"),
     workspaceContext: placeholder("workspace_context"),
-    workspaceBootstrapPrompt: placeholder("workspace_bootstrap_prompt"),
-    workspaceDeltaPrompt: placeholder("workspace_delta_prompt"),
-    requestingUserName: placeholder("requesting_user_name"),
-    requestingUserProfileDescription: placeholder("requesting_user_profile"),
-    chatMessage: placeholder("chat_message"),
+    workspacePrompt: placeholder("workspace_prompt"),
+    // AGENTS.md names who the session belongs to; a turn from someone else names its sender in the input.
+    sessionOwnerName: placeholder("session_owner_name"),
+    sessionOwnerProfileDescription: placeholder("session_owner_profile"),
+    requestingUserName: placeholder("sender_name"),
+    requestingUserProfileDescription: placeholder("sender_profile"),
     chatMessageAttachments: [{
       id: placeholder("chat_attachment_id"),
       filename: placeholder("chat_attachment_filename"),
@@ -171,4 +165,18 @@ function buildPreviewArtifact(mode: TaskPromptMode) {
   // This is a canonical template without a target Runtime. Actual daemon
   // prompts use the execution host's platform, not the API server's OS.
   return buildTaskPromptArtifact(task, { ...options, platform: "linux" });
+}
+
+function previewMessage(seq: number, id: string, body: string, trigger: boolean): Record<string, unknown> {
+  return {
+    id, session_id: placeholder("chat_session_id"), seq, kind: "message", visibility: "shown", task_id: null,
+    sender_type: "member", sender_id: placeholder("member_id"),
+    to_type: trigger ? "agent" : "none", to_ref: trigger ? placeholder("agent_id") : null,
+    to_agent_id: trigger ? placeholder("agent_id") : null, to_member_id: null, message_kind: "request",
+    wake_requested: trigger ? "now" : "inbox_only", wake_applied: trigger ? "now" : "inbox_only",
+    wake_reason: trigger ? "human_sender" : "no_recipient", reply_to_id: null, dedupe_key: null, options: null,
+    card_token_hash: null, card_token_recipient: null, card_token_consumed_at: null, body_md: body, body_html: null,
+    render_version: null, resolved_at: null, resolved_by_type: null, resolved_by_id: null, metadata: {}, revision: 1,
+    created_at: placeholder("created_at"), updated_at: placeholder("created_at"), deleted_at: null,
+  };
 }

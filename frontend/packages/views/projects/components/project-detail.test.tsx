@@ -215,10 +215,10 @@ vi.mock("./project-instructions-section", () => ({
   ProjectInstructionsSection: ({
     onSave,
   }: {
-    onSave: (instructions: string, deltaInstructions: string, expectedRevision: number) => Promise<void>;
+    onSave: (instructions: string, expectedRevision: number) => Promise<void>;
   }) => (
     <section data-testid="project-instructions">
-      <button type="button" onClick={() => void onSave("Always test first.", "Check updates.", 3)}>Save instructions</button>
+      <button type="button" onClick={() => void onSave("Always test first.", 3)}>Save instructions</button>
     </section>
   ),
 }));
@@ -467,7 +467,6 @@ describe("ProjectDetail instructions", () => {
       expect(updateProjectAsync).toHaveBeenCalledWith({
         id: "proj-1",
         instructions: "Always test first.",
-        delta_instructions: "Check updates.",
         expected_instructions_revision: 3,
       });
     });

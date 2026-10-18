@@ -6,6 +6,8 @@ import { migrateAttemptInput } from './inbox/attempt-input.js';
 import { createMemberInboxReadProjection } from './inbox/member-records.js';
 import { createAutopilotRunReadProjection } from './autopilot-run-records.js';
 import { runUnifiedModelMigration, unifiedModelPreflight, UnifiedModelPreflightError, collectUnifiedBeforeReport, writeUnifiedModelReport } from "./unified-model-migration.js";
+import { foldLegacyWorkspacePrompts } from "../prompts/workspace-settings.js";
+import { joinProjectInstructions } from "@multiremi/contracts/remi-rules.js";
 import { BACKGROUND_TASKS_ATTEMPT_COLUMNS, BACKGROUND_TASKS_MIGRATION, BACKGROUND_TASKS_SCHEMA, CHAT_FOLLOW_UP_QUEUE_LANE_COLUMNS, CHAT_FOLLOW_UP_QUEUE_MIGRATION, CHAT_FOLLOW_UP_QUEUE_SCHEMA, UNIFIED_LANE_SWEEP_INDEX, UNIFIED_MODEL_MIGRATION } from "./unified-model-schema.js";
 import { prepareMigrationReportDirectory, resolveMigrationReportDirectory } from "./migration-report-directory.js";
 import { foldDecisionRecords } from './inbox/decision-migration.js';
@@ -85,7 +87,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);addTaskPromptInstructions(db);mergePromptHalves(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -94,7 +96,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);addTaskPromptInstructions(db);mergePromptHalves(db);
   }));
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
@@ -6043,6 +6045,42 @@ function addBackgroundTasks(db: SqlDatabase): void {
   runMigrationOnce(db, BACKGROUND_TASKS_MIGRATION, () => {
     for (const column of BACKGROUND_TASKS_ATTEMPT_COLUMNS) addColumnIfMissing(db, "multiremi_turn_attempts", column);
     db.exec(BACKGROUND_TASKS_SCHEMA);
+  });
+}
+
+/** ADR 0023: the Remi Chat block an attempt's provider instruction file held. Additive and nullable on both chains. */
+export const TASK_PROMPT_INSTRUCTIONS_MIGRATION = "20261019_task_prompt_instructions";
+
+function addTaskPromptInstructions(db: SqlDatabase): void {
+  runMigrationOnce(db, TASK_PROMPT_INSTRUCTIONS_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_task_prompts", "instructions TEXT");
+  });
+}
+
+/**
+ * ADR 0023: no bootstrap/delta prompts any more. A workspace's two prompt keys
+ * become one `prompt_appendix` (bootstrap, a blank line, then delta; a bootstrap
+ * prompt that begins with Remi's former default keeps only what follows it), and
+ * a Project's `delta_instructions` is appended to `instructions` and cleared.
+ * Readers fold unmigrated values the same way, so the order of a rolling upgrade
+ * does not matter. The `delta_instructions` column stays for older images.
+ */
+export const MERGE_PROMPT_HALVES_MIGRATION = "20261019_merge_prompt_halves";
+
+function mergePromptHalves(db: SqlDatabase): void {
+  runMigrationOnce(db, MERGE_PROMPT_HALVES_MIGRATION, () => {
+    const workspaces = db.query("SELECT id, settings FROM multiremi_workspaces").all() as Array<{ id: string; settings: string | null }>;
+    for (const workspace of workspaces) {
+      const settings = parseSettingsObject(workspace.settings);
+      const folded = settings ? foldLegacyWorkspacePrompts(settings) : null;
+      if (folded) db.run("UPDATE multiremi_workspaces SET settings = ? WHERE id = ?", [JSON.stringify(folded), workspace.id]);
+    }
+    const projects = db.query("SELECT id, instructions, delta_instructions FROM multiremi_projects WHERE delta_instructions IS NOT NULL AND delta_instructions <> ''")
+      .all() as Array<{ id: string; instructions: string | null; delta_instructions: string }>;
+    for (const project of projects) {
+      db.run("UPDATE multiremi_projects SET instructions = ?, delta_instructions = '' WHERE id = ?",
+        [joinProjectInstructions(project.instructions ?? "", project.delta_instructions), project.id]);
+    }
   });
 }
 

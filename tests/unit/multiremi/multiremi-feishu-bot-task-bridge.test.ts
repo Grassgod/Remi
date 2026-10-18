@@ -8,7 +8,7 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { seedLegacyChatIssueClassificationFixture } from "./chat-issue-migration-fixture.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { useTaskSessionInput } from "@multiremi/api/daemon-protocol/offer-budget.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact } from "@multiremi/prompt.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import type { MultiremiDaemon } from "@multiremi/daemon.js";
 import type { IncomingMessage, TaskStreamMeta } from "@connectors/base.js";
@@ -60,6 +60,17 @@ function scaffold(provider: "claude" | "codex" = "codex") {
     enabled: true,
   });
   return { store, agent, config };
+}
+
+/** The bound Issue log's unread range record, as the real offer path writes it (ADR 0023). */
+function claimedBoundIssueLogRange(store: MultiremiStore, taskId: string) {
+  const task = store.getTaskWithAgent(taskId)!;
+  const wire = daemonTaskClaimResponse(store, task);
+  useTaskSessionInput(store, task, wire);
+  const log = wire.bound_issue_log as { content_jsonl: string };
+  return JSON.parse(log.content_jsonl.split("\n", 1)[0]!) as {
+    type: string; session_id: string; from_seq: number; to_seq: number; unread_count: number; instruction: string;
+  };
 }
 
 describe("Feishu bot standard Task bridge", () => {
@@ -444,9 +455,14 @@ describe("Feishu bot standard Task bridge", () => {
     })).toBe(true);
     expect(store.getTaskWithAgent(roundTask.id)?.repos).toEqual([]);
     expect(store.claimTask("rt_bot")?.id).toBe(roundTask.id);
-    const wire = daemonTaskClaimResponse(store, store.getTaskWithAgent(roundTask.id)!);
-    expect((wire.bound_issue_log as { content_jsonl: string } | undefined)?.content_jsonl)
-      .toContain("The implementation and migration are complete.");
+    // The offer carries the bound Issue log as an unread range; the leader's report is inside it.
+    const reportSeq = store.listConversationLogEntries(session.id)
+      .find((entry) => entry.body_md === "The implementation and migration are complete.")!.seq;
+    const roundRange = claimedBoundIssueLogRange(store, roundTask.id);
+    expect(roundRange).toMatchObject({ type: "unread_range", session_id: session.id, from_seq: 0 });
+    expect(reportSeq).toBeGreaterThan(roundRange.from_seq);
+    expect(reportSeq).toBeLessThanOrEqual(roundRange.to_seq);
+    expect(roundRange.instruction).toContain(`remi message list ${session.id} --from 0 --to ${roundRange.to_seq}`);
     store.startTask(roundTask.id);
     store.failTask(roundTask.id, {
       error: "temporary provider timeout",
@@ -473,9 +489,10 @@ describe("Feishu bot standard Task bridge", () => {
     }, new Date(leaseTime.getTime() - 60_000))).toBe(true);
     expect(retryTask).toMatchObject({ status: "queued", chatSessionId: inbound.chatSessionId });
     expect(store.claimTask("rt_bot")?.id).toBe(retryTask.id);
-    const retryWire = daemonTaskClaimResponse(store, store.getTaskWithAgent(retryTask.id)!);
-    expect((retryWire.bound_issue_log as { content_jsonl: string } | undefined)?.content_jsonl)
-      .toContain("The implementation and migration are complete.");
+    // The failed round did not advance the relay cursor: the retry gets the same interval again.
+    expect(claimedBoundIssueLogRange(store, retryTask.id)).toMatchObject({
+      type: "unread_range", session_id: session.id, from_seq: 0, to_seq: roundRange.to_seq,
+    });
     store.startTask(retryTask.id);
     store.completeTask(retryTask.id, {
       output: "MUL work is complete and ready for review.",
@@ -690,7 +707,7 @@ describe("Feishu bot standard Task bridge", () => {
       message.role === "system" && message.body.includes(issue.key))).toBe(true);
   });
 
-  it("switches the bound Chat from bootstrap to delta after the provider session is promoted", () => {
+  it("keeps the bound Chat's setup in the instructions and sends only new input after the provider session is promoted", () => {
     const { store, agent, config } = scaffold();
     store.updateAgent(agent.id, { instructions: "Follow the workspace rules.\n".repeat(400) });
     const skill = store.createSkill({
@@ -713,12 +730,14 @@ describe("Feishu bot standard Task bridge", () => {
     const firstWire = daemonTaskClaimResponse(store, firstTask);
     useTaskSessionInput(store, firstTask, firstWire);
     expect((firstWire.session_projection as { mode?: string } | undefined)?.mode).toBe("bootstrap");
-    const firstPrompt = buildTaskPrompt({
+    const first = buildTaskPromptArtifact({
       ...firstTask,
       prompt: firstWire.prompt,
       sessionProjection: firstWire.session_projection,
-      chatMessage: firstWire.chat_message,
     } as any);
+    expect(first.mode).toBe("bootstrap");
+    expect(first.prompt).toContain("first Feishu request");
+    expect(first.instructions).toContain("Follow the workspace rules.");
 
     store.startTask(firstTask.id);
     store.recordSessionAgentRangeRead(firstSubmission.chatSessionId, agent.id,
@@ -749,25 +768,39 @@ describe("Feishu bot standard Task bridge", () => {
     const secondWire = daemonTaskClaimResponse(store, secondTask);
     useTaskSessionInput(store, secondTask, secondWire);
     expect((secondWire.session_projection as { mode?: string } | undefined)?.mode).toBe("delta");
-    const secondPrompt = buildTaskPrompt({
+    const secondInput = {
       ...secondTask,
       prompt: secondWire.prompt,
       sessionProjection: secondWire.session_projection,
-      chatMessage: secondWire.chat_message,
       boundIssue: secondWire.bound_issue,
       boundIssueLog: secondWire.bound_issue_log,
-    } as any);
+    };
+    const second = buildTaskPromptArtifact(secondInput as any);
+    expect(second.mode).toBe("delta");
 
-    expect(secondPrompt).toContain(`## Issue\nKey: ${issue.key}`);
-    expect(secondPrompt).toContain("## Bound Issue Log");
+    // Session setup lives in the provider's AGENTS.md, the same for a new or resumed provider session.
+    expect(second.instructions).toContain(`## Issue\nKey: ${issue.key}`);
+    expect(second.instructions).toContain("## Bound Issue\n");
+    expect(second.instructions).toContain("Follow the workspace rules.");
+    expect(second.instructions).toBe(buildTaskPromptArtifact({
+      ...secondInput,
+      sessionProjection: { ...(secondWire.session_projection as object), mode: "bootstrap" },
+    } as any).instructions);
+
+    // The turn input is the new request and the bound Issue's new log entry, nothing else.
     const issueSession = store.getOrCreateDefaultIssueSession(issue.id);
-    expect(secondPrompt).toContain(`remi message list ${issueSession.id} --from 0 --to 1`);
+    expect(second.prompt).toContain(
+      `(Issue ${issue.key} (${store.getIssue(issue.id)!.status}) has 1 new log entry since you last read it: \`remi message list ${issueSession.id} --from 0 --to 1\`)`);
     expect(store.listMessages(issueSession.id).map(message => message.body_md))
       .toEqual(["The Feishu reviewer approved the bound Issue."]);
-    expect(secondPrompt.match(/second Feishu request/g)).toHaveLength(1);
-    expect(secondPrompt).not.toContain("## Agent Instructions");
-    expect(secondPrompt).not.toContain("## Skills");
-    expect(Buffer.byteLength(secondPrompt)).toBeLessThan(Buffer.byteLength(firstPrompt) / 2);
+    expect(second.prompt.match(/second Feishu request/g)).toHaveLength(1);
+    expect(second.prompt).not.toContain("first Feishu request");
+    expect(second.prompt).not.toContain("Follow the workspace rules.");
+    expect(second.prompt).not.toContain("## ");
+    // Skills load natively from the provider's skill directory; neither part inlines them.
+    for (const text of [first.prompt, first.instructions, second.prompt, second.instructions]) {
+      expect(text).not.toContain("Inspect the repository carefully.");
+    }
   });
 
   it("deduplicates events and steers an active Task in the bound Chat Session", () => {

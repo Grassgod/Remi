@@ -3,7 +3,7 @@ import { issueMessagesPath, requestMessageBody, taskRequestPath, turnApiPath, se
 import { afterEach, describe, expect, it } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact } from "@multiremi/prompt.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { createLocalStore as createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
@@ -61,7 +61,7 @@ describe("Issue sessions and per-agent projection lanes", () => {
     ]);
   });
 
-  it("bootstraps once, resumes with delta, and keeps ACP lineage with its cursor", () => {
+  it("bootstraps once, resumes with delta and the same instructions, and keeps ACP lineage with its cursor", () => {
     const store = createStore();
     const runtime = store.registerRuntime({
       id: "rt_issue_session",
@@ -99,20 +99,22 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(firstProjection.jsonl).toContain(`"source_comment_id":"${agentAComment.id}"`);
     expect(firstProjection.jsonl).toContain('"perspective":"assistant_history"');
     expect(firstProjection.jsonl).toContain("Implement the projection.");
-    const firstPrompt = buildTaskPrompt({
+    const first = buildTaskPromptArtifact({
       ...store.getTaskWithAgent(firstTask.id)!,
       issueSession: session,
       sessionProjection: firstProjection,
-      issueSessionResults: [],
     } as any);
-    expect(firstPrompt).toContain("Historical transcripts are supporting evidence");
-    expect(firstPrompt).toContain("## Current Request\nImplement the projection.");
-    expect(firstPrompt).toContain(
+    expect(first.mode).toBe("bootstrap");
+    // ADR 0023: the turn input is only this turn's request; the history stays readable through the CLI.
+    expect(first.prompt.startsWith("Implement the projection.")).toBe(true);
+    expect(first.prompt).not.toContain("A decided on an event log.");
+    expect(first.instructions).toContain("Historical transcripts are supporting evidence");
+    expect(first.instructions).toContain(
       `remi session result publish ${issue.id} --session ${session.id}`,
     );
     // The result taxonomy is only useful if the agent is told it exists.
-    expect(firstPrompt).toContain("--type mr|report|deploy|decision|doc|other");
-    expect(firstPrompt).toContain("--ref issue:<id>");
+    expect(first.instructions).toContain("--type mr|report|deploy|decision|doc|other");
+    expect(first.instructions).toContain("--ref issue:<id>");
 
     store.startTask(firstTask.id);
     store.completeTask(firstTask.id, {
@@ -149,6 +151,16 @@ describe("Issue sessions and per-agent projection lanes", () => {
     expect(secondProjection.jsonl).toContain("Please add deterministic ordering.");
     expect(secondProjection.jsonl).toContain("Add deterministic ordering.");
     expect(secondProjection.jsonl).not.toContain("Projection implemented.");
+    const second = buildTaskPromptArtifact({
+      ...store.getTaskWithAgent(secondTask.id)!,
+      issueSession: session,
+      sessionProjection: secondProjection,
+    } as any);
+    // A resumed provider session is recorded as delta and gets the same session instructions.
+    expect(second.mode).toBe("delta");
+    expect(second.instructions).toBe(first.instructions);
+    expect(second.prompt.startsWith("Add deterministic ordering.")).toBe(true);
+    expect(second.prompt).not.toContain("Implement the projection.");
   });
 
   it("#3: running requests merge and the following round resumes the promoted provider",()=>{

@@ -13,7 +13,9 @@ import type {
 import { denyCurrentUserWorkspaceAccess } from "./auth-guards.js";
 import { issueSubscriberCaller } from "./issues.js";
 
-export const MAX_PROJECT_INSTRUCTIONS_LENGTH = 4_000;
+import { MAX_PROJECT_INSTRUCTIONS_LENGTH } from "@multiremi/contracts/remi-rules.js";
+
+export { MAX_PROJECT_INSTRUCTIONS_LENGTH };
 
 export function validateProjectInstructions(c: Context, value: unknown, field = "instructions"): Response | null {
   if (value === undefined) return null;

@@ -19,7 +19,6 @@ import { TestMultiremiDaemon as MultiremiDaemon } from "../fixtures/daemon-proto
 import { MultiremiStore } from "@multiremi/store.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { DaemonProtocolSession } from "@multiremi/api/daemon-protocol/session.js";
-import { unreadRangeHint } from "@multiremi/contracts/session-input.js";
 import type { TraceSteerResult } from "@multiremi/contracts/trace.js";
 import type { ProviderEvent, SteerResult } from "@shared/contracts/provider-types.js";
 import { AcpProvider, type AcpProviderOptions } from "@acp/provider.js";
@@ -205,10 +204,9 @@ describe("Bun Multiremi daemon steering", () => {
       expect(completed.result).toBe("中文结论");
       expect(agentTexts(daemon.traceStore().read(task.id).events)).toContain("English draft. ");
 
-      // The injected prompt carries the user's directive on the same session.
+      // ADR 0023: the injected prompt is the directive itself, labelled as the turn input labels it, on the same session.
       expect(prompts).toHaveLength(2);
-      expect(prompts[1]).toContain("改用中文输出");
-      expect(prompts[1]).toContain("Mid-run user steering");
+      expect(prompts[1]).toBe("[Remi] 改用中文输出");
       expect(sendOptions[1]?.sessionId).toBe("sess-steer");
 
       // Consumed server-side, and auditable in the run's message stream.
@@ -221,12 +219,11 @@ describe("Bun Multiremi daemon steering", () => {
       // A provider without native steering: interrupt, then re-prompt; no native call was made.
       expect(steerMessages[0]).toMatchObject({ steer: { steer_id: steerId, kind: "steer", injected: true,
         result: { via: "reprompt", native_outcome: null, error: null } } });
-      const message = store.getMessage(steerId!)!;
-      const [range, ...body] = String((steerMessages[0] as { text: string }).text).split("\n");
-      expect(JSON.parse(range!)).toEqual({ type: "unread_range", session_id: message.session_id,
-        from_seq: 0, to_seq: message.seq, unread_count: 1,
-        instruction: unreadRangeHint(message.session_id, 0, message.seq, 1, true) });
-      expect(body.join("\n")).toBe("改用中文输出");
+      // The original request and the steer are the whole unread input, both inline: the range is complete,
+      // so neither the trace nor the injected prompt carries the range record or an unread sentence.
+      expect((steerMessages[0] as { text: string }).text).toBe("改用中文输出");
+      expect(prompts[1]).not.toContain("unread_range");
+      expect(prompts[1]).not.toContain("remi message list");
     } finally {
       await activeDaemon?.stopAndDrainTestWork();
       server.stop(true);
@@ -606,9 +603,8 @@ describe("Bun Multiremi daemon native steering (ADR 0020)", () => {
     expect(prompts).toHaveLength(1);
     expect(abortedFirst).toBe(false);
     expect(steers).toHaveLength(1);
-    // The same framing as the re-prompt.
-    expect(steers[0]).toContain("Mid-run user steering");
-    expect(steers[0]).toContain("改用中文输出");
+    // The same text as the re-prompt: the directive itself.
+    expect(steers[0]).toBe("[Remi] 改用中文输出");
     expect(consumedWhileRunning).toBeFalsy();
     expect(store.getTaskSteerMessage(steerId)?.consumedAt).toBeTruthy();
     expect(store.listPendingTaskSteerMessages(task.id)).toHaveLength(0);

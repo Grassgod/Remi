@@ -15,6 +15,7 @@ import type {
   UpdateProjectInput,
 } from "@multiremi/contracts/types.js";
 import type { Context } from "hono";
+import { PROJECT_INSTRUCTIONS_TOO_LONG } from "@multiremi/contracts/remi-rules.js";
 import { ProjectExecutionOwnerError, ProjectInstructionsRevisionConflictError } from "@multiremi/store/repos/projects-repo.js";
 import type { ProjectSummary } from "@multiremi/store/repos/projects-repo.js";
 import { currentRequestUserId } from "./context.js";
@@ -216,6 +217,7 @@ export function projectErrorResponse(c: Context, err: unknown): Response | null 
   }
   if (!(err instanceof Error)) return null;
   if (err.message === "Project title is required") return c.json({ error: "title is required" }, 400);
+  if (err.message === PROJECT_INSTRUCTIONS_TOO_LONG) return c.json({ error: err.message }, 400);
   if (err.message.startsWith("Project not found:")) return c.json({ error: "project not found" }, 404);
   // Default-assignee resolution failures (resolveAssigneeRef) are client errors.
   if (

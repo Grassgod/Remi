@@ -2,7 +2,7 @@ import { DAEMON_FRAME_MAX_BYTES, DAEMON_OFFER_BUDGET_BYTES } from "@multiremi/co
 import { expandHint, TRIGGER_MESSAGE_INLINE_CHARS } from "@multiremi/contracts/session-input.js";
 import type { MultiremiStore } from "@multiremi/store/store.js";
 import type { MultiremiTaskWithAgent } from "@multiremi/contracts/types.js";
-import { taskSessionInput } from "@multiremi/store/task-session-input.js";
+import { taskSessionInput, unreadInputInline } from "@multiremi/store/task-session-input.js";
 
 type Payload = Record<string, any>;
 
@@ -89,13 +89,11 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   }
   const readSeq = store.getSessionAgentReadProgress(projection.session_id, task.agentId, task.id).seq;
   const coldStart = projection.mode === "bootstrap";
+  const fromSeq = coldStart ? 0 : Math.min(readSeq, projection.to_seq);
   projection.jsonl = taskSessionInput({ sessionId: projection.session_id, agentId: task.agentId,
-    fromSeq: coldStart ? 0 : Math.min(readSeq, projection.to_seq),
-    toSeq: projection.to_seq, entries, triggerSeqs: triggers, coldStart });
-  if (triggers.size) response.prompt = "Respond to the triggering messages in Current Session Context. 动手前先读完未读的部分，了解上下文。";
-  if (triggers.size) delete response.chat_message;
+    fromSeq, toSeq: projection.to_seq, entries, triggerSeqs: triggers, coldStart,
+    complete: unreadInputInline({ agentId: task.agentId, fromSeq, toSeq: projection.to_seq, entries, triggerSeqs: triggers }) });
   delete response.trigger_comment_content;
-  response.issue_session_results = [];
   const inherited = response.inherited_session_projection;
   if (inherited?.session_id) {
     inherited.jsonl = taskSessionInput({ sessionId: inherited.session_id, agentId: task.agentId,
@@ -112,6 +110,34 @@ export function useTaskSessionInput(store: MultiremiStore, task: MultiremiTaskWi
   }
 }
 
+/** Drops `complete` from a leading range record once a body under it was folded. */
+function voidCompleteRange(first: string, folded: boolean): string {
+  if (!folded || !first.startsWith('{"type":"unread_range"')) return first;
+  try {
+    const { complete, ...range } = JSON.parse(first);
+    return complete === undefined ? first : JSON.stringify(range);
+  } catch { return first; }
+}
+
+/** A body folded to fit the budget is no longer inline in full, so its range needs a read again. */
+function voidFoldedCompleteness(response: Payload, inputBodies: unknown[]): void {
+  const projection = response.session_projection;
+  if (typeof projection?.jsonl === "string") {
+    const [first = "", ...rest] = projection.jsonl.split("\n");
+    const folded = rest.some((line: string) => {
+      try { const entry = JSON.parse(line); return entry.type === "triggering_message" && Boolean(entry.body_folded || entry.body_omitted_chars); }
+      catch { return true; }
+    });
+    projection.jsonl = [voidCompleteRange(first, folded), ...rest].join("\n");
+  }
+  const messages = response.input_messages;
+  if (!Array.isArray(messages) || typeof messages[0]?.body_md !== "string") return;
+  const folded = messages.some((message: Payload, index: number) => message?.body_md !== inputBodies[index]);
+  const body: string = messages[0].body_md;
+  const end = body.indexOf("\n") < 0 ? body.length : body.indexOf("\n");
+  messages[0].body_md = voidCompleteRange(body.slice(0, end), folded) + body.slice(end);
+}
+
 export function taskOfferBytes(response: Payload, runtimeId: string): number {
   // Include room for protocol sequence, timestamp, acknowledgement and auth metadata.
   return Buffer.byteLength(JSON.stringify({ v: 2, t: "task.offer", rt: runtimeId, p: response })) + 1_024;
@@ -121,6 +147,7 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
   response: Payload; report: { bytes: number; parts: Record<string, number>; steps: string[] };
 } {
   const steps: string[] = [];
+  const inputBodies = Array.isArray(response.input_messages) ? response.input_messages.map((message: Payload) => message?.body_md) : [];
   const warnings = response.knowledge_warnings = [...(response.knowledge_warnings ?? [])];
   const fold = (body: string, command: string, limit: number): string => body.length <= limit ? body
     : `${prefix(body, limit)}\n${expandHint(body.length - prefix(body, limit).length, command)}`;
@@ -196,6 +223,7 @@ export function fitTaskOfferToBudget(response: Payload, runtimeId: string, budge
     truncateOfferStrings(response, runtimeId, budget - 1_024, true);
     steps.push("protected_strings");
   }
+  voidFoldedCompleteness(response, inputBodies);
   const parts = Object.fromEntries(Object.entries(response)
     .map(([key, value]) => [key, Buffer.byteLength(JSON.stringify(value) ?? "null")]));
   const bytes = taskOfferBytes(response, runtimeId);

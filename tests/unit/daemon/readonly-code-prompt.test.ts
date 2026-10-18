@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
+import { buildAgentInstructions } from "@daemon/agent-runtime/prompts/ephemeral.js";
 
 function sideTask(mode: "bootstrap" | "delta"): AgentTask {
   return {
@@ -20,7 +20,7 @@ const snapshot = { repoUrl: "https://example.test/repo.git", path: "/discussions
 
 describe("read-only code snapshot prompts", () => {
   it.each(["bootstrap", "delta"] as const)("reports the frozen path and commit in a %s turn", (mode) => {
-    const prompt = buildTaskPrompt(sideTask(mode), { repoSnapshots: [snapshot] });
+    const prompt = buildAgentInstructions(sideTask(mode), { repoSnapshots: [snapshot] });
     expect(prompt).toContain(snapshot.path);
     expect(prompt).toContain(snapshot.commit);
     expect(prompt).toContain("uncommitted parent changes are not included");
@@ -42,7 +42,7 @@ describe("read-only code snapshot prompts", () => {
     const task = sideTask("bootstrap");
     task.issueSession = undefined;
     task.issue_session = { id: "side", title: "Side", parent_session_id: "parent", inherit_mode: "snapshot", with_code: true };
-    expect(buildTaskPrompt(task, { repoSnapshots: [snapshot] })).toContain(snapshot.path);
+    expect(buildAgentInstructions(task, { repoSnapshots: [snapshot] })).toContain(snapshot.path);
   });
 
   it("ignores snapshots without opt-in, valid parent lineage, or an Issue Session", () => {
@@ -52,7 +52,7 @@ describe("read-only code snapshot prompts", () => {
       { ...task, issueSession: { ...task.issueSession!, parentSessionId: null } },
       { ...task, chatSessionId: "private-chat" },
     ]) {
-      expect(buildTaskPrompt(candidate, { repoSnapshots: [snapshot] })).not.toContain(snapshot.path);
+      expect(buildAgentInstructions(candidate, { repoSnapshots: [snapshot] })).not.toContain(snapshot.path);
     }
   });
 });

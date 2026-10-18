@@ -217,8 +217,10 @@ export class DaemonTaskDownlinks implements TaskSteerSource {
     if (next <= to || reply.body_md.length > TRIGGER_MESSAGE_INLINE_CHARS) {
       const id = `decision_range:${reply.id}`;
       this.decisionRangeHints.add(id);
+      // This hint exists because part of the range is not confirmed inline: it is never complete.
+      const { complete: _complete, ...range } = hint ?? {};
       this.queueInput(attemptId, { id, taskId: attemptId, kind: "steer",
-        content: JSON.stringify(hint ?? { type: "unread_range", session_id: reply.session_id,
+        content: JSON.stringify(hint ? range : { type: "unread_range", session_id: reply.session_id,
           from_seq: turn.inputToSeq, to_seq: to,
           instruction: unreadRangeHint(reply.session_id, turn.inputToSeq, to, to - turn.inputToSeq)
             .replaceAll("remi session log get", "remi message list") }),

@@ -1151,7 +1151,8 @@ export class AcpProvider implements Provider {
     };
     endGatewayPrompt = gateway?.channel?.beginPrompt() ?? null;
     const promptCompletion = entry.client
-      .prompt(entry.acpSessionId, message, buildMediaContent(options?.media))
+      .prompt(entry.acpSessionId, message, buildMediaContent(options?.media,
+        entry.client.initializeResult?.agentCapabilities?.promptCapabilities?.image === true, this._adapter.agentType))
       .then(async (result: PromptResult) => {
         // The turn is over for steering at once; usage settles before promptDone,
         // so the stream cannot build its fallback response first.
@@ -2967,10 +2968,21 @@ function abortableEnsureSession(promise: Promise<PoolEntry>, signal?: AbortSigna
 
 // ── Helpers ──────────────────────────────────────────────────────
 
+/**
+ * Image blocks for the prompt. ACP sends them only to an agent that advertises
+ * `promptCapabilities.image`; a caller that also names the file in its text
+ * (native Chat, ADR 0023) loses nothing when they are dropped.
+ */
 function buildMediaContent(
-  media?: SendOptions["media"],
+  media: SendOptions["media"] | undefined,
+  imagesSupported: boolean,
+  agentType: string,
 ): Array<{ type: string; data: string; mimeType: string }> | undefined {
   if (!media?.length) return undefined;
+  if (!imagesSupported) {
+    console.warn(`[acp] ${agentType}: the agent does not accept image prompts; ${media.length} image(s) not sent`);
+    return undefined;
+  }
   return media
     .filter((m) => m.mediaType === "image" || m.mediaType === "sticker")
     .map((m) => ({

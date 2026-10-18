@@ -4,6 +4,10 @@
 
 Amended by [ADR 0016](0016-unified-message-inbox-and-turn.md) (MUL-493): the `agent_read_state` read progress moves into the session lane cursor.
 
+Amended for plain turn input: a range whose unread messages are all inline in full is marked `complete: true`, and the daemon then gives the agent those messages as ordinary input without the range command. Every other range keeps the read instruction. See [daemon protocol v2](../daemon-protocol-v2.md).
+
+Amended by [ADR 0023](0023-turn-input-and-provider-agents-md.md): the session input is no longer a titled prompt. Each turn sends only the new messages; an incomplete range adds one plain sentence with the read command, and everything that holds for the session lives in the provider home's `AGENTS.md`. Range records, the `complete` mark and the input receipt rules are unchanged.
+
 Implementation moved by [ADR 0019](0019-turn-and-item-traces.md) (PR 2): the last top-level assistant message is now chosen by the trace translator's `settle()` final-reply rule over `agent_message` items; the fragment-based `last-assistant-message.ts` is deleted.
 
 Accepted for MUL-498. The latest user decision replaces inbox directories and

@@ -101,6 +101,8 @@ describe("ProjectInstructionsSection", () => {
     renderSection();
 
     expect(screen.getByText("Project instructions")).toBeInTheDocument();
+    expect(screen.getByText(/written into the AGENTS\.md of every Agent session in this project/)).toBeInTheDocument();
+    expect(screen.queryByText(/Bootstrap|Delta/)).toBeNull();
     expect(screen.getByTestId("instructions-preview")).toHaveTextContent(
       "**Test first.**",
     );
@@ -156,6 +158,11 @@ describe("ProjectInstructionsSection", () => {
     const { onSave } = renderSection();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
 
+    // One editor for the merged instructions: no Bootstrap / Delta tabs.
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(screen.getAllByRole("textbox")).toHaveLength(1);
+    expect(screen.getByText("Applies on every turn of every Agent session in this project.")).toBeInTheDocument();
+
     expect(
       screen.getByText(
         "Workspace instructions remain active. These project instructions are appended and do not replace them.",
@@ -166,36 +173,36 @@ describe("ProjectInstructionsSection", () => {
     ).toBeInTheDocument();
 
     fireEvent.change(
-      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
+      screen.getByRole("textbox", { name: "Instructions" }),
       { target: { value: "Use **small** commits." } },
     );
     expect(onSave).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     await waitFor(() => {
-      expect(onSave).toHaveBeenCalledWith("Use **small** commits.", "", 3);
+      expect(onSave).toHaveBeenCalledWith("Use **small** commits.", 3);
     });
     expect(toastSuccess).toHaveBeenCalledWith(
-      "Project prompts saved.",
+      "Project instructions saved.",
     );
   });
 
-  it("cancels edits and enforces the 4,000 character limit", () => {
+  it("cancels edits and enforces the 8,000 character limit", () => {
     const { onSave } = renderSection();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
-    const editor = screen.getByRole("textbox", {
-      name: "Project Bootstrap Prompt",
-    });
-    fireEvent.change(editor, { target: { value: "x".repeat(4001) } });
+    const editor = screen.getByRole("textbox", { name: "Instructions" });
+    fireEvent.change(editor, { target: { value: "x".repeat(8002) } });
+    expect(screen.getByText("8002 / 8002")).not.toHaveClass("text-destructive");
+    fireEvent.change(editor, { target: { value: "x".repeat(8003) } });
 
-    expect(screen.getByText("4001 / 4000")).toHaveClass("text-destructive");
+    expect(screen.getByText("8003 / 8002")).toHaveClass("text-destructive");
     expect(screen.getByRole("button", { name: "Save" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(onSave).not.toHaveBeenCalled();
 
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     expect(
-      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
+      screen.getByRole("textbox", { name: "Instructions" }),
     ).toHaveValue("**Test first.**");
   });
 
@@ -210,7 +217,7 @@ describe("ProjectInstructionsSection", () => {
     renderSection({ onSave });
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(
-      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
+      screen.getByRole("textbox", { name: "Instructions" }),
       { target: { value: "Keep this local draft." } },
     );
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
@@ -221,7 +228,7 @@ describe("ProjectInstructionsSection", () => {
       );
     });
     expect(
-      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
+      screen.getByRole("textbox", { name: "Instructions" }),
     ).toHaveValue("Keep this local draft.");
     expect(screen.getByRole("dialog")).toBeInTheDocument();
   });
@@ -243,7 +250,7 @@ describe("ProjectInstructionsSection", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(
-      screen.getByRole("textbox", { name: "Project Bootstrap Prompt" }),
+      screen.getByRole("textbox", { name: "Instructions" }),
       { target: { value: "Local draft" } },
     );
 
@@ -261,7 +268,7 @@ describe("ProjectInstructionsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
 
     await waitFor(() => {
-      expect(onSave).toHaveBeenCalledWith("Local draft", "", 4);
+      expect(onSave).toHaveBeenCalledWith("Local draft", 4);
     });
   });
 

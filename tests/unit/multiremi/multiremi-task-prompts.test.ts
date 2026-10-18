@@ -58,6 +58,38 @@ describe("assembled task prompt audit", () => {
     expect(input.turn.id).toBe(task.id);
     expect(input.input.messages[0].body_md).toBe("Do it");
     expect(store.getTaskPrompt(task.id)).toMatchObject({ taskId: task.id, mode: "delta", prompt, sha256 });
+    // Without an instructions field (older daemon) the turn input says nothing was recorded for them.
+    expect(input.input).toMatchObject({ sent_attempt_id: task.id, sent_prompt: prompt, instructions: null });
+  });
+
+  it("records the AGENTS.md notes a daemon reports and returns what the attempt sent (ADR 0023)", async () => {
+    const store = createStore();
+    const app = createMultiremiApp({ store });
+    const runtime = store.registerRuntime({ id: "rt_notes", name: "Notes runtime", provider: "claude", workspaceId: "local" });
+    const agent = store.createAgent({ name: "Notes worker", provider: "claude" });
+    const task = store.createTask({ agentId: agent.id, runtimeId: runtime.id, prompt: "你好" });
+    expect(store.claimTask(runtime.id)?.id).toBe(task.id);
+    store.startTask(task.id);
+    const prompt = "你好";
+    const instructions = "# Notes worker\n\n# Remi\nNotes.\n";
+    const sha256 = createHash("sha256").update(prompt).digest("hex");
+    const reported = await reportFrame(store, "task.prompt", { task_id: task.id, mode: "bootstrap", prompt, sha256, instructions },
+      { headers: { "Content-Type": "application/json" }, authToken: "" });
+    expect(reported.ok).toBe(true);
+    expect(store.getTaskPrompt(task.id)).toMatchObject({ prompt, instructions });
+
+    const current = await (await app.request(turnApiPath(store, task.id, "?input=true"))).json();
+    expect(current.input).toMatchObject({ sent_attempt_id: task.id, sent_prompt: "你好", instructions });
+    const chosen = await (await app.request(turnApiPath(store, task.id, `?input=true&attempt=${task.id}`))).json();
+    expect(chosen.input).toMatchObject({ sent_attempt_id: task.id, sent_prompt: "你好", instructions });
+    const foreign = await app.request(turnApiPath(store, task.id, "?input=true&attempt=tsk_not_this_turn"));
+    expect(foreign.status).toBe(400);
+
+    // A block too large to be Remi's is dropped, not refused: a refused report would block the outbox.
+    const other = store.createTask({ agentId: agent.id, runtimeId: runtime.id, prompt: "again" });
+    const otherSha = createHash("sha256").update("again").digest("hex");
+    expect(store.recordTaskPrompt(other.id, { mode: "delta", prompt: "again", sha256: otherSha, instructions: "x".repeat(70 * 1024) }))
+      .toMatchObject({ prompt: "again", instructions: null });
   });
 
   it("exposes pending canonical input before a daemon assembles its prompt", async () => {
@@ -73,7 +105,7 @@ describe("assembled task prompt audit", () => {
     expect(store.getTaskPrompt(task.id)).toBeNull();
   });
 
-  it("keeps sibling results out of bootstrap and delta offers while preserving authorized result reads", async () => {
+  it("sends no sibling results in bootstrap or delta offers while preserving authorized result reads", async () => {
     const store = createStore();
     const app = createMultiremiApp({ store });
     const runtime = store.registerRuntime({
@@ -95,10 +127,11 @@ describe("assembled task prompt audit", () => {
     const firstClaim = await taskOfferResponse(store, runtime.id);
     expect(firstClaim.status).toBe(200);
     const firstWire = (await firstClaim.json()).task;
-    expect(firstWire.issue_session_results).toEqual([]);
+    // ADR 0023: published results are no longer computed or sent; agents read them through the CLI.
+    expect(firstWire).not.toHaveProperty("issue_session_results");
     expect(JSON.stringify(firstWire)).not.toContain(oldResult.body);
 
-    const firstPrompt = "# Bootstrap Prompt\n\n## Current Request\nBootstrap";
+    const firstPrompt = "Bootstrap";
     store.recordTaskPrompt(first.id, {
       mode: "bootstrap",
       prompt: firstPrompt,
@@ -130,7 +163,7 @@ describe("assembled task prompt audit", () => {
     const claimed = (await secondClaim.json()).task;
     expect(claimed.attempt_id).toBe(second.id);
     expect(claimed.session_projection.mode).toBe("delta");
-    expect(claimed.issue_session_results).toEqual([]);
+    expect(claimed).not.toHaveProperty("issue_session_results");
     expect(JSON.stringify(claimed)).not.toContain(oldResult.body);
     expect(JSON.stringify(claimed)).not.toContain(newResult.body);
     const results = await app.request(`/api/issues/${issue.id}/session-results`,

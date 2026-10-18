@@ -42,10 +42,18 @@ export class MessagesEndpoints {
     const path = `/api/turns/${encodeURIComponent(id)}${attempts ? "?attempts=true" : ""}`;
     return parseStrictResponse<z.infer<typeof TurnDetailSchema>>(await this.http.fetch<unknown>(path), TurnDetailSchema, { endpoint: path });
   }
-  async getTurnInput(id: string) {
-    const path = `/api/turns/${encodeURIComponent(id)}?input=true`;
+  /**
+   * A turn's input. `prompt` is exactly what the attempt sent the agent when its daemon recorded it
+   * (`sent_prompt`, ADR 0023), else the turn's messages joined. `attemptId` picks an attempt of this
+   * turn (the current one by default); one from another turn is a 400.
+   */
+  async getTurnInput(id: string, attemptId?: string) {
+    const params = new URLSearchParams({ input: "true" });
+    if (attemptId) params.set("attempt", attemptId);
+    const path = `/api/turns/${encodeURIComponent(id)}?${params}`;
     const detail = parseStrictResponse<z.infer<typeof TurnDetailSchema>>(await this.http.fetch<unknown>(path), TurnDetailSchema, { endpoint: path });
-    return detail.input ? { ...detail.input, prompt: detail.input.legacy_prompt ?? detail.input.messages.map(message => message.body_md).join("\n\n") } : null;
+    if (!detail.input) return null;
+    return { ...detail.input, prompt: detail.input.sent_prompt ?? detail.input.legacy_prompt ?? detail.input.messages.map(message => message.body_md).join("\n\n") };
   }
   async controlTurn(id: string, operation: "cancel" | "wrap-up") {
     const path = `/api/turns/${encodeURIComponent(id)}/${operation}`;

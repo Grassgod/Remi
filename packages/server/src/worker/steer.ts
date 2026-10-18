@@ -3,7 +3,7 @@
 // sends into the live provider session, and multi-turn usage accumulation.
 import type { MultiremiTaskSteerMessage, TaskUsageEntry } from "@multiremi/contracts/types.js";
 import { materializeChatAttachments } from "@daemon/agent-runtime/workspace/chat-attachments.js";
-import { formatPromptAttachment } from "@daemon/agent-runtime/prompts/ephemeral.js";
+import { buildSteerInput, steerInputText } from "@daemon/agent-runtime/prompts/turn-input.js";
 
 export const DEFAULT_STEER_POLL_MS = 2500;
 export const DEFAULT_FORCE_ANSWER_GRACE_MS = 3 * 60 * 1000;
@@ -126,41 +126,19 @@ export class TaskSteerFeed {
   }
 }
 
+/** A steer message's text as its injection gave it to the agent: the range record never shows. */
+export function steerMessageText(content: string): string {
+  return steerInputText(content);
+}
+
 /**
  * The prompt injected into the live provider session for a batch of steer
- * messages. The session keeps its full transcript, so the wrapper only has to
- * reframe: apply the user's mid-run directive and keep going — or, for
- * force-answer, stop and deliver.
+ * messages (ADR 0023): the new messages themselves, labelled as the turn input
+ * labels them, with the unread sentence when their range is not complete, or
+ * the wrap-up notice for force-answer.
  */
-export function buildSteerInjectionPrompt(messages: PreparedTaskSteerMessage[]): string {
-  const steers = messages.filter((m) => m.kind !== "force_answer");
-  const force = messages.filter((m) => m.kind === "force_answer");
-  const parts: string[] = [];
-  if (steers.length) {
-    parts.push(
-      "[Mid-run user steering] The user sent new instructions while this task was running:",
-      ...steers.map((m) => [
-        `- ${m.content}`,
-        ...((m.localAttachments ?? m.attachments)?.length
-          ? ["Attachments:", ...(m.localAttachments ?? m.attachments)!.map(formatPromptAttachment)]
-          : []),
-      ].join("\n")),
-    );
-  }
-  if (force.length) {
-    const notes = force.map((m) => m.content.trim()).filter(Boolean);
-    parts.push(
-      "[Deliver now] The user asked for the result immediately. Stop exploring and stop making new changes. "
-        + "Based on the work completed so far, produce your best final conclusion and wrap up the task now.",
-      ...(notes.length ? notes.map((note) => `- ${note}`) : []),
-    );
-  }
-  parts.push(
-    force.length
-      ? "Close out directly: summarize what was done, state your conclusion, and finish."
-      : "Incorporate these instructions and continue the task. Keep and build on the work already completed.",
-  );
-  return parts.join("\n\n");
+export function buildSteerInjectionPrompt(messages: PreparedTaskSteerMessage[], options: { agentId?: string | null; alwaysLabel?: boolean } = {}): string {
+  return buildSteerInput(messages, options);
 }
 
 /** Sum usage across turns per provider+model (one run may span several provider turns after steering). */

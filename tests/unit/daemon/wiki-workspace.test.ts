@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareIssueWikiWorkspace } from "@daemon/agent-runtime/workspace/wiki.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildAgentInstructions, buildTaskPrompt } from "@multiremi/prompt.js";
 import { writeProjectResourceContext } from "@daemon/agent-runtime/skills/ephemeral.js";
 
 const roots: string[] = [];
@@ -316,6 +316,8 @@ describe("Issue Wiki workspace", () => {
     expect(manifest.docs).toMatchObject([{ id: "rwdoc_prior", version: 1 }]);
     expect(manifest.docs.some((doc: { id: string }) => doc.id === "rwdoc_missing")).toBeFalse();
 
+    // ADR 0023: what this turn could not provide is turn input; AGENTS.md does not change with it.
+    expect(buildAgentInstructions(value)).not.toContain("暂不可用");
     const prompt = buildTaskPrompt(value);
     expect(prompt).toContain("2 页暂不可用，用 remi wiki 取");
     expect(prompt.match(/暂不可用/g)).toHaveLength(1);

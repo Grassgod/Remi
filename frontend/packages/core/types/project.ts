@@ -10,7 +10,10 @@ export interface Project {
   title: string;
   description: string | null;
   instructions: string;
-  /** Empty for projects created before Delta prompts were introduced. */
+  /**
+   * @deprecated ADR 0023 merged it into `instructions`; servers still send "".
+   * Never edit or send it.
+   */
   delta_instructions?: string;
   instructions_revision: number;
   instructions_updated_at: string | null;
@@ -36,7 +39,6 @@ export interface CreateProjectRequest {
   title: string;
   description?: string;
   instructions?: string;
-  delta_instructions?: string;
   icon?: string;
   status?: ProjectStatus;
   priority?: ProjectPriority;
@@ -53,7 +55,6 @@ export interface UpdateProjectRequest {
   title?: string;
   description?: string | null;
   instructions?: string;
-  delta_instructions?: string;
   /** Optimistic concurrency guard used only when changing instructions. */
   expected_instructions_revision?: number;
   icon?: string | null;

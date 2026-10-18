@@ -5,7 +5,7 @@ import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
 import { fitTaskOfferToBudget, taskOfferBytes, useTaskSessionInput } from "@multiremi/api/daemon-protocol/offer-budget.js";
 import { readSessionLogRange } from "@multiremi/api/session-log-range.js";
 import { normalizeDaemonClaimTask } from "@multiremi/worker/client.js";
-import { buildTaskPrompt } from "@daemon/agent-runtime/prompts/ephemeral.js";
+import { buildTaskPrompt, buildTaskPromptArtifact } from "@daemon/agent-runtime/prompts/ephemeral.js";
 import { log } from "@multiremi/api/helpers/common.js";
 import { prepareTaskOffer } from "@multiremi/api/daemon-protocol/task-offers.js";
 import { ProjectKnowledgeService } from "@multiremi/project-knowledge/service.js";
@@ -54,7 +54,10 @@ test("50 unread entries and huge Wiki offer only trigger messages and the unread
   expect(f.store.getTask(task.id)?.status).toBe("dispatched");
   expect(f.store.getIssue(f.issue.id)?.status).not.toBe("blocked");
   const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
-  expect(prompt).toContain("动手前先读完未读");
+  // ADR 0023: one sentence with the range read replaces the server's range instruction.
+  const toSeq = JSON.parse(jsonl.split("\n")[0]!).to_seq;
+  expect(prompt).toContain(`Read it before you answer: \`remi message list ${f.session.id} --from 0 --to ${toSeq}\`)`);
+  expect(prompt).not.toContain("动手前先读完未读");
   expect(prompt).toContain("TRIGGER");
   expect(prompt).not.toContain("UNREAD_");
   expect(prompt).not.toContain("## Inbox");
@@ -111,7 +114,7 @@ test("legacy Wiki bodies remain complete when they fit and only enough oversized
   expect(taskOfferBytes(large, "runtime")).toBeLessThan(512 * 1024);
 });
 
-test("cold start includes Issue title and description and reads the complete range from zero", () => {
+test("cold start puts Issue title and description in the instructions and reads the complete range from zero", () => {
   const f = fixture();
   f.store.updateIssue(f.issue.id, { title: "COLD_START_TITLE", description: "COLD_START_DESCRIPTION" });
   f.store.createIssueComment(f.issue.id, { authorType: "member", authorId: "local", body: "FIRST_UNREAD" });
@@ -124,8 +127,11 @@ test("cold start includes Issue title and description and reads the complete ran
   const projection = response.session_projection as any;
   const range = JSON.parse(projection.jsonl.split("\n")[0]);
   expect(range).toMatchObject({ type: "unread_range", from_seq: 0, to_seq: f.store.getConversationLogHead(f.session.id)!.headSeq });
-  const prompt = buildTaskPrompt(normalizeDaemonClaimTask(response)!);
-  expect(prompt).toContain("COLD_START_TITLE"); expect(prompt).toContain("COLD_START_DESCRIPTION");
+  // ADR 0023: the Issue is session setup (AGENTS.md); the turn input is only the new comment and the range read.
+  const { prompt, instructions } = buildTaskPromptArtifact(normalizeDaemonClaimTask(response)!);
+  expect(instructions).toContain("Title: COLD_START_TITLE"); expect(instructions).toContain("COLD_START_DESCRIPTION");
+  expect(prompt).not.toContain("COLD_START_TITLE"); expect(prompt).not.toContain("COLD_START_DESCRIPTION");
+  expect(prompt).toContain("TRIGGER");
   expect(prompt).toContain(`remi message list ${f.session.id} --from 0 --to ${range.to_seq}`);
   expect(prompt).not.toContain("你上次读到");
   expect(prompt).not.toContain("FIRST_UNREAD");

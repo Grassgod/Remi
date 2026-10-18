@@ -1,13 +1,16 @@
 import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 // Projects/squads/autopilot runs, project resources and how they reach the daemon
-// workdir and the task prompt.
+// workdir, the session instructions (AGENTS.md) and the turn input.
 import { beforeAll, afterAll, afterEach, describe, expect, it } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { writeAgentSkillContext, writeProjectResourceContext } from "@multiremi/daemon.js";
-import { buildTaskPrompt } from "@multiremi/prompt.js";
+import { buildTaskPromptArtifact } from "@multiremi/prompt.js";
+import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
+import { useTaskSessionInput } from "@multiremi/api/daemon-protocol/offer-budget.js";
+import { normalizeDaemonClaimTask } from "@multiremi/worker/client.js";
 import { snapshotStatsForFile, createSnapshotStore, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
@@ -45,7 +48,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(store.listAutopilotRuns(autopilot.id)[0]?.id).toBe(run.id);
   });
 
-  it("manages project resources and includes them in task prompts", () => {
+  it("manages project resources and includes them in task instructions", () => {
     const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     store.ensureLocalWorkspace();
@@ -90,13 +93,14 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
 
     const taskWithContext = store.getTaskWithAgent(task.id)!;
     expect(taskWithContext.repos).toEqual([{ url: "https://github.com/example/repo-updated", defaultBranch: "develop" }]);
-    const prompt = buildTaskPrompt(taskWithContext);
-    expect(prompt).toContain("## Project Context");
-    expect(prompt).toContain("## Available Repositories");
-    expect(prompt).toContain("remi repo checkout <url>");
-    expect(prompt).toContain("https://github.com/example/repo-updated");
-    expect(prompt).not.toContain("Local directory:");
-    expect(prompt).not.toContain("https://github.com/example/workspace");
+    const { prompt, instructions } = buildTaskPromptArtifact(taskWithContext);
+    expect(instructions).toContain("## Project Context");
+    expect(instructions).toContain("## Available Repositories");
+    expect(instructions).toContain("remi repo checkout <url>");
+    expect(instructions).toContain("https://github.com/example/repo-updated");
+    expect(instructions).not.toContain("Local directory:");
+    expect(instructions).not.toContain("https://github.com/example/workspace");
+    expect(prompt).not.toContain("https://github.com/example/repo-updated");
 
     store.deleteProjectResource(project.id, updatedRepoResource.id);
     store.deleteProjectResource(project.id, legacyLocal.id);
@@ -114,7 +118,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     const taskWithContext = store.getTaskWithAgent(task.id)!;
 
     expect(taskWithContext.repos).toEqual([{ url: "https://github.com/example/workspace", description: "workspace repo" }]);
-    expect(buildTaskPrompt(taskWithContext)).toContain("https://github.com/example/workspace - workspace repo");
+    expect(buildTaskPromptArtifact(taskWithContext).instructions).toContain("https://github.com/example/workspace - workspace repo");
   });
 
   it("writes project resources into the daemon workdir", () => {
@@ -178,7 +182,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     }
   });
 
-  it("stores issue metadata as a bounded primitive map and includes it in prompts", () => {
+  it("stores issue metadata as a bounded primitive map and includes it in task instructions", () => {
     const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Codex", provider: "codex" });
     const issue = createResponsibleTestIssue(store, { title: "Remember PR state" });
@@ -193,10 +197,10 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     expect(() => store.setIssueMetadataKey(issue.id, "nested", { value: "x" })).toThrow("value must be a primitive");
 
     const task = store.createTask({ agentId: agent.id, issueId: issue.id, prompt: "Use pinned facts" });
-    const prompt = buildTaskPrompt(store.getTaskWithAgent(task.id)!);
-    expect(prompt).toContain("## Issue Metadata");
-    expect(prompt).toContain(`Key: ${issue.key}`);
-    expect(prompt).toContain("pr_url: https://github.com/example/repo/pull/1");
+    const { instructions } = buildTaskPromptArtifact(store.getTaskWithAgent(task.id)!);
+    expect(instructions).toContain("## Issue Metadata");
+    expect(instructions).toContain(`Key: ${issue.key}`);
+    expect(instructions).toContain("pr_url: https://github.com/example/repo/pull/1");
 
     expect(store.deleteIssueMetadataKey(issue.id, "ready")).toEqual({
       attempts: 2,
@@ -204,7 +208,7 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
     });
   });
 
-  it("renders Go-style comment trigger context in daemon prompts", () => {
+  it("renders a comment trigger with its author and reply target in the offered turn input", () => {
     const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Worker", provider: "codex" });
     const reviewer = store.createAgent({ name: "Reviewer", provider: "codex" });
@@ -220,34 +224,31 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
       body: `Please inspect \`$PATH\` handling.\nSecond line [@Worker](mention://agent/${agent.id}).`,
     });
     const task = store.listTasks().find((item) => item.triggerCommentId === comment.id)!;
-    const metadata = store.getTaskTriggerMetadata(task)!;
-    const prompt = buildTaskPrompt({
-      ...store.getTaskWithAgent(task.id)!,
-      trigger_comment_id: comment.id,
-      trigger_thread_id: metadata.triggerThreadId,
-      trigger_comment_content: metadata.triggerCommentContent,
-      trigger_author_type: metadata.triggerAuthorType,
-      trigger_author_name: metadata.triggerAuthorName,
-      new_comment_count: 3,
-      new_comments_since: "2025-01-01T00:00:00.000Z",
-    } as any);
+    // The production offer path: the trigger travels as a range record plus triggering message, not as quoted text.
+    const withAgent = store.getTaskWithAgent(task.id)!;
+    const response = daemonTaskClaimResponse(store, withAgent, store.getTaskTriggerMetadata(withAgent));
+    useTaskSessionInput(store, withAgent, response);
+    const { prompt, instructions } = buildTaskPromptArtifact(normalizeDaemonClaimTask(response)!);
 
-    expect(prompt).toContain("## Triggering Comment");
-    expect(prompt).toContain("Another agent (Reviewer) just left a new comment");
-    expect(prompt).toContain("> Please inspect `$PATH` handling.");
-    expect(prompt).toContain("> Second line");
-    expect(prompt).toContain("do not reply");
-    expect(prompt).toContain(`remi message list ${task.issueSessionId} --thread ${root.id} --output json`);
-    expect(prompt).toContain(`remi message send ${task.issueSessionId} --kind reply --reply-to ${comment.id} --content-stdin`);
-    expect(prompt).toContain("<<'COMMENT'");
-    expect(prompt).not.toContain("multimira");
+    expect(prompt.startsWith(`[Agent Reviewer] Please inspect \`$PATH\` handling.\nSecond line [@Worker](mention://agent/${agent.id}).`)).toBe(true);
+    // The rest of the thread (the root comment) is unread context the agent is told how to read, not inlined.
+    expect(prompt).not.toContain("Root context.");
+    expect(prompt).toContain(`Read them before you answer: \`remi message list ${task.issueSessionId} --from 0 --to `);
+    expect(prompt).toContain(`(Reply to comment ${comment.id}: \`remi message send ${task.issueSessionId} --kind reply --reply-to ${comment.id}\`.)`);
+    expect(prompt).not.toContain("## Triggering Comment");
+    // The reply recipe and the agent-acknowledgment rule are session instructions; the comment id comes per turn.
+    expect(instructions).toContain("When the comment comes from another agent and is only an acknowledgment");
+    expect(instructions).toContain("do not reply");
+    expect(instructions).toContain(`cat <<'COMMENT' | remi message send ${task.issueSessionId} --kind reply --reply-to <comment-id> --content-stdin`);
+    expect(instructions).not.toContain(comment.id);
+    expect(`${prompt}\n${instructions}`).not.toContain("multimira");
   });
 
-  it("renders daemon claim execution context in provider prompts", () => {
+  it("renders daemon claim execution context in the instructions and the turn input", () => {
     const store = createSnapshotStore();
     const agent = store.createAgent({ name: "Context Worker", provider: "claude" });
     const task = store.getTaskWithAgent(store.createTask({ agentId: agent.id, prompt: "Fallback prompt" }).id)!;
-    const prompt = buildTaskPrompt({
+    const { prompt, instructions } = buildTaskPromptArtifact({
       ...task,
       workspaceContext: "Use the shared release checklist.",
       requestingUserName: "Alice",
@@ -261,21 +262,21 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
       quickCreatePrompt: "Create onboarding screenshot follow-up",
     });
 
-    expect(prompt).toContain("## Workspace Context");
-    expect(prompt).toContain("Use the shared release checklist.");
-    expect(prompt).toContain("## Requesting User");
-    expect(prompt).toContain("Name: Alice");
-    expect(prompt).toContain("Likes concrete dates and verification output.");
-    expect(prompt).toContain("## Chat Message");
-    expect(prompt).toContain("Check Shanghai weather\n\nand Qingdao too");
-    expect(prompt).toContain("- id: att_1; filename: forecast.txt; content-type: text/plain; size: unavailable");
-    expect(prompt).toContain("remi attachment download att_1 --output-dir <dir>");
-    expect(prompt).toContain("## Autopilot Context");
-    expect(prompt).toContain("Title: Webhook triage");
-    expect(prompt).toContain("Source: webhook");
-    expect(prompt).toContain('"repository": "remi"');
-    expect(prompt).toContain("## Quick Create Request");
-    expect(prompt).toContain("Create onboarding screenshot follow-up");
+    // Session context goes to the instructions.
+    expect(instructions).toContain("## Workspace Context\nUse the shared release checklist.");
+    // With no session owner from the server (an older one), the requester is who the notes name.
+    expect(instructions).toContain("## Session Owner\nName: Alice\nLikes concrete dates and verification output.");
+    expect(instructions).toContain("## Autopilot Context\nTitle: Webhook triage\nSource: webhook\nInvestigate the incoming push.");
+    expect(instructions).toContain("## Quick Create Request\nCreate onboarding screenshot follow-up");
+    // This turn's input: an older server's chat_message, the trigger payload and one line per attachment.
+    expect(prompt).toBe([
+      "Check Shanghai weather\n\nand Qingdao too",
+      'Trigger payload:\n```json\n{\n  "repository": "remi",\n  "action": "push"\n}\n```',
+      "Attachments:\n- forecast.txt: run `remi attachment download att_1 --output-dir <dir>`",
+    ].join("\n\n"));
+    expect(prompt).not.toContain("Fallback prompt");
+    expect(prompt).not.toContain("## Chat Message");
+    expect(instructions).not.toContain("Check Shanghai weather");
   });
 });
 

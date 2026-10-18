@@ -12,23 +12,34 @@ export type WorkspaceEnvResponse = z.infer<typeof WorkspaceEnvResponseSchema>;
 
 export const EMPTY_WORKSPACE_ENV: WorkspaceEnvResponse = { workspace_id: "", env: {} };
 
+/**
+ * `/api/workspaces/:id/prompts`. Parsed strictly: the editor saves against
+ * `revision`, so a body it cannot read must not become an empty prompt.
+ */
+export const WorkspacePromptSettingsSchema = z.object({
+  prompt: z.string(),
+  revision: z.number().int().nonnegative(),
+  updatedAt: z.string().nullable().default(null),
+  updatedBy: z.string().nullable().default(null),
+}).loose();
+
 const PromptTemplateSha256Schema = z.object({
-  bootstrap: z.string().regex(/^[a-f0-9]{64}$/),
-  delta: z.string().regex(/^[a-f0-9]{64}$/),
+  instructions: z.string().regex(/^[a-f0-9]{64}$/),
+  input: z.string().regex(/^[a-f0-9]{64}$/),
 });
 
 export const PlatformPromptTemplatePreviewSchema = z.object({
-  bootstrap: z.string(),
-  delta: z.string(),
+  instructions: z.string(),
+  input: z.string(),
   sha256: PromptTemplateSha256Schema,
 }).loose();
 
 export type PlatformPromptTemplatePreview = z.infer<typeof PlatformPromptTemplatePreviewSchema>;
 
 export const EMPTY_PLATFORM_PROMPT_TEMPLATE: PlatformPromptTemplatePreview = {
-  bootstrap: "",
-  delta: "",
-  sha256: { bootstrap: "", delta: "" },
+  instructions: "",
+  input: "",
+  sha256: { instructions: "", input: "" },
 };
 
 const BotMenuBehaviorSchema = z.object({

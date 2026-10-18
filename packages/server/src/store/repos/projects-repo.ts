@@ -1,5 +1,6 @@
 // Projects domain (projects, pinned items, project resources and project docs/wiki), extracted
 // verbatim from MultiremiStore (the facade delegates every public method here).
+import { joinProjectInstructions, MAX_PROJECT_INSTRUCTIONS_LENGTH, PROJECT_INSTRUCTIONS_TOO_LONG } from "@multiremi/contracts/remi-rules.js";
 import { createId, nowIso } from "@multiremi/ids.js";
 import {
   cleanOptionalString,
@@ -116,9 +117,12 @@ export class ProjectsRepo {
     const status = input.status ?? "in_progress";
     const archivedAt = isArchivedProjectStatus(status) ? now : null;
     const workspaceId = input.workspaceId ?? input.workspace_id ?? "local";
-    const instructions = normalizeProjectInstructions(input.instructions);
-    const deltaInstructions = normalizeProjectInstructions(input.deltaInstructions ?? input.delta_instructions);
-    const hasInstructions = instructions !== "" || deltaInstructions !== "";
+    // ADR 0023: one instructions field; a client from before may still send the delta half.
+    const deltaInput = normalizeProjectInstructions(input.deltaInstructions ?? input.delta_instructions);
+    const instructions = joinProjectInstructions(normalizeProjectInstructions(input.instructions), deltaInput);
+    const deltaInstructions = "";
+    if (deltaInput.trim()) assertMergedInstructionsLength(instructions);
+    const hasInstructions = instructions !== "";
     const defaultAssignee = this.resolveDefaultAssignee(
       input.defaultAssigneeType === undefined ? input.default_assignee_type : input.defaultAssigneeType,
       input.defaultAssigneeId === undefined ? input.default_assignee_id : input.defaultAssigneeId,
@@ -225,15 +229,15 @@ export class ProjectsRepo {
     const archivedAt = input.status === undefined
       ? current.archivedAt
       : isArchivedProjectStatus(status) ? current.archivedAt ?? now : null;
-    const instructions = input.instructions === undefined
-      ? current.instructions
-      : normalizeProjectInstructions(input.instructions);
     const deltaInstructionsInput = input.deltaInstructions === undefined
       ? input.delta_instructions
       : input.deltaInstructions;
-    const deltaInstructions = deltaInstructionsInput === undefined
-      ? current.deltaInstructions
-      : normalizeProjectInstructions(deltaInstructionsInput);
+    // ADR 0023: one instructions field. A client from before may still send the delta half; it is appended.
+    const instructions = joinProjectInstructions(input.instructions === undefined
+      ? current.instructions
+      : normalizeProjectInstructions(input.instructions), normalizeProjectInstructions(deltaInstructionsInput));
+    const deltaInstructions = "";
+    if (deltaInstructionsInput?.trim()) assertMergedInstructionsLength(instructions);
     const instructionsChanged = instructions !== current.instructions
       || deltaInstructions !== current.deltaInstructions;
     const writesInstructions = input.instructions !== undefined || deltaInstructionsInput !== undefined;
@@ -262,6 +266,13 @@ export class ProjectsRepo {
     };
     if (input.title !== undefined) assign("title", input.title);
     if (input.description !== undefined) assign("description", input.description);
+    // `current` already reads a leftover delta as part of the instructions; any save stores that as the one field.
+    const storedDelta = (this.ctx.db.query("SELECT delta_instructions FROM multiremi_projects WHERE id = ?").get(id) as
+      { delta_instructions?: string | null } | null)?.delta_instructions ?? "";
+    if (!writesInstructions && storedDelta) {
+      assign("instructions", current.instructions);
+      assign("delta_instructions", "");
+    }
     if (writesInstructions) {
       assign("instructions", instructions);
       assign("delta_instructions", deltaInstructions);
@@ -1473,8 +1484,10 @@ function toProject(row: Row): MultiremiProject {
     workspaceId: String(row.workspace_id ?? "local"),
     title: String(row.title),
     description: nullableString(row.description),
-    instructions: String(row.instructions ?? ""),
-    deltaInstructions: String(row.delta_instructions ?? ""),
+    // ADR 0023: one field. A delta an older image wrote after a rollback reads as part of it; the next save
+    // clears the half (`updateProject`).
+    instructions: joinProjectInstructions(String(row.instructions ?? ""), String(row.delta_instructions ?? "")),
+    deltaInstructions: "",
     instructionsRevision: Number(row.instructions_revision ?? 0),
     instructionsUpdatedAt: nullableString(row.instructions_updated_at),
     instructionsUpdatedBy: nullableString(row.instructions_updated_by),
@@ -1492,6 +1505,11 @@ function toProject(row: Row): MultiremiProject {
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at),
   };
+}
+
+/** Each half is checked at the API; a client from before can still send two that together are too long. */
+function assertMergedInstructionsLength(instructions: string): void {
+  if (Array.from(instructions).length > MAX_PROJECT_INSTRUCTIONS_LENGTH) throw new Error(PROJECT_INSTRUCTIONS_TOO_LONG);
 }
 
 function normalizeProjectInstructions(value: string | null | undefined): string {

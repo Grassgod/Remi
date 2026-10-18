@@ -197,6 +197,8 @@ const RESUME_UNSAFE_FAILURE_REASONS = new Set([
 const CLAIM_RESPONSE_RECOVERY_MS = 90 * 1000;
 const TRIGGER_SUMMARY_MAX_LENGTH = 200;
 const TASK_PROMPT_MAX_BYTES = 2 * 1024 * 1024;
+/** The Remi Chat block the daemon writes is capped at 32 KiB; anything larger is not one. */
+const TASK_PROMPT_INSTRUCTIONS_MAX_BYTES = 64 * 1024;
 const ISSUE_WORKSPACE_MIN_CLI_VERSION = [0, 2, 26] as const;
 
 // MUL-336: how long a transient-throttle retry waits before it may be claimed
@@ -4952,10 +4954,13 @@ ${placementAfter.sql}
     }
     const sha256 = createHash("sha256").update(input.prompt).digest("hex");
     if (input.sha256 !== sha256) throw new Error("assembled prompt sha256 mismatch");
+    // Display-only: an oversized block is dropped rather than refusing the prompt record (a refused report blocks the outbox).
+    const instructions = typeof input.instructions === "string" && input.instructions
+      && Buffer.byteLength(input.instructions, "utf8") <= TASK_PROMPT_INSTRUCTIONS_MAX_BYTES ? input.instructions : null;
     this.ctx.db.run(
-      `INSERT OR IGNORE INTO multiremi_task_prompts (task_id, mode, prompt, sha256, assembled_at)
-       VALUES (?, ?, ?, ?, ?)`,
-      [taskId, input.mode, input.prompt, sha256, nowIso()],
+      `INSERT OR IGNORE INTO multiremi_task_prompts (task_id, mode, prompt, sha256, assembled_at, instructions)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [taskId, input.mode, input.prompt, sha256, nowIso(), instructions],
     );
     const recorded = this.getTaskPrompt(taskId);
     if (!recorded) throw new Error("assembled prompt was not recorded");
@@ -4974,6 +4979,7 @@ ${placementAfter.sql}
       prompt: String(row.prompt),
       sha256: String(row.sha256),
       assembledAt: String(row.assembled_at),
+      instructions: typeof row.instructions === "string" && row.instructions ? row.instructions : null,
     };
   }
 
@@ -6243,7 +6249,7 @@ ${placementAfter.sql}
       const head = this.ctx.conversationLog().getConversationLogHead(issueSession.id)?.headSeq ?? 0;
       const outcome = status === "completed" ? "done" : status;
       const reason = envelopeSummary(status === "failed" ? (body ?? task.failureReason ?? "unknown") : body);
-      const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，seq ({{cursor}}, ${head}]；本次轮次 ${reportTurn.id} 状态 ${status}`
+      const envelopeBody = `${issue.key} 有新日志：会话 ${issueSession.id}，最新 seq ${head}；本次轮次 ${reportTurn.id} 状态 ${status}`
         + (reason ? `，原因 ${reason}` : "");
       const deliveries: EnvelopeDelivery[] = this.ctx.inbox().sendEnvelopeWithinTransaction({
         to: { role: "relay", issueId: issue.id }, kind: "report", outcome,

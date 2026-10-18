@@ -71,6 +71,13 @@ export const AttemptSchema = z.object({
   execution_thinking_level: z.string().nullable().optional(),
   fallback_switched: z.boolean().optional(), switch_reason: z.string().nullable().optional(),
 }).loose();
-export const TurnInputSchema = z.object({ from_seq: z.number().int().nonnegative(), to_seq: z.number().int().nonnegative(), messages: z.array(MessageSchema), legacy_prompt: z.string().nullable() });
+export const TurnInputSchema = z.object({
+  from_seq: z.number().int().nonnegative(), to_seq: z.number().int().nonnegative(), messages: z.array(MessageSchema), legacy_prompt: z.string().nullable(),
+  // ADR 0023, display only (absent from older servers): what one attempt sent the agent as its first
+  // prompt, and Remi's part of the session's AGENTS.md in effect for it.
+  sent_attempt_id: z.string().nullish().catch(null).transform(value => value ?? null),
+  sent_prompt: z.string().nullish().catch(null).transform(value => value ?? null),
+  instructions: z.string().nullish().catch(null).transform(value => value || null),
+});
 export const TurnDetailSchema = z.object({ turn: TurnSchema, attempts: z.array(AttemptSchema).optional(), input: TurnInputSchema.optional() });
 export const TurnsPageSchema = z.object({ turns: z.array(TurnSchema), next_cursor: z.string().nullable() });

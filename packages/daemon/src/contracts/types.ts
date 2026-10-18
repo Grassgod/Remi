@@ -40,6 +40,8 @@ export interface AgentTaskAgent {
    */
   thinkingLevel?: string | null;
   instructions: string;
+  /** The Agent's one-line role, for its definition in `AGENTS.md`; absent from older servers. */
+  description?: string | null;
   skills: AgentTaskSkill[];
 
   // Spawn-context fields; workspace resolution owns the working directory.
@@ -149,9 +151,9 @@ export interface AgentTaskProject {
   id: string;
   title: string;
   description: string | null;
-  /** Project-level rules injected only when bootstrapping a provider session. */
+  /** Project-level rules, in every session's `AGENTS.md` (ADR 0023). */
   instructions?: string;
-  /** Project-level rules injected on subsequent provider-session turns. */
+  /** Older servers: the former second half of the rules, merged into `instructions` since ADR 0023. */
   deltaInstructions?: string;
   delta_instructions?: string;
 }
@@ -364,6 +366,10 @@ export interface AgentTask {
   // Claim-context fields (read via stringField/arrayField/unknownField).
   workspaceContext?: string | null;
   workspace_context?: string | null;
+  /** ADR 0023: the workspace's own prompt (custom text only); absent from servers before it. */
+  workspacePrompt?: string | null;
+  workspace_prompt?: string | null;
+  /** Older servers: the former two prompts, the bootstrap one led by Remi's then default. */
   workspaceBootstrapPrompt?: string | null;
   workspace_bootstrap_prompt?: string | null;
   workspaceDeltaPrompt?: string | null;
@@ -375,6 +381,15 @@ export interface AgentTask {
   requesting_user_name?: string | null;
   requestingUserProfileDescription?: string | null;
   requesting_user_profile_description?: string | null;
+  /**
+   * The person the session belongs to (a Chat's creator, else the runtime's
+   * owner). It holds for the session, so it is what `AGENTS.md` names; the
+   * requester fields above are this turn's sender (ADR 0023).
+   */
+  sessionOwnerName?: string | null;
+  session_owner_name?: string | null;
+  sessionOwnerProfileDescription?: string | null;
+  session_owner_profile_description?: string | null;
   chatMessage?: string | null;
   chat_message?: string | null;
   boundIssueLog?: MultiremiBoundIssueLog;

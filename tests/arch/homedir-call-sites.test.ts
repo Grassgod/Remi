@@ -22,8 +22,8 @@ const HOME_CALL_LIMITS: Readonly<Record<string, number>> = {
   "packages/daemon/src/agent-runtime/workspace/ephemeral.ts": 2,
   "packages/daemon/src/agent-runtime/workspace/persistent.ts": 1,
   "packages/daemon/src/agent-runtime/workspace/process-owner.ts": 2,
-  "packages/daemon/src/agent-runtime/workspace/runtime-context.ts": 1,
-  "packages/daemon/src/agent-runtime/workspace/session-home.ts": 6,
+  // ADR 0023: the Codex session config disables the user's personal `~/.agents/skills` by path.
+  "packages/daemon/src/agent-runtime/workspace/session-home.ts": 7,
   "packages/daemon/src/ssh-mesh.ts": 5,
   "packages/remi/src/conversation/parser.ts": 1,
   "packages/remi/src/core.ts": 1,

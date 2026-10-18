@@ -19,11 +19,11 @@
 
 | 层 | 载体 | 注入方式 | 该写什么 | 不该写什么 |
 |---|---|---|---|---|
-| 平台公共底座 | daemon ephemeral prompt（`packages/daemon/src/agent-runtime/prompts/ephemeral.ts`） | 平台在 bootstrap 时自动拼装：workspace/issue/env/身份/权限等区块 | 由平台代码维护，Agent 配置者不用管 | —— |
-| **Agent 个性** | `multiremi_agents.instructions`（UI「指令」框） | bootstrap 时作为 `## Agent Instructions` 区块注入 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
+| 平台公共底座 | provider home 的 `AGENTS.md`（`packages/daemon/src/agent-runtime/prompts/ephemeral.ts` 的 `buildAgentInstructions`，[ADR 0023](adr/0023-turn-input-and-provider-agents-md.md)） | daemon 每轮启动 provider 前写入「Remi」部分：身份、CLI、交付契约、workspace/project/Issue 等说明；每轮输入只有新消息 | 由平台代码维护，Agent 配置者不用管 | —— |
+| **Agent 个性** | `multiremi_agents.instructions`（UI「指令」框） | 写在该 Agent 每个会话 `AGENTS.md` 的开头（名字、简介、instructions），每一轮都生效 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
 | 仓库规则 | 各仓库 `AGENTS.md` / `CLAUDE.md` | 编码 CLI 按 cwd 自动读取 | 仓库级开发约定 | Agent 人设 |
 | 飞书 Remi 人格 | 工作区 bot 配置所选 Agent 的 `multiremi_agents.instructions` | 控制面按 `multiremi_feishu_bot_configs.agent_id` 绑定 Chat/Task；消息沿 Task → AgentSession → ACP 执行并加载 Agent 指令，见[配置与分配链路](deploy/66-8-remi-environment.md) | 飞书聊天 Remi 的身份、职责与工具约定 | 不另建 `soul.md` 或本地 group 配置；同一 agent row 是唯一来源 |
-| 可复用操作知识 | Skill（`SKILL.md`） | 物化到 workdir + bootstrap prompt 注入 | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
+| 可复用操作知识 | Skill（`SKILL.md`） | 每轮同步到 provider 原生加载的目录（Claude `.claude/skills`，Codex `.agents/skills`；Runtime 工作区写 provider home），不再内联进提示词 | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
 
 ## 2. 提示词（instructions）规范
 
@@ -115,4 +115,4 @@ description 是模型决定「何时触发」的唯一依据，写得随意直�
 - 服务端对 `instructions`、`avatar_url` 零校验（长度/URL 白名单），是仅有的两个无校验用户可写字段。
 - 旧 Remi admin 与本地 `soul.md` 装配已在 MUL-69 删除；后续文档不得再把它们列为活配置入口。
 - `multiremi_agents.skills` JSON 列（内联 skill）与 `multiremi_agent_skills` 连接表（挂载的工作区 skill）仍双轨存储，读时 merge。`PUT /api/agents/:id/skills` 整体替换两者，会清空内联列；`/skills/add` 只追加挂载；普通 Agent 更新不再把挂载的 skill 回写进内联列。修复前回写的副本要等下一次 `PUT /api/agents/:id/skills` 才会清除。
-- skill 正文全量内联进 bootstrap prompt（非按需加载），长 skill 有 token 成本。
+- skill 只走 provider 原生加载（ADR 0023）；Codex 0.163 总会加载用户个人 `~/.agents/skills`，daemon 只能在会话配置里按路径逐个禁用。

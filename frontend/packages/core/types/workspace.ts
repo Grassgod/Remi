@@ -19,27 +19,32 @@ export interface Workspace {
   updated_at: string;
 }
 
+/**
+ * The workspace's own prompt (ADR 0023): written into every Agent session's
+ * `AGENTS.md` together with Remi's notes. Remi's built-in rules are not part of it.
+ */
 export interface WorkspacePromptSettings {
-  bootstrapPrompt: string;
-  deltaPrompt: string;
+  prompt: string;
   revision: number;
   updatedAt: string | null;
   updatedBy: string | null;
 }
 
+/** Read-only platform templates with `{{placeholders}}`. */
 export interface PlatformPromptTemplatePreview {
-  bootstrap: string;
-  delta: string;
+  /** The session's `AGENTS.md` template. */
+  instructions: string;
+  /** One turn's input template. */
+  input: string;
   sha256: {
-    bootstrap: string;
-    delta: string;
+    instructions: string;
+    input: string;
   };
 }
 
 export interface UpdateWorkspacePromptSettingsRequest {
-  bootstrapPrompt: string;
-  deltaPrompt: string;
-  expectedRevision: number;
+  prompt: string;
+  expected_revision: number;
 }
 
 export type BotMenuUserIdType = "open_id" | "union_id" | "user_id";
