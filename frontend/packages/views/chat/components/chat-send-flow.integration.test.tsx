@@ -203,6 +203,11 @@ async function type(text: string) {
   act(() => { editor()!.commands.insertContent(text); });
   await waitFor(() => expect(screen.getByRole("button", { name: /^(Send|Steer)$/ })).toBeEnabled());
 }
+/**
+ * Past the composer's 100ms draft debounce: a late save of the emptied editor
+ * would have landed, under the chat the send created.
+ */
+const pastDraftDebounce = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
 const submit = () => fireEvent.click(screen.getByRole("button", { name: /^(Send|Steer)$/ }));
 const sentClientId = (call = 0) => backend.send.mock.calls[call]![3] as string;
 
@@ -315,15 +320,22 @@ describe("a send without an answer is unconfirmed until the log says", () => {
     const view = mountPage(`/test/chat?session=${existing.id}`);
     await waitFor(() => expect(conversation()).toHaveTextContent("Earlier question"));
     await type("Quiet socket");
-    backend.read.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    // The read route fails from the moment the POST is answered, so the read
+    // after the send fails (a fallback read while it is in flight would not).
+    backend.send.mockImplementationOnce(async (id: string, body: string, _attachments: unknown, clientId: string) => {
+      const accepted = accept(id, body, clientId);
+      backend.read.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+      return accepted;
+    });
     const readsBefore = backend.read.mock.calls.length;
     submit();
     await waitFor(() => expect(apiLog.warn).toHaveBeenCalledWith("refreshSession.error", expect.objectContaining({ sessionId: existing.id })));
-    expect(conversation()).toHaveTextContent("Sent");
+    await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
     // The fallback read brings the server's row: the bubble is its row now, and its label fades.
     const label = () => [...conversation()!.querySelectorAll<HTMLElement>('[aria-live="polite"]')]
       .find((node) => node.textContent?.includes("Sent"));
-    await waitFor(() => expect(label()?.style.visibility).toBe("hidden"));
+    // The label fades 600ms after the read lands.
+    await waitFor(() => expect(label()?.style.visibility).toBe("hidden"), { timeout: 3000 });
     expect(backend.read.mock.calls.length).toBeGreaterThan(readsBefore + 1);
     // Confirmed: the fallback stops.
     const reads = backend.read.mock.calls.length;
@@ -350,6 +362,7 @@ describe("the composer follows the chat on screen", () => {
     await waitFor(() => expect(backend.send).toHaveBeenCalledOnce());
     expect(backend.send.mock.calls[0]![0]).toBe("chat-new-1");
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
+    await pastDraftDebounce();
     expect(composerText()).toBe("");
     expect(view.store.getState().inputDrafts).toEqual({});
     act(() => router.go("/test/chat"));
@@ -368,8 +381,9 @@ describe("the composer follows the chat on screen", () => {
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
     // The created chat names the URL once, with no history entry or scroll jump.
     expect(router.replace.mock.calls).toEqual([["/test/chat?session=chat-new-1", { scroll: false }]]);
+    await pastDraftDebounce();
     expect(composerText()).toBe("");
-    expect(newChatDrafts(view.store.getState().inputDrafts)).toEqual([]);
+    expect(view.store.getState().inputDrafts).toEqual({});
     expect(storage.get("multimira:chat:drafts")).toBeUndefined();
     // 新对话: the next new chat with this agent starts empty.
     fireEvent.click(screen.getByRole("button", { name: "Sidebar new chat" }));
@@ -440,7 +454,7 @@ describe("the hub's hidden placeholder for the user's own row", () => {
     if (order === "after") {
       const label = () => [...conversation()!.querySelectorAll<HTMLElement>('[aria-live="polite"]')]
         .find((node) => node.textContent?.includes("Sent"));
-      await waitFor(() => expect(label()?.style.visibility).toBe("hidden"));
+      await waitFor(() => expect(label()?.style.visibility).toBe("hidden"), { timeout: 3000 });
     }
     // The projection could not check the new row and failed closed.
     await act(async () => { await streams.get(existing.id)!.onFrames?.([placeholder(existing.id, seq)]); });

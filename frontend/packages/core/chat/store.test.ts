@@ -72,6 +72,22 @@ describe("chat attachment drafts", () => {
     expect(storage.getItem("multimira:chat:draftAttachments:workspace-a")).toBeNull();
   });
 
+  it("keeps no key for an emptied draft, in memory as in storage, and leaves its attachments", () => {
+    const storage = memoryStorage();
+    const store = createChatStore({ storage });
+    store.getState().setInputDraft("chat-1", "text");
+    store.getState().setInputDraft("chat-2", "other");
+    store.getState().setInputDraftAttachment("chat-1", "url-a", "attachment-a");
+    store.getState().setInputDraft("chat-1", "");
+    expect(store.getState().inputDrafts).toEqual({ "chat-2": "other" });
+    expect(createChatStore({ storage }).getState().inputDrafts).toEqual({ "chat-2": "other" });
+    expect(store.getState().inputDraftAttachments).toEqual({ "chat-1": { "url-a": "attachment-a" } });
+    // Emptying a draft that does not exist changes nothing.
+    const before = store.getState().inputDrafts;
+    store.getState().setInputDraft("chat-3", "");
+    expect(store.getState().inputDrafts).toBe(before);
+  });
+
   it("removes uploaded references without deleting text when explicitly requested", () => {
     const storage = memoryStorage();
     const store = createChatStore({ storage });

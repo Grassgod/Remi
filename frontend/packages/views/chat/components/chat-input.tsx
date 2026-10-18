@@ -320,8 +320,11 @@ export function ChatInput({
     // The message leaves the composer as it is submitted, from the draft it was
     // typed in; a failure puts it back. The editor shows exactly the sent text
     // here, and nothing later clears it, so whatever the user types while the
-    // send is in flight stays, whichever chat the send lands in.
-    editorRef.current?.clearContent();
+    // send is in flight stays, whichever chat the send lands in. The editor is
+    // emptied without an update: the draft is cleared right here, and the
+    // editor's debounced echo of it would land after the key moved to the
+    // chat this send creates.
+    editorRef.current?.setContent("");
     editorDraftRef.current = { key: keyAtSend, draft: "" };
     clearInputDraft(keyAtSend);
     setIsEmpty(true);

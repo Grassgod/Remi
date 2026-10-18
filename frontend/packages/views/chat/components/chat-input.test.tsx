@@ -473,7 +473,8 @@ describe("ChatInput sending and queue", () => {
     fireEvent.change(screen.getByTestId("editor"), { target: { value: "Typed meanwhile" } });
     await act(async () => { finish(); });
     expect(useChatStore.getState().inputDrafts["session-1"]).toBe("Typed meanwhile");
-    expect(editorProps.setContent).not.toHaveBeenCalled();
+    // Only the submit emptied the editor (without an update); nothing wrote into it after.
+    expect(editorProps.setContent.mock.calls).toEqual([[""]]);
   });
 
   it("does not send from an archived session", () => {
@@ -731,7 +732,8 @@ describe("ChatInput queued-message edit", () => {
       </I18nProvider>,
     );
     await act(async () => { finish(); });
-    expect(editorProps.setContent).not.toHaveBeenCalled();
+    // The submit's own emptying, not an outside draft written into the editor.
+    expect(editorProps.setContent.mock.calls).toEqual([[""]]);
   });
 
   it("enables the primary button when an outside change fills an empty draft", async () => {
