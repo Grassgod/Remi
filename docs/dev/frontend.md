@@ -72,6 +72,8 @@ Chat（独立页和浮窗）经 `useChatLog` 从 [Chat 日志池](../../frontend
 
 客户端 [file-cards.ts](../../frontend/packages/ui/markdown/file-cards.ts) 与服务端 [preprocess.ts](../../packages/server/src/render/preprocess.ts) 同步接受 `/api/attachments/<id>/content`，ID 限 `[A-Za-z0-9_-]`，可选查询串不得含 `)`、空白或 `..`。API href 必须整串精确匹配。Chat 直接交给共享 Markdown 渲染，两处附件列表显式使用 `dedupe="url"`：正文内联 URL 不再追加独立卡片，不同 URL 即使同名、同类型、同大小也各自保留并按各自附件 ID 下载。评论使用默认 `dedupe="file"`，保留按文件名、类型、大小隐藏重复上传的现有行为。MUL-518 保持 `RENDER_PIPELINE_REVISION = 1`；已有正文重渲染所需的版本提升由 MUL-513 负责，在其游标与节流回填就绪后处理。
 
+共享 [Markdown](../../frontend/packages/ui/markdown/Markdown.tsx) 按预处理后的正文复用解析结果，切回 Chat 重新挂载的气泡不再重跑 micromark、rehype-raw、清理和 KaTeX。[markdown-tree.ts](../../frontend/packages/ui/markdown/markdown-tree.ts) 把 react-markdown 拆成两段：unified 管线加 `urlTransform` 产出的 hast 树进入模块级 LRU；每次渲染再用当前 `components` 调 `toJsxRuntime`，组件不进缓存，输出与 react-markdown 一致（[对照测试](../../frontend/packages/ui/markdown/markdown-tree-parity.test.tsx)）。上限为 500 条、总权重 2,000,000，单条超过 200,000 不存；权重是树中对象数、字符串字符数与正文长度之和，V8 实测每单位约 10–35 字节，KaTeX 公式按实际体积计入。树在解析后深度冻结，组件只能读 `node`。挂载期间正文被替换（流式分块、编辑）时释放旧条目，卸载时保留。缓存只在浏览器中启用：没有 `window` 时（Next SSR、用 `react-dom/server` 渲染的测试）走同一管线，但每次重新解析，不存储也不冻结，服务端进程不常驻这部分内存（[无 window 测试](../../frontend/packages/ui/markdown/markdown-tree-server.test.tsx)）。缓存只在页面内存中，不需要随管线变更失效。
+
 日志中的 HTML 附件预览由 `DeferredContentContext` 延迟到实际揭示后读取，揭示前只显示固定槽位（默认 240px，已有 QueryClient 高度缓存时复用）。成功、错误与重挂载保持槽位高度；日志外的预览保留原高度和错误展示。正文、工具栏、弹窗和独立预览页共用带 workspace slug 与附件 ID 的内容 query key，保留 5 分钟 staleTime、30 分钟 gcTime、无自动重试及既有失效策略。SSR 播种的日志需等定位脚本确认 DOM 已揭示才启动这些可选读取。运行任务卡片使用 128px 可滚动槽位，避免缓存缺任务时后续卡片增高移动日志锚点。
 
 SDK 的直接 AUQ 题项与 ACP 的 `{fieldKey, question}` 题项在展示表单层统一解析，原 Q 的 payload 保持原样；两种形式都支持多题、多选和自由回答。
@@ -206,7 +208,8 @@ Worker 请求带 session 生命周期令牌和清库代次，窗口查询带唯�
 | core | [package.json](../../frontend/packages/core/package.json)、[vitest.config.ts](../../frontend/packages/core/vitest.config.ts)：Vitest 默认 Node；需要 DOM 的测试可按文件声明环境 |
 | views | [package.json](../../frontend/packages/views/package.json)、[vitest.config.ts](../../frontend/packages/views/vitest.config.ts)：显式 21 个纯逻辑测试文件使用 Node 且不加载 DOM setup；其余共享业务组件与 Editor 测试使用 jsdom、Testing Library。文件隔离保持，新文件默认 DOM |
 | web | [package.json](../../frontend/apps/web/package.json)、[vitest.config.ts](../../frontend/apps/web/vitest.config.ts)：Vitest + jsdom，验证 Next.js 平台接线 |
-| 类型检查 | 各包 `typecheck` 脚本；`ui` 也有独立类型检查，但没有独立 `test` 脚本 |
+| ui | [package.json](../../frontend/packages/ui/package.json)、[vitest.config.ts](../../frontend/packages/ui/vitest.config.ts)：Vitest 默认 Node，需要 DOM 的文件按文件声明 jsdom。Markdown 缓存的对照测试与微基准声明 jsdom，以便走浏览器的缓存路径，再用 `react-dom/server` 比较输出；无 window 测试留在 Node，覆盖服务端路径；微基准 `bunx vitest bench --run markdown/markdown-tree.bench.tsx` 只报告耗时，不进 `test` |
+| 类型检查 | 各包 `typecheck` 脚本 |
 | 浏览器端到端 | [tests/integration/e2e-frontend-ours.ts](../../tests/integration/e2e-frontend-ours.ts)：仓库实际 E2E 入口，运行条件以该脚本为准 |
 
 文案使用 [views/i18n/](../../frontend/packages/views/i18n/) 的 `useT`；语言资源在 [locales/](../../frontend/packages/views/locales/)，键一致性检查在 [parity.test.ts](../../frontend/packages/views/locales/parity.test.ts)，术语维护见 [glossary.md](../../frontend/packages/views/locales/glossary.md)。

@@ -646,6 +646,15 @@ CHAT_SWITCH_WEB=http://localhost:3301 CHAT_SWITCH_TOKEN=<token> CHAT_SWITCH_CHAT
 
 「阻塞读取」是揭示前已完成的日志读取数 / 该组发起的日志读取数；改动前的运行 1 用的是尚未统计读取的脚本版本。改动前后各新启动一次 API 和 Web，同一版本的各次运行依次共用该实例（日志池运行 1 与 2 之间另跑过一次 CPU 采样）；首次访问在运行之间波动较大。之后重启 API 和 Web，用当前脚本又测两次日志池（共享机器，测时 load average 1 分钟 3.9、5 分钟 7.0；前面各次未记录负载）：再次 visibleMs p50 90 和 92，rowsMs 74 和 73，阻塞读取仍为 0；首次 visibleMs p50 284 和 272。同一负载下没有重测改动前，这两次不与上表做差。再次访问不再等待网络：留存的行同步画出，每次切换在后台读取一次尾部。再次访问的 visibleMs 仍约 71ms，未达到 50ms：同条件下 CPU 采样显示从点击到揭示约 69ms 的主线程非空闲 CPU 时间，其中约 27ms 落在 Markdown 解析（micromark）所在的构建块，ChatMessageList 每次挂载都重新解析各行；其余是 React 渲染、布局与 GC，不是网络。
 
+Markdown 解析缓存（[markdown-tree.ts](../../frontend/packages/ui/markdown/markdown-tree.ts)）在日志池之上再测：同一脚本与条件、CPU 1x，两个构建交替各跑 3 次（A1 B1 A2 B2 B3 A3），期间 1 分钟负载 2.7–5.5，单位 ms，p50 / max：
+
+| 版本 | 再次 visibleMs | 首次 visibleMs |
+| --- | --- | --- |
+| Chat 日志池 | 91 / 96、92 / 97、89 / 94 | 288 / 294、292 / 295、282 / 288 |
+| 日志池 + Markdown 缓存 | 57 / 60、57 / 59、57 / 63 | 269 / 275、265 / 274、231 / 268 |
+
+这组日志池数字高于上表，是机器负载不同所致，只在同一组内比较。再次访问的主线程工作从约 60ms 降到约 34ms，其中 Markdown 解析从约 23ms 降到 1ms 以下；剩余主要是输入框编辑器切换、揭示时的布局读取、代码块的 `useTranslation` 和 React 工作。
+
 ## CI 测试成本
 
 后端文件耗时与分片归属由 [ci-backend.ts](../../scripts/ci-backend.ts)报告，发现范围、初始权重来源、报告 artifact 和更新命令见 [CI 覆盖](../../TESTING.md#ci-覆盖)。历史标题间隔用于调度估算，包含 runner 开销；每文件时间总和不等于整条工作流墙钟时间或计费时间。比较同一范围与环境时，分别记录分片关键路径、所有 job 的总 runner 时间、安装/服务启动与构建开销。
