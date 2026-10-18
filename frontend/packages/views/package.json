@@ -107,6 +107,7 @@
     "remark-gfm": "^4.0.1",
     "remark-math": "catalog:",
     "rehype-sanitize": "^6.0.0",
+    "smol-toml": "^1.6.0",
     "sonner": "^2.0.7"
   },
   "peerDependencies": {
