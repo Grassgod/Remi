@@ -58,7 +58,8 @@ export function StepsFold({ kind, title, open, onOpenChange, disabled, children 
   return (
     <ChainOfThought open={open} onOpenChange={onOpenChange} data-chat-steps={kind}>
       <ChainOfThoughtHeader disabled={disabled} data-chat-steps-header>{title}</ChainOfThoughtHeader>
-      <ChainOfThoughtContent>
+      {/* The panel clips; an 8px side gutter keeps the rows' focus rings whole. */}
+      <ChainOfThoughtContent className="-mx-2 px-2">
         <div className="pt-3 pb-1">{children}</div>
       </ChainOfThoughtContent>
     </ChainOfThought>

@@ -47,9 +47,10 @@ import {
 
 // The rows of a Chat turn's steps fold, after the Codex app (PLAN §2.5-2.6):
 // 14px text, 16px icons 6px from the text, 14px chevrons, 16px between rows
-// and 4px inside a group, an expanded group at most 224px with 24px fades, and
-// 300ms `cubic-bezier(.19,1,.22,1)` panels. Runs of rows fold under one
-// summary; a running row shows a static icon and a cadenced shimmer.
+// and 4px inside a group, an expanded group at most 224px with 24px fades
+// (uncapped while one of its rows is open), and 300ms
+// `cubic-bezier(.19,1,.22,1)` panels. Runs of rows fold under one summary; a
+// running row shows a static icon and a cadenced shimmer.
 
 const ICONS: Record<StepIconKind, LucideIcon> = {
   read: BookOpen,
@@ -75,7 +76,9 @@ const ICONS: Record<StepIconKind, LucideIcon> = {
 
 /** Height + fade on Base UI's panel variable; reduced motion switches at once. */
 export const STEP_PANEL_MOTION = "h-(--collapsible-panel-height) overflow-hidden transition-[height,opacity] duration-300 ease-[cubic-bezier(.19,1,.22,1)] data-[ending-style]:h-0 data-[ending-style]:opacity-0 data-[starting-style]:h-0 data-[starting-style]:opacity-0 motion-reduce:transition-none";
-const ROW_TRIGGER = "group/step flex w-full min-w-0 items-center gap-1.5 text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-disabled:cursor-default aria-disabled:hover:text-muted-foreground";
+const ROW_TRIGGER = "group/step flex w-full min-w-0 items-center gap-1.5 rounded-sm text-left text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring aria-disabled:cursor-default aria-disabled:hover:text-muted-foreground";
+/** A row whose detail is open reads at the detail's colour, not as a muted (or disabled) line. */
+const ROW_OPEN = "data-[panel-open]:text-foreground";
 const CHEVRON = "size-3.5 shrink-0 opacity-0 transition-[opacity,transform] duration-300 group-hover/step:opacity-100 group-focus-visible/step:opacity-100 group-data-[panel-open]/step:rotate-90 group-data-[panel-open]/step:opacity-100 motion-reduce:transition-none";
 const MONO = TRACE_DETAIL_MONO;
 
@@ -142,10 +145,17 @@ export function TurnStepList({ steps, items, live }: TurnStepListProps) {
   );
 }
 
-/** A scroll box that fades the edge it can still scroll towards (24px). */
-function FadeScroll({ children, className }: { children: ReactNode; className?: string }) {
+/**
+ * A scroll box that fades the edge it can still scroll towards (24px). Lifted,
+ * it drops the cap and the fades, so an open detail reads whole instead of in
+ * a second scroll; the scroll position it had comes back with the cap. The
+ * 8px side gutter keeps the rows' focus rings and the scrollbar unclipped.
+ */
+function FadeScroll({ children, className, lifted = false }: { children: ReactNode; className?: string; lifted?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ top: false, bottom: false });
+  const scrolled = useRef(0);
+  const parked = useRef(0);
   const measure = useCallback(() => {
     const el = ref.current;
     if (!el) return;
@@ -162,14 +172,26 @@ function FadeScroll({ children, className }: { children: ReactNode; className?: 
     if (el.firstElementChild) observer.observe(el.firstElementChild);
     return () => observer.disconnect();
   }, [measure]);
+  // The commit that drops the cap may already have clamped the position, but
+  // the scroll event reporting that has not fired: park the last reported one.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (lifted) parked.current = scrolled.current;
+    else el.scrollTop = parked.current;
+    measure();
+  }, [lifted, measure]);
   const fade = "#000 24px";
-  const mask = edges.top && edges.bottom ? `linear-gradient(to bottom, transparent, ${fade}, #000 calc(100% - 24px), transparent)`
-    : edges.top ? `linear-gradient(to bottom, transparent, ${fade})`
-      : edges.bottom ? "linear-gradient(to bottom, #000 calc(100% - 24px), transparent)" : undefined;
+  const mask = lifted ? undefined
+    : edges.top && edges.bottom ? `linear-gradient(to bottom, transparent, ${fade}, #000 calc(100% - 24px), transparent)`
+      : edges.top ? `linear-gradient(to bottom, transparent, ${fade})`
+        : edges.bottom ? "linear-gradient(to bottom, #000 calc(100% - 24px), transparent)" : undefined;
   return (
-    <div ref={ref} onScroll={measure} data-fade-top={edges.top || undefined} data-fade-bottom={edges.bottom || undefined}
+    <div ref={ref} data-fade-scroll={lifted ? "lifted" : "capped"}
+      onScroll={(event) => { scrolled.current = event.currentTarget.scrollTop; measure(); }}
+      data-fade-top={(!lifted && edges.top) || undefined} data-fade-bottom={(!lifted && edges.bottom) || undefined}
       style={mask ? { maskImage: mask, WebkitMaskImage: mask } : undefined}
-      className={cn("-mx-2 max-h-56 overflow-y-auto px-2", className)}>
+      className={cn("-mx-2 overflow-y-auto px-2", lifted ? "max-h-none" : "max-h-56", className)}>
       {children}
     </div>
   );
@@ -178,6 +200,15 @@ function FadeScroll({ children, className }: { children: ReactNode; className?: 
 function StepGroup({ rows, active, label, resolveAgent }: { rows: StepRow[]; active: boolean; label?: LiveLabel; resolveAgent?: AgentResolver }) {
   const copy = useStepCopy();
   const [open, setOpen] = useState(false);
+  // Rows whose detail is open; while there is one the list is uncapped.
+  const [openRows, setOpenRows] = useState<ReadonlySet<string>>(() => new Set());
+  const onRowOpen = useCallback((key: string, rowOpen: boolean) => setOpenRows((current) => {
+    if (current.has(key) === rowOpen) return current;
+    const next = new Set(current);
+    if (rowOpen) next.add(key);
+    else next.delete(key);
+    return next;
+  }), []);
   // The live label holds the header while the turn runs; a group whose rows
   // are done reads its summary at once.
   const runningRow = active ? [...rows].reverse().find((r) => r.active) : undefined;
@@ -191,10 +222,11 @@ function StepGroup({ rows, active, label, resolveAgent }: { rows: StepRow[]; act
         {live ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate">{text}</span>}
         <ChevronRight className={CHEVRON} aria-hidden="true" />
       </CollapsibleTrigger>
-      <CollapsibleContent className={STEP_PANEL_MOTION}>
-        <FadeScroll className="mt-1">
+      {/* The panel clips, so it carries the scroll box's 8px gutter too. */}
+      <CollapsibleContent className={cn(STEP_PANEL_MOTION, "-mx-2 px-2")}>
+        <FadeScroll className="mt-1" lifted={openRows.size > 0}>
           <div className="flex flex-col gap-1 py-0.5">
-            {rows.map((row) => <StepRowView key={row.key} row={row} grouped />)}
+            {rows.map((row) => <StepRowView key={row.key} row={row} grouped onDetailOpenChange={onRowOpen} />)}
           </div>
         </FadeScroll>
       </CollapsibleContent>
@@ -214,15 +246,26 @@ function hasRowDetail(row: StepRow): boolean {
   }
 }
 
-function StepRowView({ row, label, grouped = false }: { row: StepRow; label?: LiveLabel; grouped?: boolean }) {
+function StepRowView({ row, label, grouped = false, onDetailOpenChange }: {
+  row: StepRow;
+  label?: LiveLabel;
+  grouped?: boolean;
+  /** Tells the group which rows are open (an open row that unmounts counts as closed). */
+  onDetailOpenChange?: (key: string, open: boolean) => void;
+}) {
   const copy = useStepCopy();
   const [open, setOpen] = useState(false);
   const detail = hasRowDetail(row);
+  useLayoutEffect(() => {
+    if (!open || !onDetailOpenChange) return;
+    onDetailOpenChange(row.key, true);
+    return () => onDetailOpenChange(row.key, false);
+  }, [open, onDetailOpenChange, row.key]);
   const text = label ? copy.live(label) : copy.step(row.descriptor);
   const fileChange = row.item.type === "file_change" ? (row.part as FileChange | undefined) ?? row.item.changes[0] : undefined;
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-step-row={row.key} data-step-state={row.descriptor.state}>
-      <CollapsibleTrigger disabled={!detail} className={ROW_TRIGGER}>
+      <CollapsibleTrigger disabled={!detail} className={cn(ROW_TRIGGER, ROW_OPEN)}>
         <StepIcon kind={label?.kind === "step" ? label.icon : row.icon} />
         {row.active || label ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate" title={titleOf(row)}>{text}</span>}
         {fileChange && (fileChange.added > 0 || fileChange.removed > 0) && (
@@ -326,7 +369,8 @@ function BreakerRow({ icon, text, active, danger, itemId, detail }: {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen} data-step-breaker={itemId}>
-      <CollapsibleTrigger disabled={!detail} className={cn(ROW_TRIGGER, danger && "text-destructive hover:text-destructive aria-disabled:hover:text-destructive")}>
+      <CollapsibleTrigger disabled={!detail} className={cn(ROW_TRIGGER, ROW_OPEN,
+        danger && "text-destructive hover:text-destructive aria-disabled:hover:text-destructive data-[panel-open]:text-destructive")}>
         {icon && <StepIcon kind={icon} />}
         {active ? <LiveText>{text}</LiveText> : <span className="min-w-0 truncate">{text}</span>}
         {detail && <ChevronRight className={CHEVRON} aria-hidden="true" />}

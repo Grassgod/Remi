@@ -2,6 +2,14 @@ export interface NavigationAdapter {
   push(path: string): void;
   /** `scroll: false` keeps the scroll position (Next scrolls to the page by default). */
   replace(path: string, options?: { scroll?: boolean }): void;
+  /**
+   * Optional: replace the current URL (no new history entry) and update
+   * `pathname` / `searchParams` without asking the server to render the route
+   * again. For pages whose client state already shows the new URL; a reload or
+   * a link to that URL still renders it on the server. Callers fall back to
+   * `replace` when a platform leaves it undefined.
+   */
+  replaceUrl?: (path: string) => void;
   back(): void;
   pathname: string;
   searchParams: URLSearchParams;
