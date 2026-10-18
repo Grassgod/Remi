@@ -598,6 +598,32 @@ S1 的 `--ssr-cookie` 默认开启，仅在目标 origin 的浏览器内存 cont
 S7 整轮等待延后 API 与真实 Hub `stream.ack` 处理安静后才统计回读、附件和跳动。CI 的揭示前波次由 [zero-jump-waves.ts](../../tests/integration/zero-jump-waves.ts) 按在飞区间分组：请求直接或经其他请求重叠时为同一波，上一波全部结束后发出的请求才开下一波，结束与开始同一时刻视为不重叠；链路用每波最后结束的请求连接。S1 测速的 `computeWaves` 与 8ms 容差保持原样，历史数字仍可对比，S7 的新波次不能与旧口径直接做差。SSR 普通详情 warm 的揭示前波次 ≤2 为阻塞项；日志提前与去重后的 CSR warm 以 ≤2 为目标，未达到时逐波保留链路与原因，10/9 生产 S1 决定最终达标。cold、运行中 warm 和收件箱未读通知深链 warm 的波次只记录，保留逐请求及逐波链路；这些场景的回读=0、同附件 content≤1、跳动=0 和非强制揭示仍严格检查。`detail-locate` 验证独立详情 `?comment`，`detail-child` 验证带父 Issue 的详情，均可分别跑 SSR/CSR。150ms 渲染目标仅记录，剩余同步布局/面板注册热点不在本批改动范围内。
 
 
+## Chat 切换
+
+**本地模型，不是生产数据。** [chat-switch-harness.ts](../../tests/manual/chat-switch-harness.ts) 启动真实 API，用内存 SQLite 播种 6 个 Chat（每个 40 轮，回复含列表、表格和代码块），`CHAT_SWITCH_SQL_MS` 让每条已执行语句同步等待，模拟 PostgreSQL 桥往返；它打印 `chats=` 和本地夹具 PAT `token=`，token 不进入提交或报告。[chat-switch-measure.ts](../../tests/manual/chat-switch-measure.ts) 在 headless Chromium 中点击侧栏会话行，CDP 给每个请求加 `CHAT_SWITCH_LATENCY` 毫秒延迟，从点击起记录行出现（`rowsMs`）、揭示（`visibleMs`），以及该次切换发起的日志读取、揭示前已完成的读取和 seq 0 head 读取。每轮切到其他各会话再回到打开的会话；样本按本页是否显示过分为首次（`first`）和再次（`again`）。
+
+```bash
+CHAT_SWITCH_API_PORT=16401 CHAT_SWITCH_SQL_MS=1 bun run tests/manual/chat-switch-harness.ts
+# 另一个终端，在 frontend/apps/web：
+REMOTE_API_URL=http://127.0.0.1:16401 NEXT_TELEMETRY_DISABLED=1 bun run build
+../../../node_modules/.bin/next start -p 3301
+# 仓库根，填入 harness 打印的值：
+CHAT_SWITCH_WEB=http://localhost:3301 CHAT_SWITCH_TOKEN=<token> CHAT_SWITCH_CHATS=<chats> \
+  CHAT_SWITCH_LATENCY=50 CHAT_SWITCH_ROUNDS=2 bun run tests/manual/chat-switch-measure.ts
+```
+
+2026-10-18，Apple M3 Pro、macOS 26.2、Bun 1.3.14、Next.js 生产构建、1440×900，`SQL_MS=1`、延迟 50ms、2 轮；每次运行 5 个首次和 7 个再次样本，单位 ms，p50 / max：
+
+| 版本 | 运行 | 首次 rowsMs | 首次 visibleMs | 再次 rowsMs | 再次 visibleMs | 再次的阻塞读取 | head 读取（12 次合计） |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 改动前（f4a2161a5） | 1 | 250 / 346 | 278 / 370 | 249 / 269 | 265 / 287 | 未记录 | 未记录 |
+| 改动前（f4a2161a5） | 2 | 271 / 294 | 301 / 324 | 266 / 283 | 284 / 304 | 14 / 15 | 12 |
+| Chat 日志池 | 1 | 319 / 339 | 348 / 372 | 54 / 60 | 72 / 79 | 0 / 7 | 0 |
+| Chat 日志池 | 2 | 223 / 247 | 248 / 277 | 53 / 61 | 71 / 84 | 0 / 7 | 0 |
+| Chat 日志池 | 3 | 223 / 232 | 249 / 258 | 52 / 59 | 71 / 77 | 0 / 7 | 0 |
+
+「阻塞读取」是揭示前已完成的日志读取数 / 该组发起的日志读取数；改动前的运行 1 用的是尚未统计读取的脚本版本。改动前后各新启动一次 API 和 Web，同一版本的各次运行依次共用该实例（日志池运行 1 与 2 之间另跑过一次 CPU 采样）；首次访问在运行之间波动较大。之后重启 API 和 Web，用当前脚本又测两次日志池（共享机器，测时 load average 1 分钟 3.9、5 分钟 7.0；前面各次未记录负载）：再次 visibleMs p50 90 和 92，rowsMs 74 和 73，阻塞读取仍为 0；首次 visibleMs p50 284 和 272。同一负载下没有重测改动前，这两次不与上表做差。再次访问不再等待网络：留存的行同步画出，每次切换在后台读取一次尾部。再次访问的 visibleMs 仍约 71ms，未达到 50ms：同条件下 CPU 采样显示从点击到揭示约 69ms 的主线程非空闲 CPU 时间，其中约 27ms 落在 Markdown 解析（micromark）所在的构建块，ChatMessageList 每次挂载都重新解析各行；其余是 React 渲染、布局与 GC，不是网络。
+
 ## CI 测试成本
 
 后端文件耗时与分片归属由 [ci-backend.ts](../../scripts/ci-backend.ts)报告，发现范围、初始权重来源、报告 artifact 和更新命令见 [CI 覆盖](../../TESTING.md#ci-覆盖)。历史标题间隔用于调度估算，包含 runner 开销；每文件时间总和不等于整条工作流墙钟时间或计费时间。比较同一范围与环境时，分别记录分片关键路径、所有 job 的总 runner 时间、安装/服务启动与构建开销。

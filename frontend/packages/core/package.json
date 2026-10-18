@@ -114,6 +114,7 @@
     "./replica/worker": "./replica/worker.ts",
     "./replica/test-tabs": "./replica/test-tabs.ts",
     "./session-log/use-issue-log": "./session-log/use-issue-log.ts",
+    "./session-log/chat-log-pool": "./session-log/chat-log-pool.ts",
     "./navigation": "./navigation/index.ts",
     "./modals": "./modals/index.ts",
     "./onboarding": "./onboarding/index.ts",
