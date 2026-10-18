@@ -304,8 +304,8 @@ export class IssueLogReplica extends ReplicaView {
       // their own message just sent. One that could remove a row shown here,
       // or settle a seq not read yet, is checked against the read route first.
       const held = this.browser?.port.getSnapshot(sessionId);
-      const readHead = Math.max(held?.head ?? -1, own ? this.window?.head_seq ?? -1 : -1);
-      const mayHideReadable = (seq: number) => seq > readHead || !!held?.entries.some(entry => entry.seq === seq)
+      const readUpTo = Math.max(held?.head ?? -1, own ? this.window?.head_seq ?? -1 : -1);
+      const mayHideReadable = (seq: number) => seq > readUpTo || !!held?.entries.some(entry => entry.seq === seq)
         || candidates.some(rows => rows.some(row => row.seq === seq));
       for (const frame of frames) {
         if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") continue;

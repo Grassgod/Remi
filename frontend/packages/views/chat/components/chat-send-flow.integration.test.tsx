@@ -1,14 +1,16 @@
 import type { ReactNode } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, configure, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { Editor } from "@tiptap/core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HubFrame } from "@multiremi/contracts/live-hub";
 import type { StreamSubscriptionHandlers } from "@multiremi/core/api/ws-client";
 import { ApiError } from "@multiremi/core/api";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
-import { createChatStore, registerChatStore } from "@multiremi/core/chat";
+import { CHAT_SEND_TIMEOUT_MS, createChatStore, registerChatStore } from "@multiremi/core/chat";
+import { CHAT_PENDING_REFETCH_INTERVAL_MS } from "@multiremi/core/chat/queries";
+import { clearChatLogPool } from "@multiremi/core/session-log/chat-log-pool";
 import { SessionLogEntrySchema, type LogWindowParams, type SessionLogRow, type SessionLogWindow } from "@multiremi/core/api/schemas/session-log";
 import type { ChatSession, SendChatMessageResponse } from "@multiremi/core/types";
 import enChat from "../../locales/en/chat.json";
@@ -20,13 +22,17 @@ import enMessages from "../../locales/en/messages.json";
  * The send flow through the real ChatPage, ChatWindow, ChatInput, editor,
  * store and session log replica. The API and the socket are mocked: a POST,
  * its turn read and the log reads can each be held, failed or answered.
+ *
+ * The clock is faked (it still moves with real time, so waits and the editor
+ * work as usual): the send timeout, the fallback read's cadence, the
+ * composer's draft debounce and the Sent label's fade are stepped over
+ * explicitly, so no test depends on how fast the machine is.
  */
 const backend = vi.hoisted(() => ({
   read: vi.fn(), send: vi.fn(), turn: vi.fn(), create: vi.fn(),
   sessions: [] as ChatSession[],
 }));
 const socket = vi.hoisted(() => ({ subscribeStream: vi.fn(), onReconnect: vi.fn(() => () => {}) }));
-const timing = vi.hoisted(() => ({ sendTimeoutMs: undefined as number | undefined, pollMs: 60 }));
 const apiLog = vi.hoisted(() => ({ warn: vi.fn(), error: vi.fn() }));
 const router = vi.hoisted(() => {
   const listeners = new Set<() => void>();
@@ -61,15 +67,6 @@ vi.mock("@multiremi/core/api", async (importOriginal) => ({
     sendChatMessage: backend.send,
     getChatTurnPendingTask: backend.turn,
   },
-}));
-vi.mock("@multiremi/core/chat", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@multiremi/core/chat")>();
-  return { ...actual, withChatSendTimeout: <T,>(send: (signal: AbortSignal) => Promise<T>) =>
-    actual.withChatSendTimeout(send, timing.sendTimeoutMs) };
-});
-vi.mock("@multiremi/core/chat/queries", async (importOriginal) => ({
-  ...await importOriginal<typeof import("@multiremi/core/chat/queries")>(),
-  get CHAT_PENDING_REFETCH_INTERVAL_MS() { return timing.pollMs; },
 }));
 vi.mock("@multiremi/core/logger", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multiremi/core/logger")>();
@@ -203,15 +200,27 @@ async function type(text: string) {
   act(() => { editor()!.commands.insertContent(text); });
   await waitFor(() => expect(screen.getByRole("button", { name: /^(Send|Steer)$/ })).toBeEnabled());
 }
-/**
- * Past the composer's 100ms draft debounce: a late save of the emptied editor
- * would have landed, under the chat the send created.
- */
-const pastDraftDebounce = () => act(async () => { await new Promise((resolve) => setTimeout(resolve, 250)); });
+/** ChatInput's `debounceMs`: how long the editor waits to save a draft. */
+const DRAFT_DEBOUNCE_MS = 100;
+/** How long ChatWindow shows the Sent label once the log holds the row. */
+const SENT_LABEL_MS = 600;
+/** Moves the faked clock: every timer due by then fires, and the page settles. */
+const advance = (ms: number) => act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+/** Past the draft debounce: a late save of the emptied editor would have landed, under the chat the send created. */
+const pastDraftDebounce = () => advance(DRAFT_DEBOUNCE_MS + 1);
+const sentLabel = () => [...conversation()!.querySelectorAll<HTMLElement>('[aria-live="polite"]')]
+  .find((node) => node.textContent?.includes("Sent"));
 const submit = () => fireEvent.click(screen.getByRole("button", { name: /^(Send|Steer)$/ }));
 const sentClientId = (call = 0) => backend.send.mock.calls[call]![3] as string;
 
+// Waits are on what the page shows; a slow runner gets room, the assertions stay the same.
+beforeAll(() => configure({ asyncUtilTimeout: 5000 }));
+afterAll(() => configure({ asyncUtilTimeout: 1000 }));
+vi.setConfig({ testTimeout: 30_000 });
+
 beforeEach(() => {
+  // Timer functions and Date only: React's scheduler and the editor keep their own.
+  vi.useFakeTimers({ shouldAdvanceTime: true, toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
   logs = chatLogs();
   logs.write(existing.id, { kind: "head", body_md: existing.title });
   logs.write(existing.id, memberMessage("Earlier question", null));
@@ -229,7 +238,6 @@ beforeEach(() => {
     streams.set(id, handlers);
     return { unsubscribe: vi.fn() };
   });
-  timing.sendTimeoutMs = undefined;
   // The agent the user picked last; a new chat's draft is keyed by it.
   storage = new Map([["multimira:chat:selectedAgentId", "agent-a"]]);
   client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
@@ -238,6 +246,9 @@ afterEach(() => {
   client.clear();
   streams.clear();
   vi.clearAllMocks();
+  // The chat log pool is module-level and every test reuses the chat ids.
+  clearChatLogPool();
+  vi.useRealTimers();
 });
 
 describe("a sent message is confirmed by the POST, not by the log or the turn read", () => {
@@ -276,7 +287,6 @@ describe("a sent message is confirmed by the POST, not by the log or the turn re
 
 describe("a send without an answer is unconfirmed until the log says", () => {
   it("marks a POST past the timeout unconfirmed, and a later log read confirms it without a resend", async () => {
-    timing.sendTimeoutMs = 50;
     const view = mountPage(`/test/chat?session=${existing.id}`);
     await waitFor(() => expect(conversation()).toHaveTextContent("Earlier question"));
     // The request reaches a slow server, which commits after the client gave up.
@@ -287,6 +297,12 @@ describe("a send without an answer is unconfirmed until the log says", () => {
     });
     await type("Slow message");
     submit();
+    await waitFor(() => expect(backend.send).toHaveBeenCalledOnce());
+    // Halfway it is still sending (the faked clock also moves with real time).
+    await advance(CHAT_SEND_TIMEOUT_MS / 2);
+    expect(signal.aborted).toBe(false);
+    expect(conversation()).toHaveTextContent("Sending…");
+    await advance(CHAT_SEND_TIMEOUT_MS / 2);
     await waitFor(() => expect(conversation()).toHaveTextContent("Delivery unconfirmed"));
     expect(signal.aborted).toBe(true);
     expect(screen.getByRole("button", { name: "Retry sending this message" })).toBeInTheDocument();
@@ -294,6 +310,7 @@ describe("a send without an answer is unconfirmed until the log says", () => {
     expect(composerText()).toBe("");
     accept(existing.id, "Slow message", sentClientId());
     // The fallback read on the pending-task cadence finds the server's row.
+    await advance(CHAT_PENDING_REFETCH_INTERVAL_MS);
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
     expect(conversation()).not.toHaveTextContent("Delivery unconfirmed");
     expect(backend.send).toHaveBeenCalledOnce();
@@ -331,15 +348,17 @@ describe("a send without an answer is unconfirmed until the log says", () => {
     submit();
     await waitFor(() => expect(apiLog.warn).toHaveBeenCalledWith("refreshSession.error", expect.objectContaining({ sessionId: existing.id })));
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
+    expect(sentLabel()?.style.visibility).toBe("");
+    const readsAfterFailure = backend.read.mock.calls.length;
     // The fallback read brings the server's row: the bubble is its row now, and its label fades.
-    const label = () => [...conversation()!.querySelectorAll<HTMLElement>('[aria-live="polite"]')]
-      .find((node) => node.textContent?.includes("Sent"));
-    // The label fades 600ms after the read lands.
-    await waitFor(() => expect(label()?.style.visibility).toBe("hidden"), { timeout: 3000 });
+    await advance(CHAT_PENDING_REFETCH_INTERVAL_MS);
+    expect(backend.read.mock.calls.length).toBeGreaterThan(readsAfterFailure);
+    await advance(SENT_LABEL_MS);
+    await waitFor(() => expect(sentLabel()?.style.visibility).toBe("hidden"));
     expect(backend.read.mock.calls.length).toBeGreaterThan(readsBefore + 1);
     // Confirmed: the fallback stops.
     const reads = backend.read.mock.calls.length;
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, timing.pollMs * 4)); });
+    await advance(CHAT_PENDING_REFETCH_INTERVAL_MS * 3);
     expect(backend.read.mock.calls.length).toBe(reads);
     view.unmount();
   });
@@ -391,7 +410,8 @@ describe("the composer follows the chat on screen", () => {
     await waitFor(() => expect(editor()).toBeDefined());
     expect(composerText()).toBe("");
     view.unmount();
-    // A reload reads the drafts from storage again.
+    // A reload reads the drafts from storage again, with an empty log pool.
+    clearChatLogPool();
     const reloaded = mountPage("/test/chat");
     await waitFor(() => expect(editor()).toBeDefined());
     expect(newChatDrafts(reloaded.store.getState().inputDrafts)).toEqual([]);
@@ -411,7 +431,8 @@ describe("the composer follows the chat on screen", () => {
     await waitFor(() => expect(editor()).toBeDefined());
     expect(composerText()).toBe("");
     view.unmount();
-    // A reload opens the bare URL, not the deleted chat.
+    // A reload, with an empty log pool, opens the bare URL, not the deleted chat.
+    clearChatLogPool();
     const reloaded = mountPage(`/test/chat${router.search}`);
     await waitFor(() => expect(pageTitle()).toHaveTextContent("New chat"));
     expect(reloaded.store.getState().activeSessionId).toBeNull();
@@ -452,15 +473,18 @@ describe("the hub's hidden placeholder for the user's own row", () => {
     await waitFor(() => expect(backend.send).toHaveBeenCalledOnce());
     const seq = logs.rows(existing.id).at(-1)!.seq;
     if (order === "after") {
-      const label = () => [...conversation()!.querySelectorAll<HTMLElement>('[aria-live="polite"]')]
-        .find((node) => node.textContent?.includes("Sent"));
-      await waitFor(() => expect(label()?.style.visibility).toBe("hidden"), { timeout: 3000 });
+      // The read after the send has loaded the row: the label is there, then fades.
+      await waitFor(() => expect(sentLabel()).toBeDefined());
+      await advance(SENT_LABEL_MS);
+      await waitFor(() => expect(sentLabel()?.style.visibility).toBe("hidden"));
     }
     // The projection could not check the new row and failed closed.
     await act(async () => { await streams.get(existing.id)!.onFrames?.([placeholder(existing.id, seq)]); });
     if (order === "before") await act(async () => { tail.resolve(logs.read(existing.id, { before: 30 })); });
-    // Long enough for the label to fade and every read to land.
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 800)); });
+    // The read the placeholder needs has landed, and the label has faded.
+    await waitFor(() => expect(sentLabel()).toBeDefined());
+    await advance(SENT_LABEL_MS);
+    await waitFor(() => expect(sentLabel()?.style.visibility).toBe("hidden"));
     expect(conversation()).toHaveTextContent("My own row");
     expect(conversation()!.querySelectorAll('[data-perf-item="message"]')).toHaveLength(2);
     view.unmount();
