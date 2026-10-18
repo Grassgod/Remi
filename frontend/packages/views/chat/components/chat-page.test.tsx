@@ -57,7 +57,7 @@ describe("ChatPage URL selection", () => {
       "page",
     );
     fireEvent.click(screen.getByRole("button", { name: "Select" }));
-    expect(state.replace).toHaveBeenCalledWith("/demo/chat?session=session-2");
+    expect(state.replace).toHaveBeenCalledWith("/demo/chat?session=session-2", { scroll: false });
   });
   it("opens agent links as a new conversation and preserves the agent in navigation", () => {
     state.searchParams.set("agent", "agent-1");
@@ -65,7 +65,7 @@ describe("ChatPage URL selection", () => {
     expect(state.select).toHaveBeenCalledWith(null);
     expect(state.agent).toHaveBeenCalledWith("agent-1");
     fireEvent.click(screen.getByRole("button", { name: "New" }));
-    expect(state.replace).toHaveBeenCalledWith("/demo/chat?agent=agent-2");
+    expect(state.replace).toHaveBeenCalledWith("/demo/chat?agent=agent-2", { scroll: false });
   });
   it("keeps the current floating-chat selection when opened without a link", () => {
     render(<ChatPage />);

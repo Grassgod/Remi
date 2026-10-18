@@ -1,6 +1,7 @@
 export interface NavigationAdapter {
   push(path: string): void;
-  replace(path: string): void;
+  /** `scroll: false` keeps the scroll position (Next scrolls to the page by default). */
+  replace(path: string, options?: { scroll?: boolean }): void;
   back(): void;
   pathname: string;
   searchParams: URLSearchParams;

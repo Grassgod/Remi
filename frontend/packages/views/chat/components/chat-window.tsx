@@ -121,15 +121,20 @@ export function ChatWindow({
   const storedActiveSessionId = useChatStore((s) => s.activeSessionId);
   const [pageSessionId, setPageSessionId] = useState(initialSessionId ?? storedActiveSessionId);
   useEffect(() => { if (isPage) setPageSessionId(initialSessionId ?? storedActiveSessionId); }, [isPage, initialSessionId]);
-  // After that the page follows every change of the stored chat: a bare /chat
-  // (the nav's 「Chat」) starting a new one, a chat deleted elsewhere, the
-  // store's first read. The page and the composer's draft never name two chats.
+  // After that the page follows every change of the stored chat made outside
+  // this window: a bare /chat (the nav's 「Chat」) starting a new one, a chat
+  // deleted elsewhere, the store's first read. The page and the composer's
+  // draft never name two chats. The URL follows when it names another one, so
+  // a reload does not reopen a deleted chat; a change the URL made (a link, a
+  // bare /chat) already agrees with it, so nothing navigates twice.
   const followedSessionId = useRef(storedActiveSessionId);
   useEffect(() => {
     if (followedSessionId.current === storedActiveSessionId) return;
     followedSessionId.current = storedActiveSessionId;
-    if (isPage) setPageSessionId(storedActiveSessionId);
-  }, [isPage, storedActiveSessionId]);
+    if (!isPage) return;
+    setPageSessionId(storedActiveSessionId);
+    if ((initialSessionId ?? null) !== storedActiveSessionId) onSessionChange?.(storedActiveSessionId);
+  }, [isPage, storedActiveSessionId, initialSessionId, onSessionChange]);
   const activeSessionId = isPage ? pageSessionId : storedActiveSessionId;
   const displayedSessionId = activeSessionId;
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
@@ -141,6 +146,8 @@ export function ChatWindow({
   const storeSetActiveSession = useChatStore((s) => s.setActiveSession);
   const setActiveSession = useCallback(
     (id: string | null, agentId?: string) => {
+      // This window moves the page and the URL itself; the follower skips it.
+      followedSessionId.current = id;
       storeSetActiveSession(id);
       if (isPage) setPageSessionId(id);
       onSessionChange?.(id, agentId);

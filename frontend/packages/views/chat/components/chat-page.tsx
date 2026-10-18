@@ -20,10 +20,12 @@ export function ChatPage({ initialLog, initialSessionId }: { initialLog?: IssueL
     if (queryAgent) state.setSelectedAgentId(queryAgent);
     mounted.current = true;
   }, [querySession, queryAgent]);
+  // The URL names the chat shown, without a history entry or a scroll jump.
   const onSessionChange = useCallback(
     (sessionId: string | null, agentId?: string) => {
       navigation.replace(
         paths.chat(sessionId ?? undefined, sessionId ? undefined : agentId),
+        { scroll: false },
       );
     },
     [navigation, paths],

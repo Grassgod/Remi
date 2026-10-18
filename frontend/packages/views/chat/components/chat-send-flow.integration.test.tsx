@@ -32,10 +32,13 @@ const router = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   const state = {
     search: "",
+    /** The user follows a link (the nav's 「Chat」, a chat URL). */
     go(url: string) {
       state.search = url.includes("?") ? url.slice(url.indexOf("?")) : "";
       for (const listener of listeners) listener();
     },
+    /** The page's own URL updates. */
+    replace: vi.fn((url: string, _options?: { scroll?: boolean }) => state.go(url)),
     subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
   return state;
@@ -93,7 +96,7 @@ vi.mock("../../navigation", async () => {
   return {
     useNavigation: () => {
       const search = useSyncExternalStore(router.subscribe, () => router.search);
-      return { searchParams: new URLSearchParams(search), replace: router.go, push: router.go };
+      return { searchParams: new URLSearchParams(search), replace: router.replace, push: router.go };
     },
     AppLink: ({ href, children }: { href: string; children: ReactNode }) => <a href={href}>{children}</a>,
   };
@@ -338,6 +341,8 @@ describe("the composer follows the chat on screen", () => {
     act(() => router.go("/test/chat"));
     await waitFor(() => expect(pageTitle()).toHaveTextContent("New chat"));
     expect(view.store.getState().activeSessionId).toBeNull();
+    // The URL made this change, so the page does not navigate again.
+    expect(router.replace).not.toHaveBeenCalled();
     await type("After the nav link");
     // The composer holds the draft of the new chat on screen.
     await waitFor(() => expect(view.store.getState().inputDrafts["__new__:agent-a"]).toBe("After the nav link"));
@@ -361,6 +366,8 @@ describe("the composer follows the chat on screen", () => {
     submit();
     await waitFor(() => expect(router.search).toBe("?session=chat-new-1"));
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
+    // The created chat names the URL once, with no history entry or scroll jump.
+    expect(router.replace.mock.calls).toEqual([["/test/chat?session=chat-new-1", { scroll: false }]]);
     expect(composerText()).toBe("");
     expect(newChatDrafts(view.store.getState().inputDrafts)).toEqual([]);
     expect(storage.get("multimira:chat:drafts")).toBeUndefined();
@@ -375,6 +382,25 @@ describe("the composer follows the chat on screen", () => {
     await waitFor(() => expect(editor()).toBeDefined());
     expect(newChatDrafts(reloaded.store.getState().inputDrafts)).toEqual([]);
     expect(composerText()).toBe("");
+    reloaded.unmount();
+  });
+
+  it("ends on a bare /chat URL when the chat on screen is deleted elsewhere", async () => {
+    const view = mountPage(`/test/chat?session=${existing.id}`);
+    await waitFor(() => expect(conversation()).toHaveTextContent("Earlier question"));
+    // Another tab deletes it: the realtime handler clears the stored chat.
+    backend.sessions = [];
+    act(() => view.store.getState().setActiveSession(null));
+    await waitFor(() => expect(pageTitle()).toHaveTextContent("New chat"));
+    expect(router.search).toBe("");
+    expect(router.replace.mock.calls).toEqual([["/test/chat", { scroll: false }]]);
+    await waitFor(() => expect(editor()).toBeDefined());
+    expect(composerText()).toBe("");
+    view.unmount();
+    // A reload opens the bare URL, not the deleted chat.
+    const reloaded = mountPage(`/test/chat${router.search}`);
+    await waitFor(() => expect(pageTitle()).toHaveTextContent("New chat"));
+    expect(reloaded.store.getState().activeSessionId).toBeNull();
     reloaded.unmount();
   });
 
