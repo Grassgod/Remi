@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatStore } from "@multiremi/core/chat";
 import { useWorkspacePaths } from "@multiremi/core/paths";
 import { useNavigation } from "../../navigation";
@@ -10,8 +10,14 @@ import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log"
 export function ChatPage({ initialLog, initialSessionId }: { initialLog?: IssueLogBootstrap; initialSessionId?: string } = {}) {
   const navigation = useNavigation();
   const paths = useWorkspacePaths();
-  const querySession = navigation.searchParams.get("session") ?? initialSessionId;
+  // The URL names the open chat. The route's props describe the URL the
+  // server rendered, which a URL-only replacement leaves behind (and a back
+  // navigation restores), so they never pick the chat: they only seed its log
+  // until the page replaces its URL, or the server renders another session.
+  const querySession = navigation.searchParams.get("session");
   const queryAgent = navigation.searchParams.get("agent");
+  const [replacedRoute, setReplacedRoute] = useState<{ sessionId?: string } | null>(null);
+  const routeCurrent = !replacedRoute || replacedRoute.sessionId !== initialSessionId;
   const mounted = useRef(false);
   useEffect(() => {
     const state = useChatStore.getState();
@@ -22,12 +28,17 @@ export function ChatPage({ initialLog, initialSessionId }: { initialLog?: IssueL
   }, [querySession, queryAgent]);
   const onSessionChange = useCallback(
     (sessionId: string | null, agentId?: string) => {
-      navigation.replace(
-        paths.chat(sessionId ?? undefined, sessionId ? undefined : agentId),
-      );
+      const path = paths.chat(sessionId ?? undefined, sessionId ? undefined : agentId);
+      // The window already shows the chosen chat; a route render would only
+      // read a log bootstrap the window ignores for a chat it is showing.
+      if (navigation.replaceUrl) {
+        setReplacedRoute((route) =>
+          route && route.sessionId === initialSessionId ? route : { sessionId: initialSessionId });
+        navigation.replaceUrl(path);
+      } else navigation.replace(path);
     },
-    [navigation, paths],
+    [navigation, paths, initialSessionId],
   );
   return <ChatWindow presentation="page" onSessionChange={onSessionChange}
-    initialLog={initialLog} initialSessionId={querySession ?? undefined} />;
+    initialLog={routeCurrent ? initialLog : undefined} initialSessionId={querySession ?? undefined} />;
 }
