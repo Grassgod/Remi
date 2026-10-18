@@ -19,6 +19,13 @@ function NavigationProviderInner({
   const adapter: NavigationAdapter = {
     push: router.push,
     replace: router.replace,
+    // The App Router patches history.replaceState: a call whose state lacks
+    // its own `__NA` marker keeps its route tree in the entry and updates
+    // usePathname/useSearchParams without fetching the route. Passing the
+    // current history.state would carry that marker and skip the update.
+    replaceUrl: (path: string) => {
+      window.history.replaceState(null, "", path);
+    },
     back: router.back,
     pathname,
     searchParams: new URLSearchParams(searchParams.toString()),
