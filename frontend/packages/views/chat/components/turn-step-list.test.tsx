@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import type { TraceItem } from "@multiremi/contracts/trace";
 import { renderWithI18n } from "../../test/i18n";
@@ -18,6 +18,19 @@ function renderSteps(items: TraceItem[], locale: "zh-Hans" | "en" = "zh-Hans") {
 }
 const row = (key: string) => document.querySelector<HTMLElement>(`[data-step-row="${key}"]`)!;
 const trigger = (element: Element) => element.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!;
+
+/** jsdom lays nothing out: elements carrying `attribute` report `client` px of box over `scroll` px of content. */
+function mockBox(attribute: string, size: { scroll: number; client: number }) {
+  for (const [name, value] of [["scrollHeight", size.scroll], ["clientHeight", size.client]] as const) {
+    const inherited = Object.getOwnPropertyDescriptor(Element.prototype, name)!.get!;
+    Object.defineProperty(HTMLElement.prototype, name, { configurable: true,
+      get(this: HTMLElement) { return this.hasAttribute(attribute) ? value : inherited.call(this); } });
+  }
+}
+afterEach(() => {
+  delete (HTMLElement.prototype as { scrollHeight?: number }).scrollHeight;
+  delete (HTMLElement.prototype as { clientHeight?: number }).clientHeight;
+});
 
 describe("steps", () => {
   it("folds a run of rows under a collapsed summary and expands it on click", () => {
@@ -98,28 +111,104 @@ describe("steps", () => {
     renderSteps([notice("ntc:1", "Rate limited", "error")]);
     expect(trigger(document.querySelector('[data-step-breaker="ntc:1"]')!).className).toContain("text-destructive");
   });
+
+  it("lifts the group's 224px cap and fades while a row is open, then restores its scroll position", () => {
+    renderSteps([command("cmd_1", [unknown("ls")], { output: "a.txt" }), command("cmd_2", [unknown("pwd")], { output: "/w" })]);
+    const group = document.querySelector<HTMLElement>("[data-step-group]")!;
+    fireEvent.click(trigger(group));
+    const list = group.querySelector<HTMLElement>("[data-fade-scroll]")!;
+    // The clipping panel carries the list's 8px gutter, so focus rings and the scrollbar show whole.
+    expect(list.parentElement!.className.split(/\s+/)).toEqual(expect.arrayContaining(["-mx-2", "px-2"]));
+    expect(list).toHaveAttribute("data-fade-scroll", "capped");
+    expect(list.className).toContain("max-h-56");
+    list.scrollTop = 80;
+    fireEvent.scroll(list);
+    fireEvent.click(trigger(row("cmd_2:0")));
+    expect(list).toHaveAttribute("data-fade-scroll", "lifted");
+    expect(list.className).toContain("max-h-none");
+    expect(list.className).not.toContain("max-h-56");
+    expect(list.style.maskImage).toBe("");
+    // The browser clamps the position once the cap is gone; closing the row brings it back.
+    list.scrollTop = 0;
+    fireEvent.click(trigger(row("cmd_2:0")));
+    expect(list).toHaveAttribute("data-fade-scroll", "capped");
+    expect(list.scrollTop).toBe(80);
+  });
+
+  it("draws an open row at the foreground colour, unlike its muted neighbours", () => {
+    renderSteps([command("cmd_1", [unknown("ls")], { output: "a.txt" }), command("cmd_2", [unknown("pwd")], { output: "/w" })]);
+    fireEvent.click(trigger(document.querySelector("[data-step-group]")!));
+    const open = trigger(row("cmd_1:0"));
+    fireEvent.click(open);
+    expect(open).toHaveAttribute("data-panel-open");
+    expect(open.className).toContain("data-[panel-open]:text-foreground");
+    expect(trigger(row("cmd_2:0"))).not.toHaveAttribute("data-panel-open");
+  });
 });
 
 describe("command detail", () => {
-  it("clamps the command to two lines until clicked and keeps its output at most 144px", () => {
+  it("clamps the command to two lines with 展开 / 收起 and keeps its wrapped output at most 144px", () => {
     const script = "bun run test \\\n  --filter views \\\n  --reporter dot";
+    mockBox("data-command-text", { scroll: 60, client: 40 });
     renderSteps([command("cmd_1", [unknown(script)], { output: "line 1\nline 2\n✓ done" })]);
     fireEvent.click(trigger(row("cmd_1:0")));
     const detail = document.querySelector<HTMLElement>("[data-command-detail]")!;
-    const commandButton = detail.querySelector<HTMLButtonElement>("button[aria-expanded]")!;
-    expect(commandButton.textContent).toBe(script);
-    const commandText = commandButton.querySelector<HTMLElement>("[data-command-text]")!;
+    const commandText = detail.querySelector<HTMLElement>("[data-command-text]")!;
+    expect(commandText.textContent).toBe(script);
+    expect(commandText).not.toHaveAttribute("title");
     const classes = () => commandText.className.split(/\s+/);
     // `block` would override the clamp's display, so the two never coexist.
     expect(classes()).toContain("line-clamp-2");
     expect(classes()).not.toContain("block");
-    fireEvent.click(commandButton);
+    const toggle = screen.getByRole("button", { name: "展开" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(toggle).toHaveAttribute("aria-controls", commandText.id);
+    expect(toggle.className).toContain("cursor-pointer");
+    fireEvent.click(toggle);
     expect(classes()).toContain("block");
     expect(classes()).not.toContain("line-clamp-2");
+    expect(toggle).toHaveTextContent("收起");
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    fireEvent.click(toggle);
+    expect(classes()).toContain("line-clamp-2");
     const output = detail.querySelector<HTMLElement>("[data-command-output]")!;
     expect(output.className).toContain("max-h-36");
     expect(output.className).toContain("text-[13px]");
+    // Long lines wrap instead of running off the right edge.
+    expect(output.className.split(/\s+/)).toEqual(expect.arrayContaining(["whitespace-pre-wrap", "break-words"]));
+    expect(output.className.split(/\s+/)).not.toContain("whitespace-pre");
     expect(detail.querySelector("[data-command-status]")).toHaveTextContent("成功");
+  });
+
+  it("offers no expand control for a command that fits in two lines", () => {
+    mockBox("data-command-text", { scroll: 20, client: 20 });
+    renderSteps([command("cmd_1", [unknown("ls -la")], { output: "total 0" })]);
+    fireEvent.click(trigger(row("cmd_1:0")));
+    expect(screen.queryByRole("button", { name: "展开" })).toBeNull();
+    expect(document.querySelector("[data-command-detail] [aria-expanded]")).toBeNull();
+  });
+
+  it("opens a finished command's output at the top", () => {
+    mockBox("data-command-output", { scroll: 500, client: 144 });
+    renderSteps([command("cmd_1", [unknown("cat big.log")], { output: "1\n2\n3" })]);
+    fireEvent.click(trigger(row("cmd_1:0")));
+    expect(document.querySelector<HTMLElement>("[data-command-output]")!.scrollTop).toBe(0);
+  });
+
+  it("follows a running command's output until the reader scrolls up", () => {
+    mockBox("data-command-output", { scroll: 500, client: 144 });
+    const running = (output: string) => [command("cmd_1", [unknown("tail -f app.log")], { status: "in_progress", completed_at: null, output })];
+    const items = running("1\n2");
+    const view = renderSteps(items);
+    fireEvent.click(trigger(row("cmd_1:0")));
+    const output = () => document.querySelector<HTMLElement>("[data-command-output]")!;
+    expect(output().scrollTop).toBe(500);
+    output().scrollTop = 100;
+    fireEvent.scroll(output());
+    const next = running("1\n2\n3");
+    view.rerender(<TurnStepList steps={buildTurnSteps(next)} items={next} />);
+    expect(output()).toHaveTextContent("3");
+    expect(output().scrollTop).toBe(100);
   });
 
   it.each([
@@ -143,7 +232,7 @@ describe("command detail", () => {
     expect(detail.querySelector("[data-command-output]")).toHaveTextContent("a.txt");
   });
 
-  it("says 无输出 and copies the command and the output separately", async () => {
+  it("says 无输出 and copies the command and the output from their own blocks", async () => {
     const { unmount } = renderSteps([command("cmd_1", [unknown("true")], { output: null })]);
     fireEvent.click(trigger(row("cmd_1:0")));
     expect(screen.getByText("无输出")).toBeInTheDocument();
@@ -151,9 +240,14 @@ describe("command detail", () => {
     unmount();
     renderSteps([command("cmd_2", [unknown("bash -lc 'ls -la'")], { command: "bash -lc 'ls -la'", output: "total 0" })]);
     fireEvent.click(trigger(row("cmd_2:0")));
-    fireEvent.click(screen.getByRole("button", { name: "复制命令" }));
+    const detail = document.querySelector<HTMLElement>("[data-command-detail]")!;
+    const copyCommand = within(detail.querySelector<HTMLElement>("[data-command-block]")!).getByRole("button", { name: "复制命令" });
+    const copyOutput = within(detail.querySelector<HTMLElement>("[data-output-block]")!).getByRole("button", { name: "复制输出" });
+    // The status footer keeps only the status.
+    expect(within(detail.querySelector<HTMLElement>("[data-command-status]")!.parentElement!).queryAllByRole("button")).toHaveLength(0);
+    fireEvent.click(copyCommand);
     await waitFor(() => expect(copied).toHaveBeenCalledWith("ls -la"));
-    fireEvent.click(screen.getByRole("button", { name: "复制输出" }));
+    fireEvent.click(copyOutput);
     await waitFor(() => expect(copied).toHaveBeenCalledWith("total 0"));
   });
 
