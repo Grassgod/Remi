@@ -20,6 +20,25 @@ export function getMessage(ctx:StoreContext,id:string):UnifiedMessage|null {
   return row ? messageFromRow(row) : null;
 }
 
+/**
+ * Messages per batched read. Rows are whole messages (body and metadata), and a
+ * PostgreSQL result crosses the synchronous bridge as one reply, so batches stay
+ * small like the turn-card reads.
+ */
+const MESSAGE_BATCH_SIZE = 50;
+
+/** {@link getMessage} for many ids, keyed by id. Ids without a message row are absent. */
+export function getMessages(ctx:StoreContext,ids:readonly string[]):Map<string,UnifiedMessage> {
+  const result=new Map<string,UnifiedMessage>();
+  const unique=[...new Set(ids.filter(Boolean))];
+  for(let offset=0;offset<unique.length;offset+=MESSAGE_BATCH_SIZE){
+    const batch=unique.slice(offset,offset+MESSAGE_BATCH_SIZE);
+    for(const row of ctx.db.query(`SELECT * FROM multiremi_conversation_log WHERE id IN (${batch.map(()=>'?').join(',')}) AND kind='message'`).all(...batch) as Record<string,any>[])
+      result.set(String(row.id),messageFromRow(row));
+  }
+  return result;
+}
+
 export function messageFromRow(row: Record<string, any>): UnifiedMessage {
   const entry=toConversationLogEntry(row);
   const {author_type,author_id,parent_id,...base}=entry;

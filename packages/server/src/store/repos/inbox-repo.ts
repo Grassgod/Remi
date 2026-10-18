@@ -1,6 +1,6 @@
 import { InboxOperations } from "../inbox/operations.js";
 import { QueuedMessages } from "../inbox/queued-messages.js";
-import { getMessage, sendMessageWithinTransaction } from "../inbox/send-message.js";
+import { getMessage, getMessages, sendMessageWithinTransaction } from "../inbox/send-message.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
 import { envelopePriority, type Envelope, type EnvelopeMetadata } from "@multiremi/contracts/inbox.js";
 import { RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
@@ -66,6 +66,7 @@ export class InboxRepo {
   }
 
   getMessage(id:string) { return getMessage(this.ctx,id); }
+  getMessages(ids:readonly string[]) { return getMessages(this.ctx,ids); }
   sendMessageWithinTransaction(input:import("@multiremi/contracts/unified-model.js").SendMessageInput,events:CommitEventQueue,
     authorizeRecipient?:(agent:import("@multiremi/contracts/types.js").MultiremiAgent)=>void) {
     return sendMessageWithinTransaction(this.ctx,input,events,{},authorizeRecipient);

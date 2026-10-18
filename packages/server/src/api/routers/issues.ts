@@ -1495,8 +1495,9 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
   });
   app.get("/api/sessions/:sessionId/log", (c) => {
-    const sessionId = logSessionAccess(c);
-    if (sessionId instanceof Response) return sessionId;
+    const conversation = loadConversation(c, store, c.req.param("sessionId") ?? "");
+    if (conversation instanceof Response) return conversation;
+    const sessionId = conversation.id;
     const deniedRange = denyLogRange(c);
     if (deniedRange) return deniedRange;
     const readNumber = (name: string): number | null | undefined => {
@@ -1513,8 +1514,11 @@ export function registerIssueRoutes(app: Hono, deps: RouterDeps): void {
     }
     const window = store.conversationLogWindow(sessionId, { anchor, before, after });
     const activityTo = window.has_more_after ? window.entries.at(-1)?.created_at : null;
-    window.entries = window.entries.filter(conversationEntryVisibility(c, store)).map(entry => messageResponse(entry));
-    const issueSession = store.getIssueSession(sessionId);
+    // One batched visibility read per window; the guard's Chat row seeds the memo.
+    window.entries = window.entries.filter(conversationEntryVisibility(c, store,
+      { prefetch: window.entries, chatSession: conversation.chatSession })).map(entry => messageResponse(entry));
+    // loadConversation resolves Issue sessions first, so this is the row it read.
+    const issueSession = conversation.issueSession ?? null;
     if (c.req.query("with_activity") === "1" && issueSession?.isDefault) {
       Object.assign(window, store.listIssueActivityBetween(issueSession.issueId, {
         fromInclusive: window.prev_entry_created_at,

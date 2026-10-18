@@ -3,6 +3,7 @@ import { createId, nowIso } from "@multiremi/ids.js";
 import type { SqlDatabase } from "./db/postgres.js";
 import type { ConversationLogEntry, ConversationLogTurnMetadata } from "@multiremi/contracts/conversation-log.js";
 import type { TurnAttemptStatus } from "@multiremi/contracts/unified-model.js";
+import type { TaskUsageEntry } from "@multiremi/contracts/types.js";
 import { notifyTurnChanged } from "./turn-execution-records.js";
 import { parseJson } from "./helpers.js";
 import { turnUsageProjection } from "./usage-projection.js";
@@ -55,22 +56,79 @@ export function createReplacementAttemptWithinTransaction(db: SqlDatabase, turnI
   return {turn_id:turnId,attempt_id:id,attempt_no:attemptNo};
 }
 
+const TURN_CARD_SELECT = `SELECT t.*,a.status AS attempt_status,a.attempt_no,a.failure_reason,a.progress_summary,a.event_count,
+    a.tool_call_count,a.type_histogram,a.model,a.trace_ref,a.usage,a.started_at AS attempt_started_at,a.ended_at AS attempt_ended_at,
+    a.context_usage,a.worked_ms,a.process_item_count,a.late_subagents
+    FROM multiremi_turns t LEFT JOIN multiremi_turn_attempts a ON a.id=t.current_attempt_id`;
+/**
+ * Turns per batched card read (and reply bodies per reply read). The rows carry
+ * the legacy prompt, progress summary and trace/usage JSON, and on PostgreSQL a
+ * statement's whole result crosses the synchronous bridge as one reply, which is
+ * logged above 1 MiB and can be rejected above the reply cap. 50 keeps a reply
+ * small while a log window (at most ~34 turn cards) stays one statement.
+ */
+export const TURN_CARD_BATCH_SIZE = 50;
+
+type Row = Record<string, any>;
+
+const missingTurn = (entry: ConversationLogEntry) => new Error(`Missing turn for conversation pointer: ${entry.id}`);
+
 /** Materialize the existing card wire from the turn and its current attempt. */
 export function projectTurnCard(db: SqlDatabase, entry: ConversationLogEntry): ConversationLogEntry {
   if (entry.kind!=="turn") return entry;
-  const row=db.query(`SELECT t.*,a.status AS attempt_status,a.attempt_no,a.failure_reason,a.progress_summary,a.event_count,
-    a.tool_call_count,a.type_histogram,a.model,a.trace_ref,a.usage,a.started_at AS attempt_started_at,a.ended_at AS attempt_ended_at,
-    a.context_usage,a.worked_ms,a.process_item_count,a.late_subagents
-    FROM multiremi_turns t LEFT JOIN multiremi_turn_attempts a ON a.id=t.current_attempt_id WHERE t.id=?`).get(entry.id);
-  if (!row) throw new Error(`Missing turn for conversation pointer: ${entry.id}`);
+  const row=db.query(`${TURN_CARD_SELECT} WHERE t.id=?`).get(entry.id);
+  if (!row) throw missingTurn(entry);
   const reply=row.reply_message_id ? db.query("SELECT body_md FROM multiremi_conversation_log WHERE id=?").get(row.reply_message_id) : null;
+  return buildTurnCard(entry, row, reply, turnUsageProjection(db,[row.id]).get(row.id) ?? []);
+}
+
+/**
+ * {@link projectTurnCard} for many rows: one turn/attempt read, one reply-body
+ * read and one usage read per batch instead of three statements per card. The
+ * cards are built by the same function, so each equals its single-row
+ * projection; a missing turn throws the same error for the first such entry in
+ * order. Non-turn entries are returned as they are.
+ */
+export function projectTurnCards(db: SqlDatabase, entries: readonly ConversationLogEntry[],
+  batchSize = TURN_CARD_BATCH_SIZE): ConversationLogEntry[] {
+  const turnIds = [...new Set(entries.filter(entry => entry.kind === "turn").map(entry => entry.id))];
+  if (!turnIds.length) return [...entries];
+  const turns = new Map<string, Row>();
+  for (let offset = 0; offset < turnIds.length; offset += batchSize) {
+    const batch = turnIds.slice(offset, offset + batchSize);
+    for (const row of db.query(`${TURN_CARD_SELECT} WHERE t.id IN (${batch.map(() => "?").join(",")})`).all(...batch) as Row[]) {
+      turns.set(String(row.id), row);
+    }
+  }
+  const missing = entries.find(entry => entry.kind === "turn" && !turns.has(entry.id));
+  if (missing) throw missingTurn(missing);
+  // Only a Chat card reads its reply body (see buildTurnCard).
+  const replyIds = [...new Set(entries.filter(entry => entry.kind === "turn" && entry.session_id.startsWith("chat_"))
+    .map(entry => turns.get(entry.id)!.reply_message_id).filter(Boolean).map(String))];
+  const replies = new Map<string, Row>();
+  for (let offset = 0; offset < replyIds.length; offset += batchSize) {
+    const batch = replyIds.slice(offset, offset + batchSize);
+    for (const row of db.query(`SELECT id,body_md FROM multiremi_conversation_log WHERE id IN (${batch.map(() => "?").join(",")})`).all(...batch) as Row[]) {
+      replies.set(String(row.id), { body_md: row.body_md });
+    }
+  }
+  const usage = turnUsageProjection(db, [...turns.values()].map(row => row.id));
+  return entries.map(entry => {
+    if (entry.kind !== "turn") return entry;
+    const row = turns.get(entry.id)!;
+    const reply = row.reply_message_id ? replies.get(String(row.reply_message_id)) ?? null : null;
+    return buildTurnCard(entry, row, reply, usage.get(row.id) ?? []);
+  });
+}
+
+function buildTurnCard(entry: ConversationLogEntry, row: Row, reply: Row | null, usage: TaskUsageEntry[]): ConversationLogEntry {
   const status=row.status==="pending" ? "queued" : row.status;
   const start=row.attempt_started_at ? Date.parse(row.attempt_started_at) : NaN;
   const end=row.attempt_ended_at ? Date.parse(row.attempt_ended_at) : NaN;
   const metadata: ConversationLogTurnMetadata={
     status,summary:row.progress_summary ?? null,event_count:row.event_count==null?null:Number(row.event_count),tool_call_count:row.tool_call_count==null?null:Number(row.tool_call_count),
     type_histogram:parseJson(row.type_histogram,null),model:parseJson(row.model,null),trace_ref:parseJson(row.trace_ref,null),
-    usage:turnUsageProjection(db,[row.id]).get(row.id) ?? [],failure_reason:row.failure_reason ?? null,
+    usage,failure_reason:row.failure_reason ?? null,
     final_entry_id:row.reply_message_id ?? null,
     ...(entry.session_id.startsWith("chat_") ? {final_reply_md:reply?.body_md ?? null} : {}),
     elapsed_ms:Number.isFinite(start) && Number.isFinite(end) ? Math.max(0,end-start) : null,
