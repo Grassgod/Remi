@@ -382,6 +382,13 @@ function SendStatus({ status, onRetry }: { status: OptimisticChatRow["status"]; 
         className="relative inline-flex h-5 items-center justify-center px-1 text-destructive underline after:absolute after:-inset-y-3 after:inset-x-0">
         {t(($) => $.message_list.retry)}
       </button></>}
+    {/* No answer: it may have landed, so this is not a failure; the log is re-read meanwhile. */}
+    {status === "unconfirmed" && <><AlertCircle className="mr-1 size-3" aria-hidden="true" />
+      <span>{t(($) => $.message_list.unconfirmed)}</span>
+      <button type="button" onClick={onRetry} aria-label={t(($) => $.message_list.retry_send)}
+        className="relative inline-flex h-5 items-center justify-center px-1 underline after:absolute after:-inset-y-3 after:inset-x-0">
+        {t(($) => $.message_list.retry)}
+      </button></>}
   </div>;
 }
 

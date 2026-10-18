@@ -37,6 +37,7 @@
     "sending": "送信中…",
     "sent": "送信済み",
     "send_failed": "送信失敗 ·",
+    "unconfirmed": "送信未確認 ·",
     "retry": "再試行",
     "retry_send": "このメッセージを再送信"
   },

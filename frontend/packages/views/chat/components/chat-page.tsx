@@ -26,6 +26,7 @@ export function ChatPage({ initialLog, initialSessionId }: { initialLog?: IssueL
     if (queryAgent) state.setSelectedAgentId(queryAgent);
     mounted.current = true;
   }, [querySession, queryAgent]);
+  // The URL names the chat shown, without a history entry or a scroll jump.
   const onSessionChange = useCallback(
     (sessionId: string | null, agentId?: string) => {
       const path = paths.chat(sessionId ?? undefined, sessionId ? undefined : agentId);
@@ -35,7 +36,7 @@ export function ChatPage({ initialLog, initialSessionId }: { initialLog?: IssueL
         setReplacedRoute((route) =>
           route && route.sessionId === initialSessionId ? route : { sessionId: initialSessionId });
         navigation.replaceUrl(path);
-      } else navigation.replace(path);
+      } else navigation.replace(path, { scroll: false });
     },
     [navigation, paths, initialSessionId],
   );

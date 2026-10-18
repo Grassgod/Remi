@@ -80,7 +80,7 @@ A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部�
 冷回放、ring 续传、peer 补洞、实时 entry 和 patch 都经过
 [browser-log-projection.ts](../../packages/server/src/api/hub/browser-log-projection.ts)。patch 先查当前 canonical 行，
 避免部分字段遗漏来源；提问、答复、轮卡片及引用它们的编辑/生命周期标记沿来源任务/agent 鉴权。
-无权行只发送 `{session_id,seq,revision,visibility:"hidden"}`，供本地副本记录连续覆盖范围；
+无权行只发送 `{session_id,seq,revision,visibility:"hidden"}`，供本地副本记录连续覆盖范围；查不到行时同样以它失败关闭，所以浏览器（[issue-log.ts](../../frontend/packages/core/session-log/issue-log.ts) 的 `hydratedFrames`）在它可能删去页面已有的行或落在尚未读到的 seq 时，先经读取接口核对：读取接口仍以不低于该 revision 返回的行保留，否则按隐藏处理；
 有权帧递归脱除 `card_token_*`。权限只缓存到当前批次，保留的 ring 不按用户改写。
 Postgres 的行与来源事实通过异步 read pool 读取；查询失败停止该订阅并返回 `unavailable`。
 

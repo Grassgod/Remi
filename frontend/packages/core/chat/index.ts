@@ -3,6 +3,7 @@ export type { ChatStoreOptions, ChatState, ChatFollowUpMode, ChatQueueEdit, Chat
 export { useRecentContextStore, selectRecentContexts } from "./recent-context-store";
 export type { RecentContextEntry, RecentContextType } from "./recent-context-store";
 export { reconcileSettledPendingChatTask } from "./pending-task-reconciliation";
+export { CHAT_SEND_TIMEOUT_MS, ChatSendTimeoutError, withChatSendTimeout } from "./send";
 export type { PendingChatTaskRef } from "./pending-task-reconciliation";
 
 import type { createChatStore as CreateChatStoreFn } from "./store";

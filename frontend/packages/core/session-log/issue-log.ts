@@ -298,13 +298,26 @@ export class IssueLogReplica extends ReplicaView {
       if (this.disconnected || generation !== this.generation) return;
       const missing: HubFrame[] = [];
       const entries = new Map<number, SessionLogRow>();
+      const candidates = own ? [...(this.window ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)] : [];
+      // The hub fails closed: a row its projection could not check arrives as a
+      // bare hidden placeholder, also for a row this reader may see, such as
+      // their own message just sent. One that could remove a row shown here,
+      // or settle a seq not read yet, is checked against the read route first.
+      const held = this.browser?.port.getSnapshot(sessionId);
+      const readUpTo = Math.max(held?.head ?? -1, own ? this.window?.head_seq ?? -1 : -1);
+      const mayHideReadable = (seq: number) => seq > readUpTo || !!held?.entries.some(entry => entry.seq === seq)
+        || candidates.some(rows => rows.some(row => row.seq === seq));
       for (const frame of frames) {
         if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") continue;
         const payload = frame.payload as Record<string, unknown>;
-        if (payload.kind !== "message" && payload.kind !== "turn") continue;
+        const placeholder = isHiddenPlaceholder(payload);
+        if (!placeholder && payload.kind !== "message" && payload.kind !== "turn") continue;
         if (payload.session_id !== undefined && payload.session_id !== sessionId) throw new Error("Log payload belongs to another session");
         if (payload.seq !== undefined && payload.seq !== frame.seq) throw new Error("Log payload has an inconsistent sequence");
-        const candidates = own ? [...(this.window ? [this.window.entries] : []), ...this.knownWindows.toReversed().map(w => w.entries)] : [];
+        if (placeholder) {
+          if (mayHideReadable(frame.seq)) missing.push(frame);
+          continue;
+        }
         const candidate = candidates.map(rows => rows.find(row => row.seq === frame.seq)).find(Boolean);
         if (candidate && candidate.id === payload.id && candidate.session_id === sessionId && candidate.kind === payload.kind
           && candidate.revision >= Number(payload.revision ?? 0)) entries.set(frame.seq, candidate);
@@ -324,6 +337,13 @@ export class IssueLogReplica extends ReplicaView {
         // Row revisions decide staleness.
         for (const frame of missing.filter(frame => frame.seq >= first && frame.seq <= last)) {
           const payload = frame.payload as Record<string, unknown>;
+          if (isHiddenPlaceholder(payload)) {
+            // The read route checks visibility now: a row it still serves, at
+            // the placeholder's revision or later, stays. Otherwise it hides.
+            const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq);
+            if (row && row.revision >= Number(payload.revision ?? 0)) entries.set(frame.seq, row);
+            continue;
+          }
           const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq && row.id === payload.id);
           if (row && row.revision < Number(payload.revision ?? 0)) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
           if (row) entries.set(frame.seq, row);
@@ -337,6 +357,10 @@ export class IssueLogReplica extends ReplicaView {
       const hydrated = frames.map(frame => {
         if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") return frame;
         const payload = frame.payload as Record<string, unknown>;
+        if (isHiddenPlaceholder(payload)) {
+          const entry = entries.get(frame.seq);
+          return entry ? { ...frame, payload: entry } : frame;
+        }
         if (payload.kind !== "message" && payload.kind !== "turn") return frame;
         const entry = entries.get(frame.seq);
         // A successful read can omit a row deleted/hidden since this frame was
@@ -446,6 +470,11 @@ export class IssueLogReplica extends ReplicaView {
     }
     return rows;
   }
+}
+
+/** The hub's placeholder for a row it does not show: no kind, no body. */
+function isHiddenPlaceholder(payload: Record<string, unknown>): boolean {
+  return payload.visibility === "hidden" && payload.kind === undefined;
 }
 
 function mergeRows(left: SessionLogRow[], right: SessionLogRow[]): SessionLogRow[] {

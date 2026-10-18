@@ -44,6 +44,7 @@ import {
   chatSessionsOptions,
   pendingChatTaskOptions,
   chatKeys,
+  CHAT_PENDING_REFETCH_INTERVAL_MS,
 } from "@multiremi/core/chat/queries";
 import { useChatLog } from "@multiremi/core/session-log/use-issue-log";
 import { hasPooledChatLog } from "@multiremi/core/session-log/chat-log-pool";
@@ -58,6 +59,7 @@ import {
 import {
   reconcileSettledPendingChatTask,
   useChatStore,
+  withChatSendTimeout,
   type ChatQueueEdit,
   type PendingChatTaskRef,
 } from "@multiremi/core/chat";
@@ -120,10 +122,20 @@ export function ChatWindow({
   const storedActiveSessionId = useChatStore((s) => s.activeSessionId);
   const [pageSessionId, setPageSessionId] = useState(initialSessionId ?? storedActiveSessionId);
   useEffect(() => { if (isPage) setPageSessionId(initialSessionId ?? storedActiveSessionId); }, [isPage, initialSessionId]);
+  // After that the page follows every change of the stored chat made outside
+  // this window: a bare /chat (the nav's 「Chat」) starting a new one, a chat
+  // deleted elsewhere, the store's first read. The page and the composer's
+  // draft never name two chats. The URL follows when it names another one, so
+  // a reload does not reopen a deleted chat; a change the URL made (a link, a
+  // bare /chat) already agrees with it, so nothing navigates twice.
+  const followedSessionId = useRef(storedActiveSessionId);
   useEffect(() => {
-    if (isPage && !initialSessionId && !pageSessionId && storedActiveSessionId)
-      setPageSessionId(storedActiveSessionId);
-  }, [isPage, initialSessionId, pageSessionId, storedActiveSessionId]);
+    if (followedSessionId.current === storedActiveSessionId) return;
+    followedSessionId.current = storedActiveSessionId;
+    if (!isPage) return;
+    setPageSessionId(storedActiveSessionId);
+    if ((initialSessionId ?? null) !== storedActiveSessionId) onSessionChange?.(storedActiveSessionId);
+  }, [isPage, storedActiveSessionId, initialSessionId, onSessionChange]);
   const activeSessionId = isPage ? pageSessionId : storedActiveSessionId;
   const displayedSessionId = activeSessionId;
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
@@ -135,6 +147,8 @@ export function ChatWindow({
   const storeSetActiveSession = useChatStore((s) => s.setActiveSession);
   const setActiveSession = useCallback(
     (id: string | null, agentId?: string) => {
+      // This window moves the page and the URL itself; the follower skips it.
+      followedSessionId.current = id;
       storeSetActiveSession(id);
       if (isPage) setPageSessionId(id);
       onSessionChange?.(id, agentId);
@@ -180,18 +194,26 @@ export function ChatWindow({
   );
   const replicaRef = useRef(replica);
   replicaRef.current = replica;
+  // A chat whose last read after a send failed; the fallback below reads it again.
+  const [staleLogSessionId, setStaleLogSessionId] = useState<string | null>(null);
+  const readLogTail = useCallback((target: typeof replica) => target.refreshTailPreservingWindow().then(
+    () => setStaleLogSessionId((id) => id === target.sessionId ? null : id),
+    (error: unknown) => {
+      apiLogger.warn("refreshSession.error", { sessionId: target.sessionId, error: toSafeErrorDetails(error) });
+      setStaleLogSessionId(target.sessionId);
+    },
+  ), []);
   const [pendingRefreshSessionId, setPendingRefreshSessionId] = useState<string | null>(null);
   const refreshSession = useCallback((sessionId: string) => {
     if (!chatVisible) { setPendingRefreshSessionId(sessionId); return; }
-    if (replicaRef.current.sessionId === sessionId)
-      void replicaRef.current.refreshTailPreservingWindow().catch(() => {});
+    if (replicaRef.current.sessionId === sessionId) void readLogTail(replicaRef.current);
     else setPendingRefreshSessionId(sessionId);
-  }, [chatVisible]);
+  }, [chatVisible, readLogTail]);
   useEffect(() => {
     if (!chatVisible || !pendingRefreshSessionId || replica.sessionId !== pendingRefreshSessionId) return;
     setPendingRefreshSessionId(null);
-    void replica.refreshTailPreservingWindow().catch(() => {});
-  }, [replica, pendingRefreshSessionId, chatVisible]);
+    void readLogTail(replica);
+  }, [replica, pendingRefreshSessionId, chatVisible, readLogTail]);
   const [optimisticRows, setOptimisticRows] = useState<OptimisticChatRow[]>([]);
   const [isFetchingOlderMessages, setIsFetchingOlderMessages] = useState(false);
   const optimisticCounter = useRef(0);
@@ -204,7 +226,7 @@ export function ChatWindow({
     setOptimisticRows((rows) => {
       let changed = false;
       const next = rows.map((row) => {
-        if (row.sessionId !== displayedSessionId || !confirmed.has(row.clientId) || row.status === "sent" || row.status === "hidden") return row;
+        if (row.sessionId !== displayedSessionId || row.confirmedAt !== undefined || !confirmed.has(row.clientId)) return row;
         changed = true;
         return { ...row, status: "sent" as const, confirmedAt: now };
       });
@@ -220,6 +242,19 @@ export function ChatWindow({
         ? { ...row, status: "hidden" } : row)), delay);
     return () => clearTimeout(timer);
   }, [optimisticRows]);
+  // Fallback when the log does not say: while a send is in flight or got no
+  // answer, or the read after a send failed, the tail is read again on the
+  // pending-task cadence until the server's row is there.
+  const awaitingLog = displayedOptimistic.some((row) => row.status === "sending" || row.status === "unconfirmed")
+    || (!!displayedSessionId && staleLogSessionId === displayedSessionId);
+  useEffect(() => {
+    if (!chatVisible || !awaitingLog) return;
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
+      void readLogTail(replicaRef.current);
+    }, CHAT_PENDING_REFETCH_INTERVAL_MS);
+    return () => clearInterval(timer);
+  }, [chatVisible, awaitingLog, readLogTail]);
 
   // Server-authoritative pending task. Survives refresh / reopen / session
   // switch because it's keyed on sessionId in the Query cache; WS events
@@ -473,27 +508,43 @@ export function ChatWindow({
 
   const deliverRow = useCallback(async (row: OptimisticChatRow) => {
     const sessionId = row.sessionId;
+    const seedId = `optimistic-${row.clientId}`;
     const priorPending = qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId));
     if (!priorPending?.task_id) qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
-      task_id: `optimistic-${row.clientId}`, status: "queued", created_at: row.createdAt,
+      task_id: seedId, status: "queued", created_at: row.createdAt,
     });
+    const holdsSeed = () => qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId))?.task_id === seedId;
+    let turnId: string | undefined;
     try {
-      const result = await api.sendChatMessage(sessionId, row.content, row.attachmentIds, row.clientId);
-      if (!result.queued) qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), {
-        task_id: result.task_id, turn_id: result.turn_id, status: "queued", created_at: result.created_at,
-        supports_queue: result.supports_queue,
-      });
+      const result = await withChatSendTimeout((signal) =>
+        api.sendChatMessage(sessionId, row.content, row.attachmentIds, row.clientId, { signal }));
+      turnId = result.turn_id;
+      // The server accepted it: the bubble says so now. The log's row, when it
+      // comes, only takes the bubble's place.
+      setOptimisticRows((rows) => rows.map((item) => item.clientId === row.clientId && item.status === "sending"
+        ? { ...item, status: "sent" } : item));
+      // The turn it started only refines the seed; reading it never holds the
+      // send. A steer leaves the running turn's entry alone, and the
+      // pending-task read below may answer first.
+      if (turnId && holdsSeed()) void api.getChatTurnPendingTask(turnId).then((task) => {
+        if (holdsSeed()) qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), task.task_id ? task : priorPending ?? {});
+      }, (error: unknown) => apiLogger.warn("getChatTurnPendingTask.error", { turnId, error: toSafeErrorDetails(error) }));
       refreshSession(sessionId);
     } catch (error) {
       apiLogger.error("sendChatMessage.error", { sessionId, error: toSafeErrorDetails(error) });
-      setOptimisticRows((rows) => rows.map((item) => item.clientId === row.clientId
-        ? { ...item, status: "failed" } : item));
+      // Without an answer from the API (a timeout, the network, a gateway) the
+      // message may have landed: it is unconfirmed until the log says, and a
+      // retry reuses its dedupe_key. Only a refusal is a failure.
+      const unconfirmed = isQueueDeliveryUnconfirmed(error);
+      setOptimisticRows((rows) => rows.map((item) => item.clientId === row.clientId && item.status === "sending"
+        ? { ...item, status: unconfirmed ? "unconfirmed" : "failed" } : item));
       refreshSession(sessionId);
-      throw error;
+      // An unconfirmed message stays in its bubble, not the composer: sending
+      // it again as a new message could post it twice.
+      if (!unconfirmed) throw error;
     } finally {
-      if (qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId))?.task_id === `optimistic-${row.clientId}`) {
-        qc.setQueryData(chatKeys.pendingTask(sessionId), priorPending ?? {});
-      }
+      // The seed stays for an accepted turn until a read replaces it.
+      if (!turnId && holdsSeed()) qc.setQueryData(chatKeys.pendingTask(sessionId), priorPending ?? {});
       void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
       void qc.invalidateQueries({ queryKey: chatKeys.pendingTasks(wsId) });
       void qc.invalidateQueries({ queryKey: chatKeys.sessions(wsId) });
@@ -567,13 +618,15 @@ export function ChatWindow({
 
   const retrySend = useCallback((clientId: string) => {
     const row = optimisticRows.find((item) => item.clientId === clientId);
-    if (!row) return;
-    void replica.refreshTailPreservingWindow().then(() => {
+    if (!row || (row.status !== "failed" && row.status !== "unconfirmed")) return;
+    setOptimisticRows((rows) => rows.map((item) => item.clientId === clientId ? { ...item, status: "sending" } : item));
+    // The log is read first: an unanswered send may have landed. The resend
+    // keeps the dedupe_key, so the server answers a landed one with it again.
+    void readLogTail(replica).then(() => {
       if (replica.getSnapshot(row.sessionId).entries.some((entry) => clientIdOf(entry) === clientId)) return;
-      setOptimisticRows((rows) => rows.map((item) => item.clientId === clientId ? { ...item, status: "sending" } : item));
       void deliverRow(row).catch(() => {});
-    }).catch(() => {});
-  }, [optimisticRows, replica, deliverRow]);
+    });
+  }, [optimisticRows, replica, readLogTail, deliverRow]);
 
   const [stopping, setStopping] = useState(false);
   const handleStop = useCallback(async () => {
@@ -952,6 +1005,7 @@ export function ChatWindow({
         </div>
       )}
       <ChatInput
+        sessionId={activeSessionId}
         onSend={handleSend}
         onSaveQueueEdit={handleSaveQueueEdit}
         onUploadFile={handleUploadFile}

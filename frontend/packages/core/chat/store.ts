@@ -400,7 +400,12 @@ export function createChatStore(options: ChatStoreOptions) {
     setInputDraft: (sessionId, draft) => {
       // Debug level — onUpdate fires on every keystroke.
       logger.debug("setInputDraft", { sessionId, length: draft.length });
-      const next = { ...get().inputDrafts, [sessionId]: draft };
+      // An empty draft is no draft: its key goes, as in storage. Attachment
+      // bindings are left to their own setters.
+      if (!draft && !(sessionId in get().inputDrafts)) return;
+      const next = { ...get().inputDrafts };
+      if (draft) next[sessionId] = draft;
+      else delete next[sessionId];
       writeDrafts(storage, wsKey(DRAFTS_KEY), next);
       set({ inputDrafts: next });
     },

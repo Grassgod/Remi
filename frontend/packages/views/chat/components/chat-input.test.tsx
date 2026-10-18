@@ -156,6 +156,10 @@ vi.mock("@multiremi/core/chat", () => {
     setLocalAttachmentDetail: vi.fn((attachment: UploadResult) => {
       state.localAttachmentDetails[attachment.id] = attachment;
     }),
+    restoreToDraft: vi.fn((key: string, body: string, attachments: Record<string, string>) => {
+      state.inputDrafts[key] = [state.inputDrafts[key]?.trim(), body].filter(Boolean).join("\n\n");
+      state.inputDraftAttachments[key] = { ...state.inputDraftAttachments[key], ...attachments };
+    }),
   };
   return {
     DRAFT_NEW_SESSION: "__draft_new__",
@@ -211,6 +215,8 @@ function renderInput(
         onUploadFile={onUploadFile}
         agentName="Multiremi"
         {...props}
+        // The chat on screen; tests name it through the mocked store.
+        sessionId={props.sessionId !== undefined ? props.sessionId : useChatStore.getState().activeSessionId}
       />
     </I18nProvider>,
   );
@@ -448,6 +454,29 @@ describe("ChatInput sending and queue", () => {
     expect(logged).not.toContain(sensitiveCause);
   });
 
+  it("keeps the draft of the chat on screen, not of the stored selection", () => {
+    // The page shows session-1 while the stored selection names a new chat.
+    useChatStore.getState().activeSessionId = null;
+    renderInput({ sessionId: "session-1" });
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "For the chat on screen" } });
+    expect(useChatStore.getState().inputDrafts).toEqual({ "session-1": "For the chat on screen" });
+  });
+
+  it("clears the composer on submit and keeps what is typed while the send is in flight", async () => {
+    useChatStore.getState().activeSessionId = "session-1";
+    let finish!: () => void;
+    const onSend = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+    renderInput({ onSend });
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "Sent text" } });
+    fireEvent.click(screen.getByRole("button", { name: "Send" }));
+    expect(useChatStore.getState().inputDrafts["session-1"]).toBeUndefined();
+    fireEvent.change(screen.getByTestId("editor"), { target: { value: "Typed meanwhile" } });
+    await act(async () => { finish(); });
+    expect(useChatStore.getState().inputDrafts["session-1"]).toBe("Typed meanwhile");
+    // Only the submit emptied the editor (without an update); nothing wrote into it after.
+    expect(editorProps.setContent.mock.calls).toEqual([[""]]);
+  });
+
   it("does not send from an archived session", () => {
     const onSend = vi.fn();
     renderInput({ onSend, disabled: true });
@@ -682,7 +711,7 @@ describe("ChatInput queued-message edit", () => {
     state.inputDrafts["session-1"] = "Loaded queued message";
     view.rerender(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <ChatInput onSend={vi.fn()} agentName="Multiremi" />
+        <ChatInput sessionId="session-1" onSend={vi.fn()} agentName="Multiremi" />
       </I18nProvider>,
     );
     await waitFor(() => expect(editorProps.setContent).toHaveBeenCalledWith("Loaded queued message"));
@@ -699,11 +728,12 @@ describe("ChatInput queued-message edit", () => {
     fireEvent.click(screen.getByRole("button", { name: "Send" }));
     view.rerender(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <ChatInput onSend={onSend} agentName="Multiremi" />
+        <ChatInput sessionId="session-new" onSend={onSend} agentName="Multiremi" />
       </I18nProvider>,
     );
     await act(async () => { finish(); });
-    expect(editorProps.setContent).not.toHaveBeenCalled();
+    // The submit's own emptying, not an outside draft written into the editor.
+    expect(editorProps.setContent.mock.calls).toEqual([[""]]);
   });
 
   it("enables the primary button when an outside change fills an empty draft", async () => {
@@ -715,7 +745,7 @@ describe("ChatInput queued-message edit", () => {
     state.inputDrafts["session-1"] = "Loaded queued message";
     view.rerender(
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
-        <ChatInput onSend={vi.fn()} agentName="Multiremi" />
+        <ChatInput sessionId="session-1" onSend={vi.fn()} agentName="Multiremi" />
       </I18nProvider>,
     );
     await waitFor(() => expect(screen.getByRole("button", { name: "Send" })).not.toBeDisabled());

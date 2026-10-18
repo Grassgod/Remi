@@ -38,6 +38,7 @@
     "sending": "Sending…",
     "sent": "Sent",
     "send_failed": "Failed to send ·",
+    "unconfirmed": "Delivery unconfirmed ·",
     "retry": "Retry",
     "retry_send": "Retry sending this message"
   },
