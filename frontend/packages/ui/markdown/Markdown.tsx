@@ -1,5 +1,6 @@
+import type { Root } from 'hast'
 import * as React from 'react'
-import ReactMarkdown, { type Components, defaultUrlTransform } from 'react-markdown'
+import { type Components, defaultUrlTransform } from 'react-markdown'
 import rehypeKatex from 'rehype-katex'
 import rehypeRaw from 'rehype-raw'
 import rehypeSanitize, { defaultSchema } from 'rehype-sanitize'
@@ -13,6 +14,7 @@ import { CodeBlock, InlineCode } from './CodeBlock'
 import { isAllowedFileCardHref, preprocessFileCards } from './file-cards'
 import { preprocessLinks } from './linkify'
 import { preprocessMentionShortcodes } from './mentions'
+import { createMarkdownTreeSource, type MarkdownPipeline, renderMarkdownTree } from './markdown-tree'
 import 'katex/dist/katex.min.css'
 import './markdown.css'
 
@@ -122,15 +124,41 @@ function urlTransform(url: string): string {
   return defaultUrlTransform(url)
 }
 
+/**
+ * The `react-markdown` configuration every `Markdown` renders with. Exported so
+ * the cache's parity test can render the same configuration through
+ * `react-markdown` itself.
+ */
+export const markdownPipeline: MarkdownPipeline = {
+  remarkPlugins: [remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]],
+  rehypePlugins: [rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex],
+  urlTransform,
+}
+
+/**
+ * Parsed trees shared by every `Markdown` on the page, keyed by preprocessed
+ * content. See `markdown-tree.ts` for the bounds and why a tree may be shared.
+ */
+export const markdownTrees = createMarkdownTreeSource(markdownPipeline)
+
+/**
+ * Only a browser caches. A tab remounts the same replies on every chat switch;
+ * a server (Next SSR, tests rendering with `react-dom/server`) renders each
+ * body once per request, where a process-wide cache would only hold memory and
+ * add the freeze to every render. Both modes run the same pipeline.
+ */
+function cachesMarkdownTrees(): boolean {
+  return typeof window !== 'undefined'
+}
 
 // File path detection regex - matches paths starting with /, ~/, or ./
 const FILE_PATH_REGEX =
   /^(?:\/|~\/|\.\/)[\w\-./@]+\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yaml|yml|py|go|rs|css|scss|less|html|htm|txt|log|sh|bash|zsh|swift|kt|java|c|cpp|h|hpp|rb|php|xml|toml|ini|cfg|conf|env|sql|graphql|vue|svelte|astro|prisma)$/i
 
 /**
- * Create custom components based on render mode
+ * Create custom components based on render mode (exported for the cache parity test)
  */
-function createComponents(
+export function createComponents(
   mode: RenderMode,
   onUrlClick?: (url: string) => void,
   onFileClick?: (path: string) => void,
@@ -448,18 +476,36 @@ export function Markdown({
     [children, cdnDomain]
   )
 
-  return (
-    <div className={cn('markdown-content break-words', className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkMath, remarkBreaks, [remarkGfm, { singleTilde: false }]]}
-        rehypePlugins={[rehypeRaw, [rehypeSanitize, sanitizeSchema], rehypeKatex]}
-        urlTransform={urlTransform}
-        components={components}
-      >
-        {processedContent}
-      </ReactMarkdown>
-    </div>
+  // Parse once per distinct content; components are applied per render, so the
+  // cached tree never carries one caller's renderers into another's output.
+  const tree = React.useMemo(
+    () => (cachesMarkdownTrees() ? markdownTrees.get(processedContent).tree : markdownTrees.parse(processedContent)),
+    [processedContent],
   )
+  useReleaseReplacedTree(processedContent, tree)
+  const rendered = React.useMemo(() => renderMarkdownTree(tree, components), [tree, components])
+
+  return <div className={cn('markdown-content break-words', className)}>{rendered}</div>
+}
+
+/**
+ * Content replaced while its `Markdown` stays mounted (a streaming reply's
+ * chunks, an edited message) will not be asked for again; dropping it once the
+ * new content commits keeps a stream at one cache entry instead of one per
+ * chunk, which would otherwise flush every other chat's replies. Only the entry
+ * that still holds the tree this instance rendered is removed. Unmounting keeps
+ * the entry: that is the remount a chat switch brings back.
+ */
+function useReleaseReplacedTree(content: string, tree: Root): void {
+  const shown = React.useRef<{ content: string; tree: Root } | null>(null)
+  React.useEffect(() => {
+    if (!cachesMarkdownTrees()) return
+    const previous = shown.current
+    if (previous && previous.content !== content) {
+      markdownTrees.cache.delete(previous.content, previous.tree)
+    }
+    shown.current = { content, tree }
+  }, [content, tree])
 }
 
 /**

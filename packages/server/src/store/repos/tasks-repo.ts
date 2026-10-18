@@ -175,6 +175,7 @@ export interface TaskStatusSnapshot {
 }
 
 const TASK_AUTOPILOT_LOOKUP_BATCH_SIZE = 500;
+const CONVERSATION_SOURCE_BATCH_SIZE = 400;
 
 const AUTO_RETRY_FAILURE_REASONS = new Set([
   "runtime_offline",
@@ -2572,6 +2573,47 @@ export class TasksRepo {
     ).get(id) as Row | null;
     cache?.set(key, row);
     return row ? convert(row) : null;
+  }
+
+  /**
+   * Batched form of the conversation-visibility source lookup
+   * `getTask((getTurn(id) ?? getTurnForAttempt(id))?.current_attempt_id)`.
+   *
+   * A source id names a turn, or — only when no turn has that id — an attempt
+   * whose turn is used. The subject is that turn's *current* attempt, read from
+   * the same `multiremi_turn_execution_records` view as `getTask` and converted
+   * like {@link getTaskIdentity}'s fan-out projection, which carries every field
+   * a visibility decision reads (id, workspace, agent, Chat session). Every
+   * requested id is in the result; it maps to null exactly when the per-id
+   * lookup returns no task. One statement per 400 ids; its rows are id columns only.
+   */
+  getConversationSourceSubjects(sourceIds: readonly string[]): Map<string, TaskMessageFanoutSubject | null> {
+    const result = new Map<string, TaskMessageFanoutSubject | null>();
+    const ids = [...new Set(sourceIds.filter(Boolean))];
+    const subject = "t.current_attempt_id AS source_attempt_id, r.id, r.workspace_id, r.agent_id, r.chat_session_id, r.issue_id, r.issue_session_id";
+    const current = "LEFT JOIN multiremi_turn_execution_records r ON r.id = t.current_attempt_id";
+    for (let offset = 0; offset < ids.length; offset += CONVERSATION_SOURCE_BATCH_SIZE) {
+      const batch = ids.slice(offset, offset + CONVERSATION_SOURCE_BATCH_SIZE);
+      const placeholders = batch.map(() => "?").join(", ");
+      // Both halves of `getTurn(id) ?? getTurnForAttempt(id)` in one statement:
+      // the turn named by the id, and the turn of the attempt named by the id.
+      const rows = this.ctx.db.query(`SELECT 0 AS by_attempt, t.id AS source_id, ${subject}
+          FROM multiremi_turns t ${current} WHERE t.id IN (${placeholders})
+        UNION ALL
+        SELECT 1 AS by_attempt, s.id AS source_id, ${subject}
+          FROM multiremi_turn_attempts s JOIN multiremi_turns t ON t.id = s.turn_id ${current} WHERE s.id IN (${placeholders})`)
+        .all(...batch, ...batch) as Row[];
+      const byTurn = new Map<string, Row>(), byAttempt = new Map<string, Row>();
+      for (const row of rows) (Number(row.by_attempt) ? byAttempt : byTurn).set(String(row.source_id), row);
+      for (const id of batch) {
+        // A turn with this id wins, exactly like the `??` above.
+        const row = byTurn.get(id) ?? byAttempt.get(id);
+        // Same guards as the per-id path: no turn, no current attempt, or no
+        // execution record for it means no task.
+        result.set(id, row?.source_attempt_id && row.id != null ? toTaskMessageFanoutSubject(row) : null);
+      }
+    }
+    return result;
   }
 
   /**

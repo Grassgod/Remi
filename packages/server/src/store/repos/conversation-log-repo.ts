@@ -2,7 +2,7 @@ import { attemptInputState } from '../inbox/attempt-input.js';
 import { lockLane } from '../inbox/lane-machine.js';
 import { sendMessageWithinTransaction } from '../inbox/send-message.js';
 import { createCommitEventQueue } from '../context.js';
-import { projectTurnCard } from "@multiremi/store/turn-attempts.js";
+import { projectTurnCard, projectTurnCards } from "@multiremi/store/turn-attempts.js";
 import { registerTurnChangeHook, registerExecutionMessageWriter, notifyTurnChanged } from "@multiremi/store/turn-execution-records.js";
 // Conversation log domain: the single per-session log that replaces the three
 // conversation tables (MUL-402 / ADR 0006). One row is one display unit; every
@@ -138,6 +138,8 @@ export class ConversationLogRepo {
     });
   }
   private materialize(row:Row):ConversationLogEntry { return projectTurnCard(this.ctx.db,toConversationLogEntry(row)); }
+  /** Multi-row reads project their turn cards in a bounded number of statements. */
+  private materializeAll(rows:Row[]):ConversationLogEntry[] { return projectTurnCards(this.ctx.db,rows.map(toConversationLogEntry)); }
 
   private agentReadScope(sessionId: string, source: Row | null): string {
     if (source?.session_id === sessionId) return String(source.execution_scope);
@@ -710,7 +712,7 @@ export class ConversationLogRepo {
       rows.push(...newest.slice(0, limit).reverse());
       hasMoreAfter = anchor < headSeq;
     }
-    const entries = rows.map(row=>this.materialize(row));
+    const entries = this.materializeAll(rows);
     let prevEntryCreatedAt: string | null = null;
     if (entries.length) {
       const previous = this.runQuery(
@@ -815,7 +817,7 @@ export class ConversationLogRepo {
          WHERE session_id = ? AND seq > ? AND seq <= ? AND ${SHOWN_ROW_SQL}
          ORDER BY seq ASC${limitSql}`,
       ).all(...(limit == null ? [sessionId, since, to] : [sessionId, since, to, limit]))) as Row[];
-    return rows.map(row=>this.materialize(row));
+    return this.materializeAll(rows);
   }
 
   /** Every row, hidden included, oldest first. Used by projections and backfill. */
@@ -827,21 +829,21 @@ export class ConversationLogRepo {
         "SELECT * FROM multiremi_conversation_log WHERE session_id = ? AND seq > ? ORDER BY seq ASC",
       ).all(sessionId, since)
       : this.ctx.db.query(CONVERSATION_LOG_RANGE_SQL).all(sessionId, since, to)) as Row[];
-    return rows.map(row=>this.materialize(row));
+    return this.materializeAll(rows);
   }
 
   /** The bounded range page shared by SQLite fill and the Postgres read pool. */
   listRangePage(sessionId: string, afterSeq: number, toSeq: number, limit: number): ConversationLogEntry[] {
     const rows = this.ctx.db.query(CONVERSATION_LOG_RANGE_PAGE_SQL)
       .all(sessionId, afterSeq, toSeq, limit) as Row[];
-    return rows.map(row=>this.materialize(row));
+    return this.materializeAll(rows);
   }
 
   listByTask(taskId: string): ConversationLogEntry[] {
     const rows = this.ctx.db.query(
       "SELECT * FROM multiremi_conversation_log WHERE task_id = ? ORDER BY seq ASC",
     ).all(taskId) as Row[];
-    return rows.map(row=>this.materialize(row));
+    return this.materializeAll(rows);
   }
 
   private runQuery(

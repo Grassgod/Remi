@@ -10,7 +10,16 @@ import { createSafeId } from "../utils";
 import { issueActivityLayer, type IssueActivityEntry } from "@multiremi/contracts/issue-activity";
 import { subscribeFromWindow } from "../replica/engine";
 
-/** A bounded presentation window over C7; persisted coverage may be sparse. */
+/**
+ * A bounded presentation window over C7; persisted coverage may be sparse.
+ *
+ * One instance can connect again after `disconnect()`: React StrictMode, a
+ * hidden floating Chat and the Chat log pool all do. `generation` retires the
+ * frame batches and C7 imports of the earlier connection. Window reads check
+ * only `disconnected`, so one still in flight when the log connects again is
+ * applied like a current read: a tail replaces the window, refreshes and pages
+ * merge by row revision.
+ */
 export class IssueLogReplica extends ReplicaView {
   window: SessionLogWindow | null = null;
   headRow: SessionLogRow | null = null;
@@ -27,8 +36,12 @@ export class IssueLogReplica extends ReplicaView {
   private windowRead: Promise<void> | null = null;
   private generation = 0;
 
+  /**
+   * `withHead = false` (Chat) never reads, holds or persists the seq-0 head row:
+   * Chat does not display it and takes its title from the sessions query.
+   */
   constructor(readonly sessionId: string, initial?: IssueLogBootstrap, private readonly preferCached = false,
-    private readonly withActivity = false) {
+    private readonly withActivity = false, private readonly withHead = true) {
     super();
     if (initial?.sessionId === sessionId) {
       this.targetCommentId = initial.targetCommentId ?? null;
@@ -39,7 +52,7 @@ export class IssueLogReplica extends ReplicaView {
 
   accept(window: SessionLogWindow, head: SessionLogRow | null = this.headRow): void {
     this.window = window;
-    this.headRow = head;
+    this.headRow = this.withHead ? head : null;
     this.from = window.entries.find(e => e.seq > 0)?.seq ?? 0;
     this.to = window.has_more_after ? window.entries.at(-1)?.seq ?? 0 : Number.MAX_SAFE_INTEGER;
     const entries = this.displayRows(window.entries);
@@ -70,15 +83,22 @@ export class IssueLogReplica extends ReplicaView {
 
   private activityParams(): { with_activity?: 1 } { return this.withActivity ? { with_activity: 1 } : {}; }
 
+  /** The seq-0 head read, or nothing for a log that does not show it. */
+  private readHead(): Promise<SessionLogRow | null> {
+    if (!this.withHead) return Promise.resolve(null);
+    return api.getSessionLog(this.sessionId, { anchor: 0, before: 1 })
+      .then(head => head.entries.find(e => e.seq === 0) ?? null);
+  }
+
   private async readTail(missingCommentId?: string): Promise<void> {
     const [window, head] = await Promise.all([
       api.getSessionLog(this.sessionId, { before: 30, ...this.activityParams() }),
-      api.getSessionLog(this.sessionId, { anchor: 0, before: 1 }),
+      this.readHead(),
     ]);
     if (this.disconnected || (missingCommentId && this.targetCommentId !== missingCommentId)) return;
     this.targetCommentId = null;
     if (missingCommentId) this.missingCommentId = missingCommentId;
-    this.accept(window, head.entries.find(e => e.seq === 0) ?? null);
+    this.accept(window, head);
     await this.persist(window);
   }
 
@@ -114,7 +134,7 @@ export class IssueLogReplica extends ReplicaView {
     }
     const [window, head] = await Promise.all([
       api.getSessionLog(this.sessionId, { anchor: location.seq, before: 15, after: 15, ...this.activityParams() }),
-      api.getSessionLog(this.sessionId, { anchor: 0, before: 1 }),
+      this.readHead(),
     ]);
     if (this.disconnected || this.targetCommentId !== commentId) return;
     const keepsOlder = previous && (previous.entries[0]?.seq ?? Infinity) < (window.entries[0]?.seq ?? Infinity);
@@ -124,7 +144,7 @@ export class IssueLogReplica extends ReplicaView {
       ...(keepsOlder ? { has_more_before: previous.has_more_before, prev_entry_created_at: previous.prev_entry_created_at,
         before_visible_count: previous.before_visible_count, before_visible_count_capped: previous.before_visible_count_capped } : {}),
       ...(keepsNewer ? { has_more_after: previous.has_more_after } : {}),
-    } : window, head.entries.find(e => e.seq === 0) ?? null);
+    } : window, head);
     await this.persist(window);
   }
 
@@ -196,6 +216,7 @@ export class IssueLogReplica extends ReplicaView {
   }
 
   async refreshHead(): Promise<void> {
+    if (!this.withHead) return;
     const head = await api.getSessionLog(this.sessionId, { anchor: 0, before: 1 });
     if (this.disconnected || !this.window) return;
     this.accept(this.window, head.entries.find(e => e.seq === 0) ?? null);
@@ -235,7 +256,7 @@ export class IssueLogReplica extends ReplicaView {
         });
         return;
       }
-      const held = current.find(e => e.seq === 0);
+      const held = this.withHead ? current.find(e => e.seq === 0) : undefined;
       if (held && held.revision >= (this.headRow?.revision ?? 0)) this.headRow = held;
       // C7 owns row existence. Keep hydrated display fields only for rows it
       // still holds; a union with the old window would resurrect deletions.
@@ -366,6 +387,43 @@ export class IssueLogReplica extends ReplicaView {
   /** An ack resumes the stream; its `log_version` is a freshness token, not a reset. */
   ack(...args: Parameters<BrowserReplica["ack"]>): void { this.browser?.ack(...args); }
   disconnect(): void { this.generation += 1; this.disconnected = true; this.browser?.dispose(); this.browser = null; this.syncBrowser = null; }
+
+  /**
+   * Show a retained window again (the Chat log pool): its rows stay on screen
+   * while the tail refreshes. `connect()` subscribes after the refresh settles,
+   * as after a first read, and a failed refresh still connects: the stream
+   * resumes from the retained head.
+   */
+  resume(): Promise<void> {
+    this.disconnected = false;
+    const refresh = this.refreshTailPreservingWindow();
+    this.windowRead = refresh.catch(() => {});
+    return refresh;
+  }
+
+  /**
+   * Drop what only a connection needs once released into the pool: the windows
+   * kept for frame hydration and C7 backfill, except the current one, which
+   * `persist` imports on the next connect. Display rows and heights stay.
+   */
+  trimRetained(): void {
+    const window = this.window;
+    const first = window?.entries[0]?.seq;
+    const last = window?.entries.at(-1)?.seq;
+    this.knownWindows = window && first !== undefined && last !== undefined
+      ? [{ range: { from: first, to: last }, entries: window.entries }] : [];
+  }
+
+  /** Evicted from the pool: disconnect and drop every row this replica held. */
+  dispose(): void {
+    this.disconnect();
+    this.window = null;
+    this.headRow = null;
+    this.knownWindows = [];
+    this.targetCommentId = null;
+    this.missingCommentId = null;
+    this.dropAll();
+  }
 
   override readRowHeight(sessionId: string, seq: number, key: string): number | null {
     return this.browser?.port.readRowHeight(sessionId, seq, key) ?? super.readRowHeight(sessionId, seq, key);

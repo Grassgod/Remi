@@ -3,6 +3,8 @@ import type { ApiClient } from "../api/client";
 import { ApiError } from "../api/client";
 import type { StorageAdapter, User } from "../types";
 import { createAuthStore } from "./store";
+import { chatLogPool, chatLogScope, hasPooledChatLog } from "../session-log/chat-log-pool";
+import type { IssueLogReplica } from "../session-log/issue-log";
 
 const fakeUser: User = {
   id: "u1",
@@ -156,5 +158,17 @@ describe("authStore.loginWithPassword", () => {
       .rejects.toThrow("Storage unavailable");
     expect(store.getState().user).toBeNull();
     expect(api.setToken).toHaveBeenLastCalledWith(null);
+  });
+});
+
+describe("authStore.logout", () => {
+  it("disposes the Chat logs retained for the user", () => {
+    const log = { trimRetained: vi.fn(), dispose: vi.fn() };
+    chatLogPool.acquire(chatLogScope("u1", "w1")!, "chat-a", log as unknown as IssueLogReplica)!.release();
+    expect(hasPooledChatLog("u1", "w1", "chat-a")).toBe(true);
+    const store = createAuthStore({ api: makeApi(async () => fakeUser), storage: makeStorage({ multimira_token: "t" }) });
+    store.getState().logout();
+    expect(log.dispose).toHaveBeenCalledOnce();
+    expect(hasPooledChatLog("u1", "w1", "chat-a")).toBe(false);
   });
 });

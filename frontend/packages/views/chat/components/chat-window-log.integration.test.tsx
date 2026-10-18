@@ -8,6 +8,7 @@ import { I18nProvider } from "@multiremi/core/i18n/react";
 import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
 import { sharedTabsEnv } from "@multiremi/core/replica/test-tabs";
 import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
+import { clearChatLogPool } from "@multiremi/core/session-log/chat-log-pool";
 import { createChatStore, registerChatStore } from "@multiremi/core/chat";
 import {
   SessionLogEntrySchema, type IssueLogBootstrap, type LogWindowParams, type SessionLogRow, type SessionLogWindow,
@@ -86,7 +87,7 @@ const message = (seq: number, body: string) => SessionLogEntrySchema.parse({
   message_kind: "request", body_md: body, body_html: null, render_version: null,
   metadata: { attachments: [], reactions: [] },
 });
-afterEach(() => { vi.clearAllMocks(); });
+afterEach(() => { vi.clearAllMocks(); clearChatLogPool(); });
 
 it("N2 removes a deleted unread body through ChatWindow's real log chain before refresh or reconnect", async () => {
   const kept = message(1, "QA509_EDIT_AFTER");
@@ -329,5 +330,67 @@ it.each(["without", "with"])("shows a second turn's reply and finished fold live
       expect(main()!.textContent!.indexOf("Second answer")).toBeLessThan(main()!.textContent!.indexOf("Queued follow-up"));
     }
     expect(streams.get(session.id)).toHaveLength(1);
+  } finally { view.unmount(); client.clear(); }
+});
+
+it("paints a chat shown again from the log pool before its tail read answers, then refreshes it once", async () => {
+  const other: ChatSession = { ...session, id: "chat-b", title: "Other chat" };
+  const logs = new Map([[session.id, chatLog()], [other.id, chatLog()]]);
+  const chatRow = (sessionId: string, seq: number, body: string) => SessionLogEntrySchema.parse({
+    session_id: sessionId, seq, id: `${sessionId}-${seq}`, revision: 1, kind: "message", visibility: "shown",
+    sender_type: "member", sender_id: "member-a", to_type: "agent", to_agent_id: "agent-a", message_kind: "request",
+    body_md: body, body_html: null, render_version: null, metadata: { attachments: [], reactions: [] },
+  });
+  logs.get(session.id)!.write(chatRow(session.id, 1, "Alpha question"));
+  logs.get(other.id)!.write(chatRow(other.id, 1, "Beta question"));
+  const reads: Array<[string, LogWindowParams]> = [];
+  let hold: Promise<void> | null = null;
+  backend.read.mockImplementation(async (id: string, params: LogWindowParams) => {
+    reads.push([id, params]);
+    if (hold && id === session.id) await hold;
+    return logs.get(id)!.read(params);
+  });
+  backend.getChatSession.mockImplementation(async (id: string) => (id === other.id ? other : session));
+  backend.listMessages.mockResolvedValue({ messages: [], next_cursor: null });
+  backend.getChatQueue.mockResolvedValue({ items: [], paused: null });
+  socket.subscribeStream.mockImplementation(() => ({ unsubscribe: vi.fn() }));
+  let show!: (sessionId: string) => void;
+  function ChatRoute() {
+    const [sessionId, setSessionId] = useState(session.id);
+    show = setSessionId;
+    return <ChatWindow presentation="page" initialSessionId={sessionId} />;
+  }
+  const store = createChatStore({ storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} } });
+  registerChatStore(store);
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const view = render(<QueryClientProvider client={client}>
+    <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, messages: enMessages } }}>
+      <ReplicaEnvProvider env={memoryEnv}><ChatRoute /></ReplicaEnvProvider>
+    </I18nProvider>
+  </QueryClientProvider>);
+  const main = () => view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]');
+  try {
+    await waitFor(() => expect(main()).toHaveTextContent("Alpha question"));
+    await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(1));
+    await act(async () => { show(other.id); });
+    await waitFor(() => expect(main()).toHaveTextContent("Beta question"));
+    await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(2));
+
+    // The first chat is answered while the other is shown; its next read is slow.
+    logs.get(session.id)!.write(chatRow(session.id, 2, "Alpha answer"));
+    let answer!: () => void;
+    hold = new Promise(resolve => { answer = resolve; });
+    const before = reads.length;
+    await act(async () => { show(session.id); });
+    expect(main()).toHaveTextContent("Alpha question");
+    expect(main()).not.toHaveTextContent("Beta question");
+    expect(reads.slice(before)).toEqual([[session.id, { before: 30 }]]);
+
+    await act(async () => { answer(); });
+    await waitFor(() => expect(main()).toHaveTextContent("Alpha answer"));
+    await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(3));
+    // One background tail read on return, and Chat never reads the seq-0 head.
+    expect(reads.slice(before)).toEqual([[session.id, { before: 30 }]]);
+    expect(reads.some(([, params]) => params.anchor === 0 && params.before === 1)).toBe(false);
   } finally { view.unmount(); client.clear(); }
 });

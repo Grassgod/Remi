@@ -46,7 +46,8 @@ import {
   chatKeys,
   CHAT_PENDING_REFETCH_INTERVAL_MS,
 } from "@multiremi/core/chat/queries";
-import { useIssueLog } from "@multiremi/core/session-log/use-issue-log";
+import { useChatLog } from "@multiremi/core/session-log/use-issue-log";
+import { hasPooledChatLog } from "@multiremi/core/session-log/chat-log-pool";
 import type { IssueLogBootstrap } from "@multiremi/core/api/schemas/session-log";
 import {
   useCreateChatSession,
@@ -170,21 +171,26 @@ export function ChatWindow({
     isError: sessionsError,
     refetch: refetchSessions,
   } = useQuery(chatSessionsOptions(wsId, "all", { enabled: chatVisible }));
-  // The route reads a log bootstrap for every `?session=` URL, and a send
-  // replaces that URL (the first one navigates to the chat it created). Only
-  // the bootstrap present when a chat is first shown seeds its log: a later
-  // one is a new object holding an older read, and the log would rebuild its
-  // replica from it in the middle of the send.
-  const logSeedFor = (sessionId: string | null) =>
-    ({ sessionId, log: initialLog?.sessionId === sessionId ? initialLog : undefined });
+  // `initialLog` is the route's log bootstrap for its `?session=` chat, read
+  // when the route renders (load, reload, a real navigation). A switch or a
+  // send replaces that URL (the first send moves to the chat it created);
+  // depending on how ChatPage replaces it, the route either renders again with
+  // a new bootstrap or only the URL changes and the first one is dropped.
+  // Either way only the bootstrap present when a chat is first shown seeds its
+  // log: a later one is a new object holding an older read, and rebuilding the
+  // replica from it in the middle of a send would lose the rows just sent and
+  // their reply. A chat the log pool still holds is not seeded at all: its
+  // retained rows are painted instead.
+  const logSeedFor = (sessionId: string | null) => ({ sessionId,
+    log: initialLog?.sessionId === sessionId && !hasPooledChatLog(user?.id, wsId, sessionId) ? initialLog : undefined });
   const [storedLogSeed, setLogSeed] = useState(() => logSeedFor(displayedSessionId));
   let logSeed = storedLogSeed;
   if (logSeed.sessionId !== displayedSessionId) {
     logSeed = logSeedFor(displayedSessionId);
     setLogSeed(logSeed);
   }
-  const { replica, snapshot: logSnapshot, error: messagesError } = useIssueLog(
-    displayedSessionId ?? "", logSeed.log, undefined, true, chatVisible,
+  const { replica, snapshot: logSnapshot, error: messagesError } = useChatLog(
+    displayedSessionId ?? "", logSeed.log, chatVisible,
   );
   const replicaRef = useRef(replica);
   replicaRef.current = replica;
