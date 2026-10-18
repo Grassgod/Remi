@@ -92,6 +92,36 @@ describe("read window subscription and hydration", () => {
     expect(delivered.mock.calls[0]?.[1][0]?.payload).toEqual(current);
   });
 
+  it("checks the hub's hidden placeholder against the read route before it may remove a row", async () => {
+    const own = row(10);
+    const replica = seed(windowOf([own]));
+    const delivered = vi.spyOn(replica, "frames").mockImplementation(() => {});
+    const placeholder = (seq: number, revision = 1): HubFrame =>
+      ({ seq, kind: "entry", payload: { session_id: "s", seq, revision, visibility: "hidden" } });
+    // A shown row the projection failed closed on: the read route still serves it.
+    reads.get.mockResolvedValueOnce(windowOf([own]));
+    await replica.hydratedFrames("s", [placeholder(10)]);
+    expect(reads.get).toHaveBeenLastCalledWith("s", { anchor: 9, after: 1 });
+    expect(delivered.mock.calls.at(-1)?.[1][0]?.payload).toEqual(own);
+    // A row not read yet, served by the time the read answers.
+    const next = row(11);
+    reads.get.mockResolvedValueOnce(windowOf([next]));
+    await replica.hydratedFrames("s", [placeholder(11)]);
+    expect(delivered.mock.calls.at(-1)?.[1][0]?.payload).toEqual(next);
+    // The read route omits it (a permission change) or serves an older revision: it hides.
+    reads.get.mockResolvedValueOnce(windowOf([], { head_seq: 11 }));
+    await replica.hydratedFrames("s", [placeholder(10)]);
+    expect(delivered.mock.calls.at(-1)?.[1][0]).toEqual(placeholder(10));
+    reads.get.mockResolvedValueOnce(windowOf([own]));
+    await replica.hydratedFrames("s", [placeholder(10, 2)]);
+    expect(delivered.mock.calls.at(-1)?.[1][0]).toEqual(placeholder(10, 2));
+    // A placeholder at a read seq without a shown row removes nothing: no read.
+    reads.get.mockClear();
+    await replica.hydratedFrames("s", [placeholder(5)]);
+    expect(reads.get).not.toHaveBeenCalled();
+    expect(delivered.mock.calls.at(-1)?.[1][0]).toEqual(placeholder(5));
+  });
+
   it("keeps reusing window rows after an ack with a new log_version", async () => {
     const replica = seed(windowOf([row(10)]));
     replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: 10, log_version: 9, gap: null });
