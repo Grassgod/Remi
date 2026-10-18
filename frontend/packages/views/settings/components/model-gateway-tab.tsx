@@ -38,6 +38,7 @@ import type { Workspace } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ClaudeMark, OpenAIMark } from "./engine-marks";
+import { formatRelayFragment } from "./relay-fragment-format";
 
 type Engine = RelayEngine;
 type ReasoningEngine = RelayReasoningEngine;
@@ -54,10 +55,18 @@ interface IssueAutoTitleSettings {
   model: string;
 }
 
-const ENGINE_PLACEHOLDER: Record<Engine, string> = {
+// Doubles as the textarea placeholder and the always-available example, which
+// stays reachable once the editor holds a saved fragment.
+const ENGINE_EXAMPLE: Record<Engine, string> = {
   claude: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://…"\n  }\n}',
   codex: 'model_provider = "OpenAI"\n\n[model_providers.OpenAI]\nbase_url = "https://…/v1"\nwire_api = "responses"\nrequires_openai_auth = true',
   antigravity: '{\n  "base_url": "https://…",\n  "default_model": "gemini-…"\n}',
+};
+
+const ENGINE_FORMAT: Record<Engine, "JSON" | "TOML"> = {
+  claude: "JSON",
+  codex: "TOML",
+  antigravity: "JSON",
 };
 
 const ENGINE_TITLE: Record<Engine, string> = {
@@ -504,7 +513,8 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
 }) {
   const { t } = useT("settings");
   const qc = useQueryClient();
-  const [fragment, setFragment] = useState(config?.fragment ?? "");
+  const [fragment, setFragment] = useState(() => formatRelayFragment(engine, config?.fragment ?? ""));
+  const [showExample, setShowExample] = useState(false);
   const [token, setToken] = useState("");
   const [tokenDirty, setTokenDirty] = useState(false);
   const [revealed, setRevealed] = useState(false);
@@ -514,8 +524,8 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
 
   // Re-seed the editor when the server value arrives/changes and the user hasn't started editing.
   useEffect(() => {
-    setFragment(config?.fragment ?? "");
-  }, [config?.fragment]);
+    setFragment(formatRelayFragment(engine, config?.fragment ?? ""));
+  }, [engine, config?.fragment]);
 
   const hasToken = config?.hasToken === true;
 
@@ -608,11 +618,34 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
       <Card>
         <CardContent className="space-y-3">
           <div>
-            <Label className="text-xs text-muted-foreground">{t(($) => $.modelGateway.fragment_label)}</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label htmlFor={`relay-fragment-${engine}`} className="text-xs text-muted-foreground">
+                {t(($) => $.modelGateway.fragment_label)}
+                <Badge variant="outline" className="font-mono">{ENGINE_FORMAT[engine]}</Badge>
+              </Label>
+              <Button
+                type="button"
+                size="xs"
+                variant="ghost"
+                aria-expanded={showExample}
+                onClick={() => setShowExample((value) => !value)}
+              >
+                {showExample ? t(($) => $.modelGateway.example_hide) : t(($) => $.modelGateway.example_show)}
+              </Button>
+            </div>
+            {showExample ? (
+              <pre
+                aria-label={t(($) => $.modelGateway.example_label)}
+                className="mt-1 overflow-x-auto rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground"
+              >
+                {ENGINE_EXAMPLE[engine]}
+              </pre>
+            ) : null}
             <Textarea
+              id={`relay-fragment-${engine}`}
               value={fragment}
               onChange={(e) => setFragment(e.target.value)}
-              placeholder={ENGINE_PLACEHOLDER[engine]}
+              placeholder={ENGINE_EXAMPLE[engine]}
               spellCheck={false}
               className="mt-1 font-mono text-xs min-h-[120px] resize-y"
             />

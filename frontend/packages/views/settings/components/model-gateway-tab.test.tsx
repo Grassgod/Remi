@@ -168,6 +168,50 @@ describe("ModelGatewayTab", () => {
     expect(mockGetReasoningLevels).not.toHaveBeenCalledWith("workspace-1", "antigravity");
   });
 
+  it("shows stored single-line fragments indented in the editor", () => {
+    relayRef.current = {
+      ...relayRef.current,
+      codex: {
+        fragment: 'model_provider = "OpenAI"\nmodel_providers = { OpenAI = { base_url = "https://ai.openremi.fun/v1", wire_api = "responses" } }',
+        hasToken: true,
+        revision: 4,
+      },
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const claude = screen.getByRole("heading", { name: /Claude/ }).closest("section");
+    const codex = screen.getByRole("heading", { name: /Codex/ }).closest("section");
+    if (!claude || !codex) throw new Error("engine section not found");
+    expect(within(claude).getByRole("textbox", { name: /Provider config fragment/ })).toHaveValue(
+      '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://ai.openremi.fun"\n  }\n}',
+    );
+    expect(within(codex).getByRole("textbox", { name: /Provider config fragment/ })).toHaveValue(
+      'model_provider = "OpenAI"\n\n[model_providers.OpenAI]\nbase_url = "https://ai.openremi.fun/v1"\nwire_api = "responses"',
+    );
+    expect(within(claude).getByText("JSON")).toBeInTheDocument();
+    expect(within(codex).getByText("TOML")).toBeInTheDocument();
+  });
+
+  it("keeps the Antigravity example reachable after the engine is configured", async () => {
+    const user = userEvent.setup();
+    relayRef.current = {
+      ...relayRef.current,
+      antigravity: { fragment: '{"base_url":"https://ai.openremi.fun/antigravity"}', hasToken: true, revision: 2 },
+    };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+
+    const section = screen.getByRole("heading", { name: /Antigravity/ }).closest("section");
+    if (!section) throw new Error("Antigravity section not found");
+    expect(within(section).queryByLabelText("Example config fragment")).toBeNull();
+    await user.click(within(section).getByRole("button", { name: "Show example" }));
+
+    const example = within(section).getByLabelText("Example config fragment");
+    expect(example).toHaveTextContent('"base_url"');
+    expect(example).toHaveTextContent('"default_model"');
+    await user.click(within(section).getByRole("button", { name: "Hide example" }));
+    expect(within(section).queryByLabelText("Example config fragment")).toBeNull();
+  });
+
   it("offers an Antigravity fragment placeholder when the engine is unconfigured", () => {
     render(<ModelGatewayTab />, { wrapper: Wrapper });
 
