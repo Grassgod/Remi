@@ -3,6 +3,7 @@ import type { User, StorageAdapter } from "../types";
 import { identify as identifyAnalytics, resetAnalytics } from "../analytics";
 import { ApiError, type ApiClient, type LoginResponse } from "../api/client";
 import { setCurrentWorkspace } from "../platform/workspace-storage";
+import { clearChatLogPool } from "../session-log/chat-log-pool";
 
 export interface AuthStoreOptions {
   api: ApiClient;
@@ -142,6 +143,8 @@ export function createAuthStore(options: AuthStoreOptions) {
       storage.removeItem("multimira_token");
       api.setToken(null);
       setCurrentWorkspace(null, null);
+      // Retained Chat logs hold conversation content read as this user.
+      clearChatLogPool();
       resetAnalytics();
       onLogout?.();
       set({ user: null });

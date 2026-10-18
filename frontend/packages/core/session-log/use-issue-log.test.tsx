@@ -20,8 +20,9 @@ vi.mock("../platform/replica-env", () => ({ useReplicaEnv: () => memoryEnv }));
 vi.mock("../api", () => ({ api: { getSessionLog: vi.fn() } }));
 
 const memoryEnv = { hasOpfs: false };
-import { useIssueLog } from "./use-issue-log";
+import { useChatLog, useIssueLog } from "./use-issue-log";
 import { IssueLogReplica } from "./issue-log";
+import { chatLogPool, chatLogScope, clearChatLogPool } from "./chat-log-pool";
 import { api } from "../api";
 import type { HubStreamAckPayload } from "@multiremi/contracts/live-hub";
 
@@ -188,5 +189,98 @@ describe("useIssueLog visibility lifecycle", () => {
     expect(nextSubscribe.mock.calls[0]?.[3]).toEqual({ fromSeq: 2 });
     expect(nextUnsubscribe).not.toHaveBeenCalled();
     hook.unmount();
+  });
+});
+
+describe("useChatLog pool", () => {
+  type Params = { anchor?: number; before?: number; after?: number };
+  const chatRow = (sessionId: string, seq: number) => SessionLogEntrySchema.parse({ ...row(seq), session_id: sessionId, id: `${sessionId}-${seq}` });
+  const ids = (snapshot: { entries: readonly { id: string }[] }) => snapshot.entries.map(entry => entry.id);
+  let logs: Record<string, number[]>;
+  let reads: Array<[string, Params]>;
+  let hold: Promise<void> | null;
+
+  beforeEach(() => {
+    logs = { a: [1, 2], b: [1] };
+    reads = [];
+    hold = null;
+    socket.subscribeStream.mockReset().mockImplementation(() => ({ unsubscribe: vi.fn() }));
+    socket.onReconnect.mockReset().mockImplementation(() => () => {});
+    socketContext.current = { ...socket };
+    vi.mocked(api.getSessionLog).mockReset().mockImplementation(async (id: string, params: Params = {}) => {
+      reads.push([id, params]);
+      if (hold) await hold;
+      const entries = logs[id]!.filter(seq => params.anchor === undefined || seq > params.anchor).map(seq => chatRow(id, seq));
+      return { entries, head_seq: logs[id]!.at(-1)!, log_version: 1, has_more_before: false, has_more_after: false };
+    });
+  });
+  afterEach(() => { clearChatLogPool(); });
+
+  it("paints a chat shown again from its retained rows, then refreshes its tail once in the background", async () => {
+    const hook = renderHook(({ id }) => useChatLog(id), { initialProps: { id: "a" } });
+    try {
+      await waitFor(() => expect(ids(hook.result.current.snapshot)).toEqual(["a-1", "a-2"]));
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(1));
+      const first = hook.result.current.replica;
+      hook.rerender({ id: "b" });
+      await waitFor(() => expect(ids(hook.result.current.snapshot)).toEqual(["b-1"]));
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(2));
+
+      // Chat a gets a reply while b is shown; its next read is slow.
+      logs.a = [1, 2, 3];
+      let answer!: () => void;
+      hold = new Promise(resolve => { answer = resolve; });
+      const before = reads.length;
+      hook.rerender({ id: "a" });
+      // The same log, painted before any read answers.
+      expect(hook.result.current.replica).toBe(first);
+      expect(hook.result.current.snapshot.ready).toBe(true);
+      expect(ids(hook.result.current.snapshot)).toEqual(["a-1", "a-2"]);
+      expect(reads.slice(before)).toEqual([["a", { before: 30 }]]);
+      // The stream waits for the refresh, as after a first read.
+      expect(socket.subscribeStream).toHaveBeenCalledTimes(2);
+
+      await act(async () => { answer(); });
+      await waitFor(() => expect(ids(hook.result.current.snapshot)).toEqual(["a-1", "a-2", "a-3"]));
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(3));
+      expect(socket.subscribeStream.mock.calls[2]?.[1]).toBe("a");
+      expect(socket.subscribeStream.mock.calls[2]?.[3]).toEqual({ fromSeq: 4 });
+      expect(reads.slice(before)).toEqual([["a", { before: 30 }]]);
+      expect(hook.result.current.error).toBe(false);
+      // Chat never reads the seq-0 head.
+      expect(reads.some(([, params]) => params.anchor === 0 && params.before === 1)).toBe(false);
+    } finally { hook.unmount(); }
+  });
+
+  it("releases a hidden chat and refreshes it when shown again; an Issue log still reads its head", async () => {
+    const hook = renderHook(({ enabled }) => useChatLog("a", undefined, enabled), { initialProps: { enabled: true } });
+    const issue = renderHook(() => useIssueLog("b"));
+    try {
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(2));
+      expect(reads).toContainEqual(["b", { anchor: 0, before: 1 }]);
+      expect(reads.filter(([id]) => id === "a")).toEqual([["a", { before: 30 }]]);
+      const replica = hook.result.current.replica;
+      hook.rerender({ enabled: false });
+      // Hidden means released: the pool would lease it to the next holder.
+      const probe = chatLogPool.acquire(chatLogScope("u", "w")!, "a", replica);
+      expect(probe?.retained).toBe(true);
+      probe!.release();
+      expect(ids(hook.result.current.snapshot)).toEqual(["a-1", "a-2"]);
+      hook.rerender({ enabled: true });
+      expect(hook.result.current.replica).toBe(replica);
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(3));
+      expect(reads.filter(([id]) => id === "a")).toEqual([["a", { before: 30 }], ["a", { before: 30 }]]);
+    } finally { hook.unmount(); issue.unmount(); }
+  });
+
+  it("gives a second window showing the same chat a log of its own", async () => {
+    const one = renderHook(() => useChatLog("a"));
+    const two = renderHook(() => useChatLog("a"));
+    try {
+      await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledTimes(2));
+      expect(two.result.current.replica).not.toBe(one.result.current.replica);
+      expect(chatLogPool.peek(chatLogScope("u", "w")!, "a")).toBe(one.result.current.replica);
+      await waitFor(() => expect(ids(two.result.current.snapshot)).toEqual(["a-1", "a-2"]));
+    } finally { one.unmount(); two.unmount(); }
   });
 });

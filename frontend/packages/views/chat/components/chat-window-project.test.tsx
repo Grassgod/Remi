@@ -75,7 +75,7 @@ vi.mock("@multiremi/core/platform", async (importOriginal) => ({
 vi.mock("@multiremi/core/agents", () => ({ useWorkspaceAgentAvailability: () => "available", useAgentPresenceDetail: () => "loading" }));
 vi.mock("@multiremi/core/hooks/use-file-upload", () => ({ useFileUpload: () => ({ uploadWithToast: vi.fn() }) }));
 vi.mock("@multiremi/core/realtime", () => ({ useChatScopeSubscription: () => {}, useTraceStreamSubscription: () => {} }));
-vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useIssueLog: (sessionId: string, _initial: unknown, _comment: unknown, _cached: unknown, enabled: boolean) => {
+vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useChatLog: (sessionId: string, _initial: unknown, enabled: boolean) => {
   // The 444 replica replaces listChatMessagesPage; observe its load gate here.
   if (enabled && sessionId) listChatMessagesPageCalls();
   return ({

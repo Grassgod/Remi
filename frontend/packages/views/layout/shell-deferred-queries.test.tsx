@@ -20,6 +20,7 @@ import type { SessionLogRow } from "@multiremi/core/api/schemas/session-log";
 import { createAuthStore, registerAuthStore } from "@multiremi/core/auth";
 import { createChatStore, registerChatStore, useChatStore, useRecentContextStore } from "@multiremi/core/chat";
 import { setCurrentWorkspace } from "@multiremi/core/platform";
+import { clearChatLogPool } from "@multiremi/core/session-log/chat-log-pool";
 import { chatKeys } from "@multiremi/core/chat/queries";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import { agentTaskSnapshotKeys } from "@multiremi/core/agents/queries";
@@ -200,6 +201,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearChatLogPool();
   resetAfterFirstScreenForTest();
   Reflect.deleteProperty(window, "requestIdleCallback");
   Reflect.deleteProperty(window, "cancelIdleCallback");
@@ -281,11 +283,10 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       expect(getSessionLog).not.toHaveBeenCalled();
       expect(subscribeStream).not.toHaveBeenCalled();
       act(() => { useChatStore.getState().setOpen(true); });
-      await waitFor(() => expect(getSessionLog).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(getSessionLog).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(subscribeStream).toHaveBeenCalledTimes(1));
-      expect(getSessionLog.mock.calls.map(([, params]) => params)).toEqual([
-        { before: 30 }, { anchor: 0, before: 1 },
-      ]);
+      // Chat never shows the seq-0 head row, so it never reads it.
+      expect(getSessionLog.mock.calls.map(([, params]) => params)).toEqual([{ before: 30 }]);
       expect(listChatMessagesPage).not.toHaveBeenCalled();
     } finally { view.unmount(); client.clear(); }
   });
@@ -405,7 +406,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       await waitFor(() => expect(listWorkspaces).toHaveBeenCalled());
       // A persisted reply suppresses the live observer and keeps historical
       // trace lazy even with the real virtualized row mounted.
-      await waitFor(() => expect(getSessionLog).toHaveBeenCalledTimes(2));
+      await waitFor(() => expect(getSessionLog).toHaveBeenCalledTimes(1));
       await waitFor(() => expect(view.getByText("Cached reply")).toBeTruthy());
       // The follow-up queue is observed only inside the visible chat.
       await waitFor(() => expect(client.getQueryCache().find({ queryKey: chatKeys.queue("ws-1", sessionId) })?.isActive()).toBe(true));
@@ -452,9 +453,11 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
         }
       });
       expect(getTaskTrace).not.toHaveBeenCalled();
-      // The 444 replica keeps its window across minimisation; reopening only
-      // reconnects the stream and never falls back to the removed page API.
-      expect(getSessionLog).not.toHaveBeenCalled();
+      // The Chat log pool keeps the window across minimisation: reopening
+      // repaints it, refreshes the tail once in the background and reconnects
+      // the stream, never falling back to the removed page API.
+      expect(view.getByText("Cached reply")).toBeTruthy();
+      expect(getSessionLog.mock.calls.map(([, params]) => params)).toEqual([{ before: 30 }]);
       expect(listChatMessagesPage).not.toHaveBeenCalled();
     } finally {
       listChatSessions.mockImplementation(async () => []);
