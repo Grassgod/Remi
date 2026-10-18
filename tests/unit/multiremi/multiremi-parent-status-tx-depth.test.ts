@@ -24,7 +24,15 @@ import { StoreContext } from "@multiremi/store/context.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
 import { inboxFlowFixture, triggerInboxFlow } from "./fixtures/inbox-flow-fixture.js";
 
-afterEach(resetMultiremiTestEnv);
+const previousScmEncryptionKey = process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
+afterEach(() => {
+  try {
+    resetMultiremiTestEnv();
+  } finally {
+    if (previousScmEncryptionKey === undefined) delete process.env.MULTIREMI_SCM_ENCRYPTION_KEY;
+    else process.env.MULTIREMI_SCM_ENCRYPTION_KEY = previousScmEncryptionKey;
+  }
+});
 
 type Store = ReturnType<typeof createStore>;
 
