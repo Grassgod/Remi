@@ -44,6 +44,9 @@ describe("S9-6 project summary projection", () => {
     resource.db.run("UPDATE multiremi_projects SET instructions = ?, delta_instructions = ? WHERE id = ?", ["x".repeat(65536), "y".repeat(65536), a.id]);
     bytes = 0; expect(optimized("local")).toEqual(summaries); expect(bytes).toBe(small);
     const detail = await app.request(`/api/projects/${a.id}`, { headers: { Authorization: `Bearer ${owner.token}`, "X-Workspace-ID": "local" } });
-    expect(detail.status).toBe(200); expect((await detail.json()).instructions).toBe("x".repeat(65536));
+    expect(detail.status).toBe(200);
+    const body = await detail.json();
+    expect(body.instructions).toBe(`${"x".repeat(65536)}\n\n${"y".repeat(65536)}`);
+    expect(body.delta_instructions).toBe("");
   }, 30_000);
 });
