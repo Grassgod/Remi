@@ -2,6 +2,7 @@
 
 import { Bot } from "lucide-react";
 import { useT } from "../../i18n";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 // Sibling of ChatInput, occupying the same banner slot as OfflineBanner.
 // Shown when the workspace has no agent the current user can chat with —
@@ -13,14 +14,14 @@ import { useT } from "../../i18n";
 // is more disruptive than just stating the prerequisite. Users who want
 // to act go to Agents on their own.
 //
-// Layout (`px-5` outer, `mx-auto max-w-4xl` inner) mirrors OfflineBanner
-// and ChatInput so the banner's edges line up with the input on every
-// viewport size.
+// The outer element takes the shared Chat column, like OfflineBanner and
+// ChatInput, so the banner's edges line up with the input and the message
+// text on every viewport size.
 export function NoAgentBanner() {
   const { t } = useT("chat");
   return (
-    <div className="px-5 mb-1.5">
-      <div className="mx-auto flex w-full max-w-4xl items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs bg-muted text-muted-foreground ring-1 ring-border">
+    <div className={`${CHAT_COLUMN_CLASS} mb-1.5`}>
+      <div className="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs bg-muted text-muted-foreground ring-1 ring-border">
         <Bot className="size-3.5 shrink-0" />
         <span className="truncate">{t(($) => $.no_agent_banner)}</span>
       </div>

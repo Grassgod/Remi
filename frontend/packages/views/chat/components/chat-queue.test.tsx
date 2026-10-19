@@ -26,6 +26,7 @@ import {
   QUEUE_STALLED_GRACE_MS,
   type ChatQueueController,
 } from "./chat-queue";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 const row = (fields: Partial<QueuedChatMessage> = {}): QueuedChatMessage => ({
   id: "qmsg_1", session_id: "chat_1", body_md: "Then run the\n\n   migration tests", attachments: [],
@@ -566,5 +567,14 @@ describe("ChatQueue review fixes", () => {
     // Edit and delete still work in an archived Chat.
     openMenu(item);
     expect(await screen.findByRole("menuitem", { name: "Edit message" })).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+describe("ChatQueue Chat column", () => {
+  it("sits in the shared Chat column, its card edge to edge with the composer", async () => {
+    mount();
+    const section = await screen.findByRole("region", { name: "Queued messages" });
+    expect(section.parentElement).toHaveClass(...CHAT_COLUMN_CLASS.split(" "));
+    expect(section.className).not.toMatch(/(^|\s)(max-w-|mx-|px-)/);
   });
 });

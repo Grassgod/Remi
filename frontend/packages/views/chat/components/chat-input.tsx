@@ -33,6 +33,7 @@ import type { UploadResult } from "@multiremi/core/hooks/use-file-upload";
 import type { Attachment } from "@multiremi/core/types";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import { useT } from "../../i18n";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 const logger = createLogger("chat.ui");
 
@@ -498,7 +499,9 @@ export function ChatInput({
   return (
     <div
       className={cn(
-        "px-5 pb-3 pt-0",
+        // The composer's border is the Chat column's edge, like the message text above.
+        CHAT_COLUMN_CLASS,
+        "pb-3",
         // Outer wrapper carries the disabled cursor. Inner card sets
         // pointer-events-none, which suppresses hover (and therefore
         // any cursor of its own) — splitting the two layers lets hover
@@ -509,7 +512,7 @@ export function ChatInput({
       <div
         {...(uploadEnabled ? dropZoneProps : {})}
         className={cn(
-          "relative mx-auto flex min-h-16 max-h-40 w-full max-w-4xl flex-col rounded-lg bg-card pb-9 border-1 border-border transition-colors focus-within:border-brand",
+          "relative flex min-h-16 max-h-40 w-full flex-col rounded-lg bg-card pb-9 border-1 border-border transition-colors focus-within:border-brand",
           // Visual + interaction lock when there's no agent. We don't
           // toggle ContentEditor's editable mode (Tiptap can't switch
           // cleanly post-mount, and the prop has been removed); instead
@@ -635,7 +638,7 @@ export function ChatInput({
       {sendError && (
         <p
           role="alert"
-          className="mx-auto mt-2 max-w-4xl text-xs text-destructive"
+          className="mt-2 text-xs text-destructive"
         >
           {sendError === "full"
             ? t(($) => $.queue.full, { max: QUEUE_MAX_LIVE_ITEMS })
@@ -647,7 +650,7 @@ export function ChatInput({
         </p>
       )}
       {stopConfirming && (
-        <p role="status" className="mx-auto mt-2 max-w-4xl text-xs text-muted-foreground">
+        <p role="status" className="mt-2 text-xs text-muted-foreground">
           {t(($) => $.input.stop_confirm, { label: stopText })}
         </p>
       )}
