@@ -31,11 +31,15 @@ function entry(seq: number, overrides: Partial<SessionLogEntry> = {}): SessionLo
   };
 }
 
-/** Geometry for the list's own scroll root, which jsdom reports as 0x0. */
-function installGeometry(root: HTMLElement, content: HTMLElement): () => void {
+/**
+ * Geometry for the list's own scroll root, which jsdom reports as 0x0.
+ * `setClientHeight` resizes the viewport alone, as chrome stacked under the
+ * list does when it appears.
+ */
+function installGeometry(root: HTMLElement, content: HTMLElement): { restore: () => void; setClientHeight: (value: number) => void } {
   let scrollTop = 0;
   const scrollHeight = 1000;
-  const clientHeight = 400;
+  let clientHeight = 400;
   Object.defineProperty(root, "scrollHeight", { configurable: true, get: () => scrollHeight });
   Object.defineProperty(root, "clientHeight", { configurable: true, get: () => clientHeight });
   Object.defineProperty(root, "clientWidth", { configurable: true, get: () => 800 });
@@ -48,8 +52,13 @@ function installGeometry(root: HTMLElement, content: HTMLElement): () => void {
   });
   root.getBoundingClientRect = () => rect(0, clientHeight);
   content.getBoundingClientRect = () => rect(0, scrollHeight);
-  return () => {
-    delete (root as unknown as Record<string, unknown>).scrollHeight;
+  return {
+    restore: () => {
+      delete (root as unknown as Record<string, unknown>).scrollHeight;
+    },
+    setClientHeight: (value) => {
+      clientHeight = value;
+    },
   };
 }
 
@@ -102,8 +111,20 @@ describe("SessionLogList", () => {
     );
     const root = view.container.querySelector("[data-session-log-scroll]") as HTMLElement;
     const content = root.firstElementChild as HTMLElement;
-    const restore = installGeometry(root, content);
-    return { ...view, root, content, restore };
+    const { restore, setClientHeight } = installGeometry(root, content);
+    return { ...view, root, content, restore, setClientHeight };
+  }
+
+  /** The browser's resize delivery: one callback per observer watching an element that changed size. */
+  function resized(...elements: Element[]): void {
+    for (const observer of [...observers]) {
+      const changed = [...observer.targets].filter((target) => elements.includes(target));
+      if (changed.length === 0) continue;
+      observer.callback(
+        changed.map((target) => ({ target, contentRect: target.getBoundingClientRect() }) as unknown as ResizeObserverEntry),
+        {} as ResizeObserver,
+      );
+    }
   }
 
   /** Run animation frames until the reveal settles (three is its documented need). */
@@ -485,6 +506,55 @@ describe("SessionLogList", () => {
     });
     expect(view.container.querySelector("[data-session-log-scroll-bottom]")).not.toBeNull();
     expect(view.container.querySelector("[data-session-log-scroll-bottom-count]")).toBeNull();
+    view.restore();
+  });
+
+  it("keeps Chat's list at its end, with no arrow, when chrome under it shrinks the viewport", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1), entry(2)] } });
+    const view = renderList(replica, { scrollButton: "arrow" });
+    reveal();
+    expect(view.root.scrollTop).toBe(600);
+    expect(view.root.getAttribute("data-stick-state")).toBe("pinned");
+
+    // Question lines and queued follow-ups land between the list and the
+    // composer after the reveal: the viewport loses their height, the content
+    // keeps its own, so only the scroll root reports a resize.
+    act(() => {
+      view.setClientHeight(220);
+      resized(view.root);
+    });
+    expect(view.root.scrollHeight - view.root.scrollTop - view.root.clientHeight).toBe(0);
+
+    // A scroll event that follows (the correction's own, or the browser's) is
+    // not the reader leaving: the list stays pinned and the arrow stays away.
+    act(() => {
+      fireEvent.scroll(view.root);
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("pinned");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).toBeNull();
+    // The reveal's contract is untouched by the correction.
+    expect(view.root.getAttribute("data-perf-state")).toBe("ready");
+    view.restore();
+  });
+
+  it("leaves a reader who scrolled up where they are when the viewport shrinks", () => {
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1), entry(2)] } });
+    const view = renderList(replica, { scrollButton: "arrow" });
+    reveal();
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+      view.root.scrollTop = 300;
+      fireEvent.scroll(view.root);
+    });
+    expect(view.root.getAttribute("data-stick-state")).toBe("released");
+
+    act(() => {
+      view.setClientHeight(220);
+      resized(view.root);
+    });
+    expect(view.root.scrollTop).toBe(300);
+    expect(view.root.getAttribute("data-stick-state")).toBe("released");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).not.toBeNull();
     view.restore();
   });
 

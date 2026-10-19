@@ -7,6 +7,7 @@ export type StickMode = { kind: "bottom" } | { kind: "element"; id: string };
 export type StickState = "pinned" | "released" | "returning";
 
 export interface UseStickToBottomOptions {
+  /** Also a ResizeObserver target: the viewport can resize while the content does not. */
   scrollEl: HTMLElement | null;
   /** ResizeObserver target: the same node `useAnchoredReveal` measures. */
   contentEl: HTMLElement | null;
@@ -49,7 +50,10 @@ const PROGRAMMATIC_SLACK_PX = 1;
  * The compensation runs inside the `ResizeObserver` callback, which fires after
  * layout and before paint, so content that arrives above the viewport never
  * shows as an intermediate frame: bottom mode preserves the distance to the
- * bottom, element mode preserves the target row's offset. The hook writes no DOM
+ * bottom, element mode preserves the target row's offset. The scroll root is
+ * observed as well, so a pinned list also keeps its end in view when the
+ * viewport itself shrinks or grows (chrome below it appearing, a window being
+ * resized) while the content stays the same size. The hook writes no DOM
  * attributes and renders nothing — `state` is all a consumer needs to decide
  * whether to show its own "N new messages" affordance.
  *
@@ -301,6 +305,14 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
   // Same-frame compensation, the whole point of the hook: the resize callback
   // runs after layout and before paint, so the corrected position is the one the
   // frame paints.
+  //
+  // Both boxes are observed. The content resizes when rows arrive or grow; the
+  // scroll root resizes when chrome stacked under it in the same column (Chat's
+  // question lines, follow-up queue and banners, a floating window's height)
+  // appears, grows or goes. Then the content is unchanged and only the end of it
+  // moves out of the viewport, so a content-only observer never fires: a pinned
+  // list would be left short of its end until some later resize, and the next
+  // scroll event would read that gap as the reader leaving and release the pin.
   useEffect(() => {
     if (!enabled || !scrollEl || !contentEl) return;
 
@@ -324,6 +336,9 @@ export function useStickToBottom(options: UseStickToBottomOptions): UseStickToBo
 
     const observer = new ResizeObserver(compensate);
     observer.observe(contentEl);
+    // Element mode holds the row's offset inside the content, which a viewport
+    // resize does not change, so this only ever moves a pinned bottom-mode list.
+    observer.observe(scrollEl);
     return () => {
       observer.disconnect();
     };

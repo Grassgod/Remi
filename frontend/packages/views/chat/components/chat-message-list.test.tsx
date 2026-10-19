@@ -118,26 +118,6 @@ describe("cached message observer visibility", () => {
       expect(getQuestion).not.toHaveBeenCalled();
     } finally { view.unmount(); client.clear(); }
   });
-  it("keeps a pinned Chat at the bottom when an availability banner changes layout, but leaves released scrolling alone", () => {
-    const client = new QueryClient();
-    const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });
-    const content = (availability: "offline" | "unstable" | undefined) => <QueryClientProvider client={client}>
-      <ChatMessageList sessionId="cs-1" replica={replica} optimisticRows={[]}
-        pendingTask={null} availability={availability} />
-    </QueryClientProvider>;
-    const view = render(content(undefined));
-    const root = view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]')!;
-    Object.defineProperty(root, "scrollHeight", { configurable: true, value: 500 });
-    root.dataset.stickState = "pinned";
-    view.rerender(content("offline"));
-    expect(root.scrollTop).toBe(500);
-    root.dataset.stickState = "released";
-    root.scrollTop = 42;
-    view.rerender(content("unstable"));
-    expect(root.scrollTop).toBe(42);
-    view.unmount(); client.clear();
-  });
-
   it("does not load older log rows while the window is hidden", () => {
     const client = new QueryClient();
     const replica = new MemorySessionReplica({ "cs-1": { entries: [] } });

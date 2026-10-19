@@ -125,6 +125,23 @@ describe("useAnchoredReveal", () => {
     expect(fixture.root.scrollTop).toBe(1000);
   });
 
+  it("re-applies the target when the viewport shrinks while settling", () => {
+    // Chrome under the list (question lines, a queue) arrives while it is
+    // still hidden: the content keeps its height, only the viewport changes.
+    const { result } = renderReveal(baseProps({ dataReady: true }));
+    expect(fixture.root.scrollTop).toBe(600);
+
+    runFrames(1);
+    fixture.setClientHeight(250);
+    runFrames(1);
+    expect(fixture.root.scrollTop).toBe(750);
+    expect(result.current.state).toBe("pending");
+
+    runFrames(1);
+    expect(result.current.state).toBe("ready");
+    expect(fixture.root.scrollHeight - fixture.root.scrollTop - fixture.root.clientHeight).toBe(0);
+  });
+
   it("reveals as ready-forced when the budget expires with a gate unmet", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const { result } = renderReveal(

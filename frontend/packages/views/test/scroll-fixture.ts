@@ -140,8 +140,14 @@ export function installManualRaf(): ManualRaf {
 }
 
 export interface FakeResizeObserver {
-  /** Call each observer for its most recent target, as a resize would. */
-  trigger(): void;
+  /**
+   * Deliver one resize to every observer, as the browser does after layout: one
+   * callback per observer, with an entry per observed target. `targets` limits
+   * the delivery to the elements whose size changed — the browser reports only
+   * those, so a scroll root that shrank while its content did not reaches an
+   * observer watching the content alone with no callback at all.
+   */
+  trigger(...targets: Element[]): void;
   /** Observers currently observing the given element. */
   countFor(element: Element): number;
   /** Elements the observers are watching. */
@@ -185,14 +191,16 @@ export function installFakeResizeObserver(onCallback?: () => void): FakeResizeOb
   globalThis.ResizeObserver = Observer as unknown as typeof ResizeObserver;
 
   return {
-    trigger: () => {
+    trigger: (...targets) => {
       for (const instance of instances) {
-        for (const target of instance.targets) {
-          instance.callback(
-            [{ target, contentRect: target.getBoundingClientRect() } as unknown as ResizeObserverEntry],
-            {} as ResizeObserver,
-          );
-        }
+        const resized = targets.length === 0
+          ? instance.targets
+          : instance.targets.filter((target) => targets.includes(target));
+        if (resized.length === 0) continue;
+        instance.callback(
+          resized.map((target) => ({ target, contentRect: target.getBoundingClientRect() }) as unknown as ResizeObserverEntry),
+          {} as ResizeObserver,
+        );
       }
     },
     countFor: (element) => instances.filter((instance) => instance.targets.includes(element)).length,
