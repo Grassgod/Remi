@@ -12,6 +12,7 @@
     "placeholder_default": "메시지 입력…",
     "send_tooltip": "보내기",
     "stop_tooltip": "중지",
+    "stop_confirm": "확인하려면 Esc를 한 번 더 누르세요: {{label}}",
     "send_failed": "메시지를 보내지 못했습니다. 초안이 저장되었습니다. 다시 시도하세요.",
     "context_label": "컨텍스트 창 사용량",
     "context_usage": "사용 {{used}} / {{size}} · {{percent}}",

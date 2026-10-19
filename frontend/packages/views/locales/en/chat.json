@@ -12,6 +12,7 @@
     "placeholder_default": "Start a message…",
     "send_tooltip": "Send",
     "stop_tooltip": "Stop",
+    "stop_confirm": "Press Esc again to confirm: {{label}}",
     "send_failed": "Message was not sent. Your draft is saved; try again.",
     "context_label": "Context window usage",
     "context_usage": "{{used}} / {{size}} used · {{percent}}",

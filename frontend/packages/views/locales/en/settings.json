@@ -25,7 +25,7 @@
       "follow_up": "When you send a message during a run",
       "steer": "Steer (send into this run)",
       "queue": "Queue (send after this run ends)",
-      "hint": "Press {{shortcut}} to use the other option once"
+      "hint": "{{submit}} sends the selected way; {{invert}} does the opposite for one message. While queueing, {{invert}} in an empty composer steers the first queued message."
     }
   },
   "page": {

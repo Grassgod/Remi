@@ -1,6 +1,6 @@
 "use client";
 
-import type { KeyboardEvent, ReactNode } from "react";
+import type { KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@multiremi/ui/lib/utils";
 import {
@@ -11,7 +11,7 @@ import {
   FileDropOverlay,
 } from "../../editor";
 import { FileUploadButton } from "@multiremi/ui/components/common/file-upload-button";
-import { ArrowUp, ListPlus, Loader2, Pencil, Square } from "lucide-react";
+import { ArrowUp, Loader2, Pencil, Square } from "lucide-react";
 import { Button } from "@multiremi/ui/components/ui/button";
 import {
   useChatStore,
@@ -55,6 +55,36 @@ export function chatSendMode(isRunning: boolean, preference: ChatFollowUpMode, i
   return invert ? otherMode(preference) : preference;
 }
 
+/** What the composer's one primary button does. */
+export type ChatComposerAction = "save" | "stop" | ChatSendMode;
+
+/**
+ * The composer has one primary button, as in Codex: Save while a queued
+ * message is being edited; while a run is active, Stop when the composer is
+ * empty, otherwise the mode Mod-Enter would send with; Send while idle. A send
+ * in flight keeps the (spinning) submit, so a double click cannot land on Stop.
+ */
+export function chatComposerAction({
+  editing,
+  isRunning,
+  isEmpty,
+  isSending,
+  preference,
+}: {
+  editing: boolean;
+  isRunning: boolean;
+  isEmpty: boolean;
+  isSending: boolean;
+  preference: ChatFollowUpMode;
+}): ChatComposerAction {
+  if (editing) return "save";
+  if (isRunning && isEmpty && !isSending) return "stop";
+  return chatSendMode(isRunning, preference, false);
+}
+
+/** How long a first Esc keeps the composer's Stop armed for the second. */
+export const STOP_CONFIRM_MS = 2_000;
+
 interface ChatInputProps {
   /**
    * The chat on screen, or null for a new one. Its draft is the composer's,
@@ -88,6 +118,11 @@ interface ChatInputProps {
   onStop?: () => void;
   /** The stop button's name, when it needs to say more than 「停止」 (background tasks keep running). */
   stopLabel?: string;
+  /**
+   * Steers the first queued message into the running turn: the steer shortcut
+   * (Mod-Shift-Enter while follow-ups queue) on an empty composer, as in Codex.
+   */
+  onSteerFirstQueued?: () => void;
   isRunning?: boolean;
   disabled?: boolean;
   /** True when the user has no agent available — disables the editor and
@@ -115,6 +150,7 @@ export function ChatInput({
   onUploadFile,
   onStop,
   stopLabel,
+  onSteerFirstQueued,
   isRunning,
   disabled,
   noAgent,
@@ -249,6 +285,23 @@ export function ChatInput({
       ?.getMarkdown()
       ?.replace(/(\n\s*)+$/, "")
       .trim();
+    // Mod-Shift-Enter on an empty composer, while it would steer, steers the
+    // first queued message instead (Codex); focus stays here. Mod-Enter on an
+    // empty composer still does nothing.
+    if (
+      !content &&
+      options?.invert &&
+      isRunning &&
+      !disabled &&
+      !noAgent &&
+      !sendingRef.current &&
+      !(sessionId && useChatStore.getState().queueEdit[sessionId]) &&
+      chatSendMode(true, followUpMode, true) === "steer"
+    ) {
+      logger.info("input.steer_first_queued");
+      onSteerFirstQueued?.();
+      return;
+    }
     if (
       !content ||
       disabled ||
@@ -378,21 +431,69 @@ export function ChatInput({
   const invertShortcut = formatShortcut(modKey, shiftKey, enterKey);
   const modeLabel = (mode: ChatFollowUpMode) =>
     mode === "steer" ? t(($) => $.input.steer) : t(($) => $.input.queue);
-  const runningLabel = modeLabel(followUpMode);
+  const action = chatComposerAction({
+    editing: !!queueEdit,
+    isRunning: !!isRunning,
+    isEmpty,
+    isSending,
+    preference: followUpMode,
+  });
+  const stopText = stopLabel ?? t(($) => $.input.stop_tooltip);
   const submitDisabled =
     isEmpty || !!disabled || !!noAgent || pendingUploads > 0 || isSending;
 
-  // Esc leaves the queued-message edit. An open @ or / suggestion keeps the
-  // key: it marks its query with the `.suggestion` decoration. The key stops
-  // here, so the editor's Escape-to-blur does not also run and the composer
-  // keeps focus for the restored draft.
+  // While typed text turns the button into a submit, Esc twice stops the run
+  // without clearing the draft: the first Esc arms Stop and says so, a second
+  // one within STOP_CONFIRM_MS stops. Any other key, or the run ending, disarms.
+  const [stopArmed, setStopArmed] = useState(false);
+  useEffect(() => {
+    if (!stopArmed) return;
+    const timer = setTimeout(() => setStopArmed(false), STOP_CONFIRM_MS);
+    return () => clearTimeout(timer);
+  }, [stopArmed]);
+  useEffect(() => {
+    if (!isRunning) setStopArmed(false);
+  }, [isRunning]);
+  const canStop = !!isRunning && !!onStop && !queueEdit;
+  const stopConfirming = stopArmed && canStop;
+  const stop = () => {
+    setStopArmed(false);
+    onStop?.();
+  };
+
+  // Esc leaves the queued-message edit, or arms and confirms Stop. An open @
+  // or / suggestion keeps the key: it marks its query with the `.suggestion`
+  // decoration. A handled key stops here, so the editor's Escape-to-blur does
+  // not also run and the composer keeps focus.
   const handleKeyDownCapture = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== "Escape" || !queueEdit || event.nativeEvent.isComposing) return;
+    if (event.nativeEvent.isComposing) return;
+    if (event.key !== "Escape") {
+      if (stopArmed) setStopArmed(false);
+      return;
+    }
+    if (!queueEdit && !canStop) return;
     if (event.currentTarget.querySelector(".suggestion")) return;
     event.preventDefault();
     event.stopPropagation();
-    cancelQueueEdit();
+    if (queueEdit) cancelQueueEdit();
+    else if (stopConfirming) {
+      logger.info("input.stop_from_escape");
+      stop();
+    } else setStopArmed(true);
   };
+
+  // A send empties the composer, so the button under the pointer becomes Stop:
+  // the second click of a double click must not stop the run it just started.
+  const handleStopClick = (event: MouseEvent<HTMLButtonElement>) => {
+    if (event.detail > 1) return;
+    stop();
+  };
+  const submitLabel = action === "steer" || action === "queue"
+    ? modeLabel(action)
+    : t(($) => $.input.send_tooltip);
+  const submitTitle = action === "steer" || action === "queue"
+    ? `${submitLabel} · ${submitShortcut}\n${modeLabel(otherMode(action))} · ${invertShortcut}`
+    : `${submitLabel} · ${submitShortcut}`;
 
   return (
     <div
@@ -420,6 +521,11 @@ export function ChatInput({
         aria-disabled={noAgent || disabled || undefined}
         data-chat-composer=""
         onKeyDownCapture={handleKeyDownCapture}
+        // The editor reports text after its debounce; typing replaces Stop
+        // with the submit at once, so Stop never sits under typed text.
+        onInput={(event) => {
+          if (isEmpty && (event.target as HTMLElement).textContent?.trim()) setIsEmpty(false);
+        }}
       >
         {queueEdit && (
           <div
@@ -465,7 +571,8 @@ export function ChatInput({
             // default behavior for lists, quotes, and paragraph breaks.
             // Without this, Enter-as-send would steal the only key that
             // continues a bullet list, leaving users stuck after one item.
-            // Mod+Shift+Enter sends with the other follow-up mode.
+            // Mod+Shift+Enter sends with the other follow-up mode. Which keys
+            // submit, and with `invert`, is decided only in createSubmitExtension.
           />
         </div>
         {/* One footer row: the pickers take what the actions leave, so they
@@ -482,17 +589,9 @@ export function ChatInput({
                 onSelect={(file) => editorRef.current?.uploadFile(file)}
               />
             )}
-            {isRunning && (
-              <Button
-                size="icon-sm"
-                aria-label={stopLabel ?? t(($) => $.input.stop_tooltip)}
-                title={stopLabel ?? t(($) => $.input.stop_tooltip)}
-                onClick={onStop}
-              >
-                <Square className="size-3.5 fill-current" />
-              </Button>
-            )}
-            {queueEdit ? (
+            {/* One primary button (chatComposerAction). The branches render the
+             *  same Button, so it keeps focus as it changes. */}
+            {action === "save" ? (
               <Button
                 size="sm"
                 onClick={() => void handleSend()}
@@ -502,30 +601,25 @@ export function ChatInput({
                 {isSending && <Loader2 className="size-3.5 animate-spin" />}
                 {t(($) => $.input.save)}
               </Button>
-            ) : isRunning ? (
+            ) : action === "stop" ? (
               <Button
                 size="icon-sm"
-                onClick={() => void handleSend()}
-                disabled={submitDisabled}
-                aria-label={runningLabel}
-                title={`${runningLabel} · ${submitShortcut}\n${modeLabel(otherMode(followUpMode))} · ${invertShortcut}`}
-                data-follow-up-mode={followUpMode}
+                onClick={handleStopClick}
+                disabled={!onStop}
+                aria-label={stopText}
+                title={`${stopText} · Esc Esc`}
+                data-composer-action="stop"
               >
-                {isSending ? (
-                  <Loader2 className="size-4 animate-spin" />
-                ) : followUpMode === "queue" ? (
-                  <ListPlus className="size-4" />
-                ) : (
-                  <ArrowUp className="size-4" />
-                )}
+                <Square className="size-3.5 fill-current" />
               </Button>
             ) : (
               <Button
                 size="icon-sm"
                 onClick={() => void handleSend()}
                 disabled={submitDisabled}
-                aria-label={t(($) => $.input.send_tooltip)}
-                title={`${t(($) => $.input.send_tooltip)} · ${submitShortcut}`}
+                aria-label={submitLabel}
+                title={submitTitle}
+                data-composer-action={action}
               >
                 {isSending ? (
                   <Loader2 className="size-4 animate-spin" />
@@ -550,6 +644,11 @@ export function ChatInput({
               : sendError === "save"
                 ? t(($) => $.queue.failed)
                 : t(($) => $.input.send_failed)}
+        </p>
+      )}
+      {stopConfirming && (
+        <p role="status" className="mx-auto mt-2 max-w-4xl text-xs text-muted-foreground">
+          {t(($) => $.input.stop_confirm, { label: stopText })}
         </p>
       )}
     </div>

@@ -251,16 +251,17 @@ export function PreferencesTab() {
 }
 
 /**
- * How a message sent while the agent is running is delivered (ADR 0020).
- * The composer swaps to the other mode for one message on Mod-Shift-Enter.
+ * How a message sent while the agent is running is delivered (ADR 0020);
+ * queue unless chosen otherwise. The composer swaps to the other mode for one
+ * message on Mod-Shift-Enter.
  */
 function ChatSection() {
   const { t } = useT("settings");
   const followUpMode = useChatStore((s) => s.followUpMode);
   const setFollowUpMode = useChatStore((s) => s.setFollowUpMode);
   const options: { value: ChatFollowUpMode; label: string }[] = [
-    { value: "steer", label: t(($) => $.preferences.chat.steer) },
     { value: "queue", label: t(($) => $.preferences.chat.queue) },
+    { value: "steer", label: t(($) => $.preferences.chat.steer) },
   ];
 
   return (
@@ -294,7 +295,10 @@ function ChatSection() {
         })}
       </div>
       <p className="text-[11px] leading-snug text-muted-foreground">
-        {t(($) => $.preferences.chat.hint, { shortcut: formatShortcut(modKey, shiftKey, enterKey) })}
+        {t(($) => $.preferences.chat.hint, {
+          submit: formatShortcut(modKey, enterKey),
+          invert: formatShortcut(modKey, shiftKey, enterKey),
+        })}
       </p>
     </section>
   );

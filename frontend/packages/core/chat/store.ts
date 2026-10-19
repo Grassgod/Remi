@@ -38,8 +38,13 @@ const QUEUE_OUTBOX_KEY = "multimira:chat:queueOutbox";
  * `queue` (排队) holds the message until the turn completes (ADR 0020).
  */
 export type ChatFollowUpMode = "steer" | "queue";
-export const DEFAULT_FOLLOW_UP_MODE: ChatFollowUpMode = "steer";
+/** Like Codex, follow-ups queue unless the user chose otherwise. */
+export const DEFAULT_FOLLOW_UP_MODE: ChatFollowUpMode = "queue";
 
+/**
+ * Only `setFollowUpMode` writes the key, so a browser that never chose keeps
+ * following the default; a stored choice always wins.
+ */
 function readFollowUpMode(storage: StorageAdapter): ChatFollowUpMode {
   const stored = storage.getItem(FOLLOW_UP_MODE_KEY);
   return stored === "queue" || stored === "steer" ? stored : DEFAULT_FOLLOW_UP_MODE;

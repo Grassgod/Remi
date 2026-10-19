@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { render, screen, act, cleanup, waitFor } from "@testing-library/react";
+import { render, screen, act, cleanup, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -267,7 +267,7 @@ describe("PreferencesTab — Chat section", () => {
     cleanup();
   });
 
-  it("defaults to steer and saves the follow-up choice", async () => {
+  it("defaults to queue, lists it first and saves the follow-up choice", async () => {
     const user = userEvent.setup();
     render(<PreferencesTab />, { wrapper: I18nWrapper });
 
@@ -275,15 +275,21 @@ describe("PreferencesTab — Chat section", () => {
     const steer = screen.getByRole("radio", { name: "Steer (send into this run)" });
     const queue = screen.getByRole("radio", { name: "Queue (send after this run ends)" });
     expect(group).toContainElement(steer);
-    expect(steer).toHaveAttribute("aria-checked", "true");
-    expect(queue).toHaveAttribute("aria-checked", "false");
-    expect(screen.getByText(/to use the other option once/)).toBeInTheDocument();
+    expect(within(group).getAllByRole("radio")[0]).toBe(queue);
+    expect(queue).toHaveAttribute("aria-checked", "true");
+    expect(steer).toHaveAttribute("aria-checked", "false");
+    // Nothing is stored until the user chooses.
+    expect(chatStorage.get("multimira:chat:followUpMode")).toBeUndefined();
+    expect(screen.getByText(
+      "Ctrl+Enter sends the selected way; Ctrl+Shift+Enter does the opposite for one message. "
+        + "While queueing, Ctrl+Shift+Enter in an empty composer steers the first queued message.",
+    )).toBeInTheDocument();
 
-    await user.click(queue);
+    await user.click(steer);
 
-    expect(useChatStore.getState().followUpMode).toBe("queue");
-    expect(chatStorage.get("multimira:chat:followUpMode")).toBe("queue");
-    expect(screen.getByRole("radio", { name: "Queue (send after this run ends)" })).toHaveAttribute("aria-checked", "true");
+    expect(useChatStore.getState().followUpMode).toBe("steer");
+    expect(chatStorage.get("multimira:chat:followUpMode")).toBe("steer");
+    expect(screen.getByRole("radio", { name: "Steer (send into this run)" })).toHaveAttribute("aria-checked", "true");
   });
 });
 

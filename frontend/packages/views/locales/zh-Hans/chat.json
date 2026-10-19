@@ -11,6 +11,7 @@
     "placeholder_default": "输入消息…",
     "send_tooltip": "发送",
     "stop_tooltip": "停止",
+    "stop_confirm": "再按一次 Esc 确认：{{label}}",
     "send_failed": "消息未发送。草稿已保留，请重试。",
     "context_label": "上下文窗口占用",
     "context_usage": "已用 {{used}} / {{size}} · {{percent}}",
