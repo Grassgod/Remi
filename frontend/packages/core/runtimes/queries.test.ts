@@ -11,12 +11,13 @@ import {
 } from "./queries";
 
 describe("runtime list refresh", () => {
-  it("uses a 30-second visible-page refresh interval", () => {
+  it("uses a 30-second visible-page refresh interval and re-reads when the page returns", () => {
     expect(RUNTIME_LIST_REFRESH_MS).toBe(30_000);
     expect(runtimeListOptions("ws-1")).toMatchObject({
       staleTime: 10_000,
       refetchInterval: RUNTIME_LIST_REFRESH_MS,
       refetchIntervalInBackground: false,
+      refetchOnWindowFocus: true,
     });
   });
 

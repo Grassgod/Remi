@@ -91,6 +91,9 @@ export function runtimeListOptions(wsId: string, owner?: "me") {
     staleTime: 10_000,
     refetchInterval: RUNTIME_LIST_REFRESH_MS,
     refetchIntervalInBackground: false,
+    // The interval pauses while the page is hidden; re-read on return instead
+    // of up to one interval later, so presence judges a current list.
+    refetchOnWindowFocus: true,
   });
 }
 

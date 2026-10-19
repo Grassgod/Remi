@@ -296,11 +296,14 @@ export function ChatWindow({
   const listedSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId)
     : undefined;
-  const { data: fetchedSession } = useQuery({
+  const { data: fetchedSession, isLoading: fetchedSessionLoading } = useQuery({
     ...chatSessionOptions(wsId, activeSessionId ?? ""),
     enabled: chatVisible && !!activeSessionId && !sessionsLoading && !listedSession,
   });
   const currentSession = listedSession ?? fetchedSession ?? null;
+  // Until the open chat's record arrives, the agent below is the composer's
+  // fallback (the stored pick or the first agent), not necessarily the chat's.
+  const sessionAgentPending = !!activeSessionId && !currentSession && (sessionsLoading || fetchedSessionLoading);
   const isSessionArchived = currentSession?.status === "archived";
 
   // Background tasks (PR 6): the session list says how many run, with or
@@ -406,7 +409,9 @@ export function ChatWindow({
   // returns "loading" while queries are still resolving — pass `undefined`
   // downstream so banners and pill copy stay silent during loading rather
   // than flash speculative offline text.
-  const presenceDetail = useAgentPresenceDetail(wsId, activeAgent?.id);
+  // A fallback agent's presence would speak for the wrong agent (an offline
+  // banner naming another agent while the chat loads), so it waits too.
+  const presenceDetail = useAgentPresenceDetail(wsId, sessionAgentPending ? undefined : activeAgent?.id);
   const availability =
     presenceDetail === "loading" ? undefined : presenceDetail.availability;
 
@@ -791,7 +796,7 @@ export function ChatWindow({
             <List />
           </Button>
           {activeAgent && (
-            <ActorAvatar actorType="agent" actorId={activeAgent.id} size={20} enableHoverCard showStatusDot />
+            <ActorAvatar actorType="agent" actorId={activeAgent.id} size={20} enableHoverCard showStatusDot={!sessionAgentPending} />
           )}
           <h1 className="min-w-0 truncate text-sm font-medium">
             {/* "New chat" names the unsaved draft; an existing chat without a title is "Untitled". */}
