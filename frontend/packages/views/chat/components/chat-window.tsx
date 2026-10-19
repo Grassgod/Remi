@@ -355,14 +355,17 @@ export function ChatWindow({
       sessionId: activeSessionId,
       taskId: pendingTaskId,
     };
-    reconcileSettledPendingChatTask(
-      qc,
-      wsId,
-      previousPendingTaskRef.current,
-      current,
-    );
+    const previous = previousPendingTaskRef.current;
+    const settled = reconcileSettledPendingChatTask(qc, wsId, previous, current);
     previousPendingTaskRef.current = current;
-  }, [activeSessionId, pendingTaskId, qc, wsId]);
+    // While a turn runs the list shows it from its live trace; once the chat's
+    // pending task moves on, only the log's rows show that turn. They arrive
+    // as stream frames, which can be lost or hidden, so read the tail once.
+    // An optimistic send seed giving way to its real task settles nothing.
+    if (settled && chatVisible && !previous.taskId?.startsWith("optimistic-") && replicaRef.current.sessionId === current.sessionId) {
+      void readLogTail(replicaRef.current);
+    }
+  }, [activeSessionId, pendingTaskId, qc, wsId, readLogTail, chatVisible]);
 
   const createSession = useCreateChatSession();
   const markRead = useMarkChatSessionRead();

@@ -26,6 +26,18 @@ import type { SyncContext, SyncModule } from "./types";
 
 const chatWsLogger = createLogger("chat.ws");
 
+/**
+ * A running turn's event for a chat whose cached pending task names no task.
+ * The handlers below only patch a cached task with the same id, and the poll
+ * stops once a read finds none, so a read that missed the running turn (see
+ * `readPendingChatTask`) would hide it until the next event that refetches.
+ * Read it again now.
+ */
+function refetchUnheldPendingTask(qc: QueryClient, sessionId: string): void {
+  if (qc.getQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId))?.task_id) return;
+  void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
+}
+
 function settleChatPendingTask(qc: QueryClient, sessionId: string, taskId: string): void {
   qc.setQueryData<ChatPendingTask>(chatKeys.pendingTask(sessionId), old => {
     if (!old) return old;
@@ -170,6 +182,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         invalidateUnified();
         const payload = p as TaskDispatchPayload;
         if (!payload.chat_session_id) return;
+        refetchUnheldPendingTask(qc, payload.chat_session_id);
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {
@@ -193,6 +206,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         // workspace and let their authoritative endpoints resolve ancestry.
         invalidateIssueDecisionSurfaces();
         if (!payload.chat_session_id) return;
+        refetchUnheldPendingTask(qc, payload.chat_session_id);
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {
@@ -210,6 +224,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         const payload = p as TaskProgressPayload;
         if (typeof payload.chat_session_id !== "string" || typeof payload.task_id !== "string"
           || (typeof payload.progress_summary !== "string" && payload.progress_summary !== null)) return;
+        refetchUnheldPendingTask(qc, payload.chat_session_id);
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
           old => old?.task_id === payload.task_id
@@ -277,6 +292,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         void qc.invalidateQueries({ queryKey: chatKeys.humanRequests(payload.task_id) });
         invalidateIssueDecisionSurfaces();
         if (!payload.chat_session_id) return;
+        refetchUnheldPendingTask(qc, payload.chat_session_id);
         qc.setQueryData<ChatPendingTask>(
           chatKeys.pendingTask(payload.chat_session_id),
           (old) => {

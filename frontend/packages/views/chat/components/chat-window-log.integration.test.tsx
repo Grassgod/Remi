@@ -140,6 +140,45 @@ it("N2 removes a deleted unread body through ChatWindow's real log chain before 
   } finally { view.unmount(); client.clear(); }
 });
 
+it("reads the log tail once when the shown chat's pending turn settles, so its reply shows without frames", async () => {
+  const sent = message(1, "QA_SETTLE_QUESTION");
+  const reply = SessionLogEntrySchema.parse({
+    session_id: session.id, seq: 3, id: "reply-3", revision: 2, kind: "message", sender_type: "agent", sender_id: "agent-a",
+    author_type: "agent", to_type: "member", message_kind: "reply", body_md: "QA_SETTLE_REPLY", body_html: null, render_version: null,
+    metadata: { attachments: [], reactions: [] },
+  });
+  const initial: IssueLogBootstrap = { sessionId: session.id, head: null, window: {
+    entries: [sent], head_seq: 2, log_version: 1, has_more_before: false, has_more_after: false,
+  } };
+  // The stream delivers nothing: the turn's frames were lost or hidden.
+  socket.subscribeStream.mockImplementation(() => ({ unsubscribe: vi.fn() }));
+  backend.listMessages.mockImplementation(async () => ({ messages: [], next_cursor: null }));
+  backend.read.mockImplementation(async () => ({ ...initial.window, entries: [sent, reply], head_seq: 3, log_version: 4 }));
+  backend.getChatQueue.mockResolvedValue({ items: [], paused: null });
+  registerChatStore(createChatStore({ storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} } }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const pendingKey = ["chat", "pending-task", session.id];
+  client.setQueryData(pendingKey, { task_id: "task-1", turn_id: "task-1", status: "running", supports_queue: true });
+  const view = render(<QueryClientProvider client={client}>
+    <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, messages: enMessages } }}>
+      <ReplicaEnvProvider env={memoryEnv}>
+        <ChatWindow presentation="page" initialSessionId={session.id} initialLog={initial} />
+      </ReplicaEnvProvider>
+    </I18nProvider>
+  </QueryClientProvider>);
+  try {
+    await waitFor(() => expect(socket.subscribeStream).toHaveBeenCalledOnce());
+    const main = view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]')!;
+    expect(main).toHaveTextContent(sent.body_md);
+    expect(backend.read).not.toHaveBeenCalled();
+    // chat:done settles the pending task: the live view goes away.
+    await act(async () => { client.setQueryData(pendingKey, { supports_queue: true }); });
+    await waitFor(() => expect(main).toHaveTextContent(reply.body_md));
+    // The tail, then the seq between the window and the tail.
+    expect(backend.read.mock.calls[0]).toEqual([session.id, { before: 30 }]);
+  } finally { view.unmount(); client.clear(); }
+});
+
 /** One chat's read route. As on the server, every log write bumps `log_version`. */
 function chatLog() {
   const rows: SessionLogRow[] = [];

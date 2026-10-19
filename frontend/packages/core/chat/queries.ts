@@ -1,5 +1,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { api } from "../api";
+import { ApiError } from "../api/http";
 import type { ChatBackgroundTasksSnapshot, ChatOriginFilter, ChatPendingTask, PendingChatTasksResponse } from "../types";
 import type { ChatQueue } from "../api/schemas/chat-queue";
 
@@ -104,12 +105,38 @@ export function pendingChatTaskOptions(
 ) {
   return queryOptions({
     queryKey: chatKeys.pendingTask(sessionId),
-    queryFn: () => api.getPendingChatTask(sessionId),
+    queryFn: ({ client, queryKey }) => readPendingChatTask(sessionId, client.getQueryData<ChatPendingTask>(queryKey)),
     enabled: !!sessionId && (options.enabled ?? true),
     refetchInterval: pendingChatTaskRefetchInterval,
     refetchIntervalInBackground: false,
     staleTime: Infinity,
   });
+}
+
+/**
+ * The chat's pending task, read again.
+ *
+ * `getPendingChatTask` lists the chat's turns once per active status, three
+ * reads that are not one snapshot: a turn that changes status between them
+ * (pending → running when it is claimed, running ↔ awaiting_human around an
+ * agent's question) is in none of the answers. So when they find no turn while
+ * the cache still holds one that no event settled (`chat:done`, a cancel or a
+ * failure replace it first), that turn is read on its own, and it stays while
+ * it is still in flight. An optimistic send seed names no turn yet.
+ */
+export async function readPendingChatTask(sessionId: string, held: ChatPendingTask | undefined): Promise<ChatPendingTask> {
+  const listed = await api.getPendingChatTask(sessionId);
+  if (listed.task_id) return listed;
+  const turnId = held?.turn_id ?? (held?.task_id && !held.task_id.startsWith("optimistic-") ? held.task_id : undefined);
+  if (!turnId) return listed;
+  try {
+    const turn = await api.getChatTurnPendingTask(turnId);
+    return turn.task_id ? turn : listed;
+  } catch (error) {
+    // A turn that is gone, or an attempt id that names no turn, is not in flight.
+    if (error instanceof ApiError && error.status === 404) return listed;
+    throw error;
+  }
 }
 
 /**

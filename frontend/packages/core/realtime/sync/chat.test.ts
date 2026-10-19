@@ -92,6 +92,29 @@ describe("chat queue realtime", () => {
     },
   );
 
+  it.each(["task:dispatch", "task:running", "task:progress", "task:awaiting_human"] as const)(
+    "reads the pending task again when %s arrives for a chat whose cache names no task", async event => {
+      let reads = 0;
+      const observer = new QueryObserver(qc, {
+        queryKey: chatKeys.pendingTask("chat-1"), staleTime: Infinity,
+        queryFn: async (): Promise<ChatPendingTask> => { reads += 1; return { task_id: "task-9", status: "running", supports_queue: true }; },
+      });
+      const unsubscribe = observer.subscribe(() => {});
+      try {
+        // A task the cache holds is patched in place, never read again.
+        handlers[event]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: "Working" });
+        expect(reads).toBe(0);
+        // A read that missed the running turn left no task, and the poll has stopped.
+        qc.setQueryData(chatKeys.pendingTask("chat-1"), { supports_queue: true });
+        handlers[event]?.({ chat_session_id: "chat-1", task_id: "task-9", progress_summary: "Working" });
+        await vi.waitFor(() => expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({ task_id: "task-9" }));
+        expect(reads).toBe(1);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it("writes preparation progress only to the matching pending head", () => {
     handlers["task:progress"]?.({ chat_session_id: "chat-1", task_id: "task-1", progress_summary: "正在准备项目仓库…" });
     expect(qc.getQueryData(chatKeys.pendingTask("chat-1"))).toMatchObject({
