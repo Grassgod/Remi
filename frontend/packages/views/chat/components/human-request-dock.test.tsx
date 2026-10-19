@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { ApiError } from "@multiremi/core/api";
@@ -82,7 +82,7 @@ function questionView(request: Request, patch: Partial<QuestionView> = {}): Ques
     summary: null, current_handler: null, stage: "human", route_revision: 1, answer_revision: 0, status: "pending", wait_status: "waiting", wait_reason: null, answer: null, history: [], actions: { allowed: ["answer", "close"] }, ...patch };
 }
 
-function renderDock(requests: unknown[], views: Record<string, Partial<QuestionView>> = {}, props: { getActorName?: typeof getActorName } = { getActorName }) {
+function renderDock(requests: unknown[], views: Record<string, Partial<QuestionView>> = {}, props: DockProps = { getActorName }) {
   getQuestion.mockImplementation(async (id: string) => {
     const request = requests.find(value => (value as { id: string }).id === id) as Request;
     return questionView(request, views[id]);
@@ -104,15 +104,24 @@ async function openQuestion(action = "Answer") {
   return within(dialog);
 }
 
-function mountDock(props: { getActorName?: typeof getActorName } = { getActorName }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
-  return render(
+type DockProps = Partial<React.ComponentProps<typeof HumanRequestDock>>;
+
+function mountDock(props: DockProps = { getActorName }) {
+  // The app's own defaults: a list is fresh until something invalidates it.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0, staleTime: Infinity } } });
+  return { qc, ...render(
     <QueryClientProvider client={qc}>
       <I18nProvider locale="en" resources={TEST_RESOURCES}>
         <HumanRequestDock taskId="tsk_1" sessionId="session_1" turnId="turn_1" {...props} />
       </I18nProvider>
     </QueryClientProvider>,
-  );
+  ) };
+}
+
+/** Decision rows as `GET /api/sessions/:id/messages?message_kind=decision` returns them. */
+function decisionRows(rows: Array<{ request: typeof QUESTION_REQUEST | typeof PERMISSION_REQUEST; turn: string }>) {
+  return { messages: rows.map(({ request, turn }) => ({ id: request.id, task_id: turn, created_at: request.createdAt,
+    resolved_at: request.status === "pending" ? null : request.createdAt, metadata: { human_request: request } })), next_cursor: null };
 }
 
 const line = (container: HTMLElement, id: string) => container.querySelector<HTMLElement>(`[data-question-summary="${id}"]`)!;
@@ -148,6 +157,55 @@ describe("HumanRequestDock", () => {
     expect(getQuestion).toHaveBeenCalledWith("hrq_q");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByText("staging")).toBeNull();
+  });
+
+  it("lists a question the daemon asks after the line list was read, once the Q key space is invalidated", async () => {
+    // The daemon creates a Q mid-turn through turn.decision: no task event
+    // follows, only `decision:created`, whose handler invalidates ["question", wsId].
+    getQuestion.mockImplementation(async (id: string) => questionView(QUESTION_REQUEST as Request, { id }));
+    listMessages.mockResolvedValue(decisionRows([]));
+    const view = mountDock();
+    await waitFor(() => expect(listMessages).toHaveBeenCalledTimes(1));
+    expect(view.container).toBeEmptyDOMElement();
+    listMessages.mockResolvedValue(decisionRows([{ request: QUESTION_REQUEST, turn: "turn_1" }]));
+    await act(async () => { await view.qc.invalidateQueries({ queryKey: ["question", "ws"] }); });
+    await waitFor(() => expect(line(view.container, "hrq_q")).toHaveTextContent("Awaiting answer"));
+    expect(within(line(view.container, "hrq_q")).getByRole("button", { name: "Answer" })).toBeInTheDocument();
+  });
+
+  it("shows a native AskUserQuestion whose payload also carries its decision's choice options", async () => {
+    // The daemon's turn.decision copies the decision options ({label, value}) onto the payload.
+    const native = { ...QUESTION_REQUEST, payload: { ...QUESTION_REQUEST.payload, options: [
+      { label: "staging", value: JSON.stringify({ question: "question_0", answer: "staging" }) },
+      { label: "production", value: JSON.stringify({ question: "question_0", answer: "production" }) },
+    ] } };
+    const view = renderDock([native]);
+    await waitFor(() => expect(line(view.container, "hrq_q")).toHaveTextContent("Awaiting answer"));
+    expect(within(line(view.container, "hrq_q")).getByRole("button", { name: "Answer" })).toBeInTheDocument();
+  });
+
+  it("keeps a Chat's open question answerable without an in-flight turn, and leaves settled ones of other turns out", async () => {
+    getQuestion.mockImplementation(async (id: string) => questionView((id === "hrq_q" ? QUESTION_REQUEST : PERMISSION_REQUEST) as Request,
+      { id, source_issue_id: null, current_handler: { type: "member", id: "human" } }));
+    listMessages.mockResolvedValue(decisionRows([
+      { request: QUESTION_REQUEST, turn: "turn_earlier" },
+      { request: { ...PERMISSION_REQUEST, status: "responded" }, turn: "turn_earlier" },
+    ]));
+    const view = mountDock({ taskId: null, turnId: undefined, open: true, getActorName });
+    await waitFor(() => expect(line(view.container, "hrq_q")).toHaveTextContent("Awaiting answer"));
+    expect(within(line(view.container, "hrq_q")).getByRole("button", { name: "Answer" })).toBeInTheDocument();
+    expect(view.container.querySelector('[data-question-summary="hrq_perm"]')).toBeNull();
+  });
+
+  it("shows the running turn's answered requests beside the Chat's open ones", async () => {
+    getQuestion.mockImplementation(async (id: string) => questionView((id === "hrq_q" ? QUESTION_REQUEST : PERMISSION_REQUEST) as Request, { id }));
+    listMessages.mockResolvedValue(decisionRows([
+      { request: QUESTION_REQUEST, turn: "turn_earlier" },
+      { request: { ...PERMISSION_REQUEST, status: "responded" }, turn: "turn_1" },
+    ]));
+    const view = mountDock({ taskId: "tsk_1", turnId: "turn_1", open: true, getActorName });
+    await waitFor(() => expect(line(view.container, "hrq_q")).toBeTruthy());
+    await waitFor(() => expect(line(view.container, "hrq_perm")).toBeTruthy());
   });
 
   it("keeps the turn's answered question as a line with its answerer and answer", async () => {

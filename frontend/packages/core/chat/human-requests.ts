@@ -104,34 +104,68 @@ const humanRequestSchema = z.object({
 });
 
 
+/**
+ * A native question's `payload.options` are its decision message's flattened
+ * choices (`{label, value}`, written by the daemon's `turn.decision`); the
+ * answers come from `payload.questions`. Only a permission request carries
+ * permission options, so only there may they reject the request.
+ */
+function withoutQuestionChoices(value: unknown): unknown {
+  if (!value || typeof value !== "object") return value;
+  const record = value as { kind?: unknown; payload?: unknown };
+  if (record.kind !== "question" || !record.payload || typeof record.payload !== "object") return value;
+  const { options: _choices, ...payload } = record.payload as Record<string, unknown>;
+  return { ...record, payload };
+}
+
 export function parseTaskHumanRequest(value: unknown): TaskHumanRequest | null {
-  const parsed = humanRequestSchema.safeParse(value);
+  const parsed = humanRequestSchema.safeParse(withoutQuestionChoices(value));
   return parsed.success ? parsed.data as TaskHumanRequest : null;
 }
 
 // ─── Queries ─────────────────────────────────────────────────────────────
 
-export function humanRequestsOptions(taskId: string, sessionId?: string, turnId?: string) {
+export interface HumanRequestsScope {
+  /** The in-flight turn: its permissions and questions, answered ones included. */
+  turnId?: string | null;
+  /**
+   * Also every question of the session still waiting for an answer, whatever
+   * turn asked it. A Chat reads this so its own open Q stays answerable when
+   * there is no in-flight turn, or not the one that asked.
+   */
+  open?: boolean;
+}
+
+/**
+ * The permission and AskUserQuestion requests of one conversation. The key sits
+ * under the Q key space (`["question", wsId]`): a new Q (`decision:created`) and
+ * a resumed turn invalidate that prefix, so the list follows Qs the daemon
+ * creates mid-turn without a task event of its own.
+ */
+export function humanRequestsOptions(wsId: string, sessionId: string | null | undefined, { turnId = null, open = false }: HumanRequestsScope = {}) {
   return queryOptions({
-    queryKey: [...chatKeys.humanRequests(taskId), sessionId ?? ""],
+    queryKey: ["question", wsId, "requests", sessionId ?? "", turnId ?? "", open ? "open" : "turn"] as const,
     queryFn: async (): Promise<TaskHumanRequest[]> => {
       if (!sessionId) return [];
-      const messages = [];
+      const messages: Awaited<ReturnType<typeof api.listMessages>>["messages"] = [];
       let cursor: string | undefined;
       do {
         const page = await api.listMessages(sessionId, { message_kind: "decision", cursor });
         messages.push(...page.messages); cursor = page.next_cursor ?? undefined;
       } while (cursor);
-      return messages.filter(message => !turnId || message.task_id === turnId).flatMap(message => {
+      const included = (message: (typeof messages)[number]) => open
+        ? !message.resolved_at || (!!turnId && message.task_id === turnId)
+        : !turnId || message.task_id === turnId;
+      return messages.filter(included).flatMap(message => {
         const record = message.metadata.human_request;
         if (!record || typeof record !== "object") return [];
-        const request = parseTaskHumanRequest({ ...record, id: message.id, taskId, sessionId,
+        const request = parseTaskHumanRequest({ ...record, id: message.id, taskId: message.task_id ?? "", sessionId,
           status: message.resolved_at ? "responded" : "pending", response: null, respondedBy: null,
           createdAt: message.created_at, respondedAt: message.resolved_at });
         return request ? [request] : [];
       });
     },
-    enabled: !!sessionId && !!taskId,
+    enabled: !!wsId && !!sessionId,
   });
 }
 

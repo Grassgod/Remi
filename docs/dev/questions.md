@@ -46,9 +46,9 @@ Issue Q 的人工阶段不指定成员，`current_handler` 为 null：来源工�
 
 ## 飞书卡片与 Remi 总结
 
-飞书卡和降级文字引用同一个 Q。正常先通知配置的 Remi 读取并总结，再由 `present`解除发卡等待；Remi不可用、自己提问或60秒总结期限到期才允许发原题。Issue Q 的呈现请求同样写在来源 Issue 的默认会话，正文只说明问题已交给工作区成员处理。待呈现意图使用既有飞书持久 outbox operations，在 Remi/bot 忙碌或离线时可重试。卡片收件人：Issue Q 的人工阶段为根单创建人，Chat Q 为其指定成员；收件人必须能唯一映射到 bot 应用的 open_id，映射不明降级到带原 Q、原上下文、原选项及工作台入口的文字，不选择群主。卡片操作人必须解析为来源工作区的一个有效成员，令牌仍绑定收件人 open_id。路由版本随一次性 token 发卡；重新投递或重新路由立即失效旧卡。业务 Q 和卡片没有 provider等待期限，原调用超时不会抹掉问题或令其卡片自动过期。
+飞书卡和降级文字引用同一个 Q。Issue Q 进入人工阶段时先通知配置的 Remi 读取并总结，再由 `present`解除发卡等待；Remi不可用、自己提问或60秒总结期限到期才允许发原题。Issue Q 的呈现请求写在来源 Issue 的默认会话，正文只说明问题已交给工作区成员处理。Chat Q 没有 Remi 总结这一步，原题立即可以发卡。待呈现意图使用既有飞书持久 outbox operations，在 Remi/bot 忙碌或离线时可重试。卡片收件人：Issue Q 的人工阶段为根单创建人，Chat Q 为其指定成员；收件人必须能唯一映射到 bot 应用的 open_id，映射不明降级到带原 Q、原上下文、原选项及工作台入口的文字，不选择群主。卡片操作人必须解析为来源工作区的一个有效成员，令牌仍绑定收件人 open_id。路由版本随一次性 token 发卡；重新投递或重新路由立即失效旧卡。业务 Q 和卡片没有 provider等待期限，原调用超时不会抹掉问题或令其卡片自动过期。
 
-无 Issue 的 Worker Chat 仍绑定原执行 Agent；Remi 在自己的通知 Chat 接收同 Q 呈现任务，不改变原 Chat 执行归属。只有当前版本通知对应的 Remi 会话与 scope 可定点读原 Q，不能借另一个 Remi 轮读取私有原消息。Chat 交互卡也等待同 Q 总结或明确超时，收件人按指定成员映射，不能继承原消息发送者；映射缺失发送无猜测 @ 的工作台文字，旧路由或失去授权时不发送空卡。
+无 Issue 的 Chat Q 由指定成员在原 Chat 里回答：不通知 Remi、不建 Remi 通知 Chat，`summary_wait_until` 为空，Remi 也没有读取或 `present` 该 Q 的通知通道。绑定飞书的 Chat 直接发原题交互卡，不等总结；收件人按指定成员映射，不能继承原消息发送者；映射缺失发送无猜测 @ 的工作台文字，旧路由或失去授权时不发送空卡。此前已经建好的「原问题 … 呈现」Remi Chat 和其中的呈现请求按原样保留，不做数据迁移；该请求对应的 Remi 轮仍可 `present`。
 
 Chat 降级文字的工作台链接打开 Inbox 原 Q 专属定位入口，不要求指定成员拥有原 private Chat 的一般读取权；原题、选项和背景仍由 Question 授权服务读取。
 
@@ -65,6 +65,10 @@ Web 的 Issue 和 Chat 主线按 `question`、`human_request`、具有上述 Iss
 答复区复用原 Issue Decision 的布局，统一由 [`decision-panel.tsx`](../../frontend/packages/views/common/decision-panel.tsx)
 提供；桌面抽屉宽度为720px，小屏幕按可用宽度收缩。Issue 顶部只在本单有人工阶段待答问题时提示，
 提示条打开同一抽屉。
+Chat 输入框上方的问题行列出本会话所有仍待回答的 Q，以及运行中这一轮已答的 Q；有没有运行中的轮、
+待处理任务是否读到都不影响待答 Q 的显示。daemon 经 `turn.decision` 建 Q 时没有任务事件，
+所以问题行与 Issue 运行卡片的列表挂在 `["question", wsId]` 查询键下，由 `decision:created`
+和轮恢复的失效刷新。
 旧 IssueDecision 不再创建独立业务问题。
 原题和选项只展示一次；展示以原版 `DecisionCard`（`f80b10674`）为准：明确标题、较淡的背景正文、
 分隔后的回答区、右下角提交及预留错误提示行。回答记录默认展示为包含回答人与内容的灰底块，

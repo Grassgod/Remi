@@ -34,8 +34,10 @@ The bot host forwards the action. Its optional in-memory registry only supports
 card patching; native callbacks work after a host restart by rereading the
 persisted original Q.
 
-Remi reads and summarizes the same Q before normal card delivery. Unavailable
-Remi, its own question, or the explicit summary deadline allows original-question
-fallback. Web and card answers use the same server authority. Saved answers and
+Remi reads and summarizes the same Issue Q before normal card delivery.
+Unavailable Remi, its own question, or the explicit summary deadline allows
+original-question fallback. A Chat Q has no Remi step: its member answers it in
+the original Chat, and a Feishu-bound Chat gets the original-question card at
+once (see [unified questions](../dev/questions.md)). Web and card answers use the same server authority. Saved answers and
 actual provider consumption remain separate, including controlled continuation
 after a process exit; see [unified questions](../dev/questions.md).

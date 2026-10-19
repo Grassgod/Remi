@@ -139,7 +139,8 @@ function questionFlow() {
   return { ...f, ask, respond, interaction };
 }
 
-async function notifiedWorkerQuestion(suffix: string) {
+/** A native Q from a worker Agent in a transport Chat; the bot's own Agent (Remi) is not the asker. */
+async function workerQuestion(suffix: string) {
   const f = questionFlow();
   const worker = f.store.createAgent({ name: "Private Chat worker", provider: "codex", runtimeId: f.runtimeId, visibility: "private" });
   f.store.replaceFeishuBotAgentRoutes("local", [{ scope: "chat", chatId: `oc_kind_${suffix}`, agentId: worker.id }]);
@@ -147,17 +148,12 @@ async function notifiedWorkerQuestion(suffix: string) {
   for (const row of f.store.claimFeishuBotOutbounds("local", f.runtimeId)) f.store.reportFeishuBotOutbound("local", f.runtimeId, row.id,
     { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
   const request = f.ask(taskId), original = f.store.getQuestion(request.id)!;
-  const record = f.store.getMessage(request.id)!.metadata.question as { presentation_session_id: string };
-  const notification = f.store.listMessages(record.presentation_session_id).find(message => message.metadata.question_present_request === true)!;
-  expect(notification.metadata.root_question_id).toBe(request.id); expect(notification.reply_to_id).toBeNull();
-  expect(notification.session_id).not.toBe(original.session_id);
-  const turn = f.store.getTurn(String(notification.metadata.delivery_turn_id))!;
-  const claimed = f.store.claimTask(f.runtimeId)!;
-  expect(claimed.id).toBe(turn.current_attempt_id!); f.store.startTask(claimed.id);
-  const token = await f.store.createTaskAccessToken(f.store.getTask(claimed.id)!, "local");
+  // A Chat Q never asks Remi to present it: no request, no Remi Chat, no Remi turn.
+  expect(db!.query("SELECT id FROM multiremi_conversation_log WHERE kind='message' AND metadata LIKE '%question_present_request%'").all()).toEqual([]);
+  expect(db!.query("SELECT id FROM multiremi_chat_sessions WHERE agent_id=?").all(f.agent.id)).toEqual([]);
+  expect(f.store.claimTask(f.runtimeId)).toBeNull();
   const app = createMultiremiApp({ store: f.store, authToken: "kind-question-master" });
-  const headers = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
-  return { ...f, request, original, record, app, headers };
+  return { ...f, worker, request, original, app };
 }
 
 describe("C5 full fake-channel delivery", () => {
@@ -359,65 +355,47 @@ describe("C5 full fake-channel delivery", () => {
     expect(f.store.getQuestion(request.id)?.status).toBe("pending");
   });
 
-  it("waits for Remi presentation before a transport Chat card and only falls back at the summary deadline", () => {
-    const f = questionFlow();
-    const worker = f.store.createAgent({ name: "Chat worker", provider: "codex", runtimeId: f.runtimeId });
-    f.store.replaceFeishuBotAgentRoutes("local", [{ scope: "chat", chatId: "oc_kind_summary_gate", agentId: worker.id }]);
-    const taskId = f.inbound("summary_gate").taskId;
-    for (const row of f.store.claimFeishuBotOutbounds("local", f.runtimeId)) f.store.reportFeishuBotOutbound("local", f.runtimeId, row.id,
-      { claimToken: row.claimToken, status: "sent", externalMessageId: `om_${row.id}` });
-    const request = f.ask(taskId);
-    const deadline = Date.parse(String(request.payload.question_summary_wait_until));
-    expect(Number.isFinite(deadline)).toBe(true);
-    for (let i = 0; i < 2; i++) expect(f.store.claimFeishuBotOutbounds("local", f.runtimeId).filter(row => row.kind === "interaction_card")).toEqual([]);
-    expect(f.store.getQuestion(request.id)?.summary).toBeNull();
-    setSystemTime(new Date(deadline + 1));
+  it("sends a worker's transport Chat card with the original question at once, without a Remi summary wait", async () => {
+    const f = await workerQuestion("summary_gate"), { request } = f;
+    expect(request.payload.question_summary_wait_until).toBeNull();
     const card = f.interaction();
     expect(card.humanRequestId).toBe(request.id); expect(card.interactionOpenId).toBe("ou_kind_owner");
-    expect(f.store.getQuestion(request.id)?.original_message).toBe("Continue?");
+    expect(f.store.getQuestion(request.id)).toMatchObject({ summary: null, original_message: "Continue?",
+      current_handler: { type: "member", id: "mem_local_local" } });
   });
 
-  it("authorizes Remi only in the notified Chat lane to read and present the same original worker Q", async () => {
-    const f = await notifiedWorkerQuestion("present_lane"), { request, original, app, headers } = f;
-    expect((await app.request(`/api/messages/${request.id}/question`, { headers })).status).toBe(200);
-    expect((await app.request(`/api/messages/${request.id}`, { headers })).status).toBe(403);
+  it("gives Remi no lane to read or present a worker's Chat Q", async () => {
+    const f = await workerQuestion("present_lane"), { request, original, app } = f;
     const unrelated = f.store.createChatSession({ agentId: f.agent.id, creatorId: "local", title: "Unrelated Remi work" });
     const other = f.store.createTask({ agentId: f.agent.id, chatSessionId: unrelated.id, prompt: "No Q notification", priority: 100 });
     expect(f.store.claimTask(f.runtimeId)?.id).toBe(other.id); f.store.startTask(other.id);
-    const otherToken = await f.store.createTaskAccessToken(f.store.getTask(other.id)!, "local");
-    const wrong = { Authorization: `Bearer ${otherToken.token}`, "Content-Type": "application/json" };
-    expect((await app.request(`/api/messages/${request.id}/question`, { headers: wrong })).status).toBe(403);
-    expect((await app.request(`/api/messages/${request.id}/question/present`, { method: "POST", headers: wrong,
-      body: JSON.stringify({ expected_route_revision: original.route_revision, summary: "Wrong lane" }) })).status).toBe(403);
-    const presented = await app.request(`/api/messages/${request.id}/question/present`, { method: "POST", headers,
-      body: JSON.stringify({ expected_route_revision: original.route_revision, summary: "Read the worker's original options" }) });
-    expect(presented.status, await presented.clone().text()).toBe(200);
-    const card = f.interaction();
-    expect(card.humanRequestId).toBe(request.id); expect(card.interactionOpenId).toBe("ou_kind_owner");
-    expect(f.store.getQuestion(request.id)?.session_id).toBe(original.session_id);
-    expect(f.store.getQuestion(request.id)?.summary?.body_md).toBe("Read the worker's original options");
+    const token = await f.store.createTaskAccessToken(f.store.getTask(other.id)!, "local");
+    const remi = { Authorization: `Bearer ${token.token}`, "Content-Type": "application/json" };
+    expect((await app.request(`/api/messages/${request.id}/question`, { headers: remi })).status).toBe(403);
+    expect((await app.request(`/api/messages/${request.id}/question/present`, { method: "POST", headers: remi,
+      body: JSON.stringify({ expected_route_revision: original.route_revision, summary: "No lane" }) })).status).toBe(403);
+    expect(f.store.getQuestion(request.id)?.summary).toBeNull();
   });
 
-  it("moves presentation to a private Chat for the new human and revokes the old Remi notification lane", async () => {
-    const f = await notifiedWorkerQuestion("handoff_lane"), { request, original, record, app, headers } = f;
-    expect((await app.request(`/api/messages/${request.id}/question`, { headers })).status).toBe(200);
+  it("moves a worker's Chat Q to the new responsible human without opening a Remi Chat", async () => {
+    const f = await workerQuestion("handoff_lane"), { request, original, app } = f;
+    const pat = async (userId: string, name: string) => ({ Authorization: `Bearer ${(await f.store.createAccessToken({ type: "pat", name, workspaceId: "local", userId })).token}` });
+    const oldHuman = await pat(f.store.getWorkspaceMember("mem_local_local")!.userId!, "Previous human");
+    expect((await app.request(`/api/messages/${request.id}/question`, { headers: oldHuman })).status).toBe(200);
     const nextUser = f.store.getOrCreateUser({ externalId: "kind-next-human", name: "New responsible human" });
     const next = f.store.createWorkspaceMember({ workspaceId: "local", userId: nextUser.id, name: nextUser.name, role: "member" });
     f.store.upsertFeishuBotConfig("local", { agentId: f.agent.id, runtimeId: f.runtimeId, appId: f.config.appId,
       appSecretOp: "keep", domain: "feishu", enabled: true, responsibleMemberId: next.id });
     const moved = f.store.getQuestion(request.id)!;
     expect(moved.current_handler).toEqual({ type: "member", id: next.id });
+    expect(moved.route_revision).toBeGreaterThan(original.route_revision);
     expect(moved.session_id).toBe(original.session_id);
-    const newRecord = f.store.getMessage(request.id)!.metadata.question as { presentation_session_id: string };
-    expect(newRecord.presentation_session_id).not.toBe(record.presentation_session_id);
-    expect(f.store.getChatSession(newRecord.presentation_session_id)).toMatchObject({ creatorId: nextUser.id, agentId: f.agent.id, workspaceId: "local" });
-    expect((await app.request(`/api/messages/${request.id}/question`, { headers })).status).toBe(403);
-    expect((await app.request(`/api/messages/${request.id}/question/present`, { method: "POST", headers,
-      body: JSON.stringify({ expected_route_revision: moved.route_revision, summary: "Old notification" }) })).status).toBe(403);
-    const oldHuman = await f.store.createAccessToken({ type: "pat", name: "Previous human", workspaceId: "local",
-      userId: f.store.getWorkspaceMember("mem_local_local")!.userId! });
-    expect((await app.request(`/api/sessions/${newRecord.presentation_session_id}/messages`,
-      { headers: { Authorization: `Bearer ${oldHuman.token}` } })).status).toBe(403);
+    expect(f.store.getTaskHumanRequest(request.id)!.payload.question_summary_wait_until).toBeNull();
+    expect(db!.query("SELECT id FROM multiremi_chat_sessions WHERE agent_id=?").all(f.agent.id)).toEqual([]);
+    expect((await app.request(`/api/messages/${request.id}/question`, { headers: oldHuman })).status).toBe(403);
+    const view = await app.request(`/api/messages/${request.id}/question`, { headers: await pat(nextUser.id, "Next human") });
+    expect(view.status).toBe(200);
+    expect(((await view.json()) as { question: { actions: { allowed: string[] } } }).question.actions.allowed).toContain("answer");
   });
 
   it("records a permanently rejected native CoT as failed while the independent result handler still delivers", async () => {
