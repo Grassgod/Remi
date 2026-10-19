@@ -80,6 +80,63 @@ pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
       expect(() => h.store.answerQuestion(h.questionId, { expected_route_revision: 3, response: { answer: 'A' } }, { type: 'member', id: human.id })).toThrow('question_handler_required');
     } finally { if (prior === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = prior; }
   });
+  it('a Chat Q stays in its Chat: no Remi summary, no Remi Chat, answerable there, while an Issue Q still asks Remi', async () => {
+    const f = fixture();
+    const prior = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 13).toString('base64');
+    try {
+      const remiHost = f.store.registerRuntime({ name: 'Remi host', provider: 'codex', daemonId: 'chat-q-remi', maxConcurrency: 8 });
+      const remi = f.store.createAgent({ name: 'Remi', provider: 'codex', runtimeId: remiHost.id });
+      f.store.upsertFeishuBotConfig('local', { agentId: remi.id, runtimeId: remiHost.id, appId: 'cli_chat_q_remi',
+        appSecretOp: 'set', appSecret: 'synthetic-chat-question', domain: 'feishu', enabled: false });
+      const remiChats = () => f.db.query('SELECT id FROM multiremi_chat_sessions WHERE agent_id=?').all(remi.id);
+      const remiTurns = () => f.db.query('SELECT id FROM multiremi_turns WHERE agent_id=?').all(remi.id);
+      const presentRequests = (id: string) => f.db.query(`SELECT id,session_id FROM multiremi_conversation_log WHERE kind='message' AND metadata LIKE ? AND metadata LIKE '%question_present_request%'`).all(`%${id}%`);
+
+      const h = setup(f);
+      expect(h.store.getQuestion(h.questionId)).toMatchObject({ session_id: h.chat.id, stage: 'human',
+        current_handler: { type: 'member', id: 'mem_local_local' }, summary: null, wait_status: 'waiting' });
+      expect((h.store.getMessage(h.questionId)!.metadata.question as { summary_wait_until?: string | null }).summary_wait_until).toBeNull();
+      expect(h.store.getTaskHumanRequest(h.questionId)!.payload.question_summary_wait_until).toBeNull();
+      expect(remiChats()).toEqual([]);
+      expect(remiTurns()).toEqual([]);
+      expect(presentRequests(h.questionId)).toEqual([]);
+
+      // The Chat's creator reads and answers the same Q from the original Chat.
+      const { createMultiremiApp } = await import('@multiremi/api.js');
+      const pat = await h.store.createAccessToken({ type: 'pat', name: 'Chat creator', userId: 'local', workspaceId: 'local' });
+      const app = createMultiremiApp({ store: h.store, authToken: 'chat-q-master' });
+      const headers = { Authorization: `Bearer ${pat.token}`, 'Content-Type': 'application/json' };
+      const log = await (await app.request(`/api/sessions/${h.chat.id}/log?before=30`, { headers })).json() as { entries: Array<{ id: string }> };
+      expect(log.entries.map(entry => entry.id)).toContain(h.questionId);
+      const view = await (await app.request(`/api/messages/${h.questionId}/question`, { headers })).json() as { question: { actions: { allowed: string[] } } };
+      expect(view.question.actions.allowed).toContain('answer');
+      const answered = await app.request(`/api/messages/${h.questionId}/question/answer`, { method: 'POST', headers,
+        body: JSON.stringify({ expected_route_revision: 1, response: { answers: { 'Choose Chat direction': 'A' } } }) });
+      expect(answered.status, await answered.clone().text()).toBe(200);
+      expect(h.store.getQuestion(h.questionId)).toMatchObject({ status: 'answered', answer: { actor: { type: 'member', id: 'mem_local_local' } } });
+      expect((await answered.json() as { message: { session_id: string } }).message.session_id).toBe(h.chat.id);
+      expect(h.store.getTurn(h.turn.id)?.status).toBe('running');
+      expect(remiChats()).toEqual([]);
+      expect(remiTurns()).toEqual([]);
+
+      // An Issue Q at the human stage keeps Remi's summary step in its Issue.
+      const issue = f.createIssue({ title: 'No execution owner' });
+      const issueTask = h.store.createTask({ agentId: h.agent.id, issueId: issue.id, prompt: 'Issue work' });
+      expect(h.store.claimTask(h.runtime.id)?.id).toBe(issueTask.id); h.store.startTask(issueTask.id);
+      const issueTurn = h.store.getTurnForAttempt(issueTask.id)!;
+      const created = h.store.getDaemonTurnBridge().rpc('turn.decision', { turn_id: issueTurn.id, attempt_id: issueTask.id, wait_id: `issue_wait_${issueTask.id}`,
+        dedupe_key: `issue_question_${issueTask.id}`, options: [{ label: 'A', value: 'A' }], body_md: 'Choose Issue direction',
+        metadata: { kind: 'question', questions: [{ fieldKey: 'direction', question: { question: 'Choose Issue direction', options: [{ label: 'A' }] } }] } },
+        { runtimeId: h.runtime.id, daemonId: 'chat-q-daemon', workspaceId: 'local' });
+      expect(created).toMatchObject({ ok: true });
+      const issueQ = String(created.message_id);
+      expect(h.store.getQuestion(issueQ)).toMatchObject({ stage: 'human', current_handler: null });
+      expect(Date.parse(String(h.store.getTaskHumanRequest(issueQ)!.payload.question_summary_wait_until))).toBeGreaterThan(Date.now());
+      expect(presentRequests(issueQ).map(row => row.session_id)).toEqual([h.store.getOrCreateDefaultIssueSession(issue.id).id]);
+      expect(remiChats()).toEqual([]);
+    } finally { if (prior === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = prior; }
+  });
   it('compatibility creation without a native wait nonce cannot treat running DB status as a live callback', () => {
     const h = setup(fixture(), false, false);
     expect(h.store.getTask(h.task.id)?.status).toBe('awaiting_human');

@@ -961,7 +961,9 @@ export function ChatWindow({
        *  We key off `noAgent` (the resolved-empty state) rather than
        *  `!activeAgent`, so the loading window between mount and the
        *  first agent-list response stays banner-free. */}
-      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} enabled={chatVisible} />
+      {/* The Chat's own open questions stay answerable here whether or not a
+       *  turn is in flight; the running turn's answered ones stay as its record. */}
+      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} open enabled={chatVisible} />
 
       {noAgent ? (
         <NoAgentBanner />

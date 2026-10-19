@@ -10,6 +10,7 @@ import {
   type TaskHumanRequest,
 } from "@multiremi/core/chat/human-requests";
 import { useActorName } from "@multiremi/core/workspace/hooks";
+import { useWorkspaceId } from "@multiremi/core/hooks";
 import { Button } from "@multiremi/ui/components/ui/button";
 import { Input } from "@multiremi/ui/components/ui/input";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
@@ -25,15 +26,21 @@ const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
  * One summary line per permission or AskUserQuestion of an in-flight turn,
  * including the ones already answered, so the run reads like its card. Each
  * line opens the question drawer; answering keeps the line (and drawer) here.
+ *
+ * `open` (Chat) also lists every question of the session still waiting for an
+ * answer, with or without an in-flight turn: the Chat's member answers its own
+ * Q here whatever state the pending task is in.
  */
-export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true, getActorName }: { taskId: string | null; sessionId?: string; turnId?: string; enabled?: boolean; getActorName?: (type: string, id: string) => string }) {
+export function HumanRequestDock({ taskId, sessionId, turnId, open = false, enabled = true, getActorName }: { taskId: string | null; sessionId?: string; turnId?: string; open?: boolean; enabled?: boolean; getActorName?: (type: string, id: string) => string }) {
   const { t } = useT("chat");
+  const wsId = useWorkspaceId();
   const names = useActorName({ enabled: enabled && !getActorName });
+  const active = enabled && (open || Boolean(taskId));
   const { data, error, isFetching, refetch } = useQuery({
-    ...humanRequestsOptions(taskId ?? "", sessionId, turnId),
-    enabled: enabled && Boolean(taskId),
+    ...humanRequestsOptions(wsId, sessionId, { turnId: taskId ? turnId : null, open }),
+    enabled: active && Boolean(wsId && sessionId),
   });
-  if (taskId && error) {
+  if (active && error) {
     return (
       <div className="flex items-center justify-between gap-2 border-t border-destructive/30 bg-destructive/5 px-3 py-2">
         <span className="text-xs text-destructive">{t(($) => $.human_requests.load_failed)}</span>
@@ -44,7 +51,7 @@ export function HumanRequestDock({ taskId, sessionId, turnId, enabled = true, ge
     );
   }
   const requests = data ?? [];
-  if (!taskId || requests.length === 0) return null;
+  if (!active || requests.length === 0) return null;
   return (
     <div className="flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2">
       {requests.map((request) => (

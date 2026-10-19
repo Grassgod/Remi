@@ -32,7 +32,6 @@ interface QuestionRecord {
   status: QuestionView['status'];
   summary: QuestionView['summary'];
   summary_wait_until?: string | null;
-  presentation_session_id?: string | null;
   answer: QuestionAnswer | null;
   answer_revision: number;
   history: QuestionHistoryEvent[];
@@ -423,7 +422,7 @@ export class Questions {
         first ??= sent;
       }
       this.event(record, record.history.length ? 'transfer' : 'created', null, { handler: null, source_message_id: first?.id, source_session_id: session });
-      this.requestPresentation(message, record, session, null, events);
+      this.requestPresentation(message, record, session, events);
       return;
     }
     const session = step.issue_id ? this.ctx.issueSessions().getOrCreateDefaultIssueSessionWithinTransaction(step.issue_id).id : message.session_id;
@@ -436,32 +435,23 @@ export class Questions {
         : `问题 ${message.id} 等待您处理。原问题：\n${message.body_md}\n使用 remi message question get ${message.id} 查看原题和选项；答复时必须提交路由版本 ${record.route_revision}。`,
       metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_notification: true, source_question_session_id: message.session_id } }, events).message;
     this.event(record, record.history.length ? 'transfer' : 'created', null, { handler, source_message_id: notification.id, source_session_id: notification.session_id });
-    if (step.stage === 'human') this.requestPresentation(message, record, session, handler, events);
+    // A named human step is a Chat Q's one member, who answers it in the
+    // original Chat. It never waits for a Remi summary or opens a Remi Chat:
+    // a Feishu-bound Chat gets the original question at once.
+    if (step.stage === 'human') {
+      record.summary_wait_until = null;
+      this.ctx.feishuBot().enqueueQuestionPresentationWithinTransaction(message.id);
+    }
   }
-  /** Remi summarizes the same Q at the human stage; the web always retains the original question. */
-  private requestPresentation(message: UnifiedMessage, record: QuestionRecord, session: string, handler: QuestionActor | null, events: CommitEventQueue) {
+  /** Remi summarizes an Issue Q at the human stage; the web always retains the original question. */
+  private requestPresentation(message: UnifiedMessage, record: QuestionRecord, session: string, events: CommitEventQueue) {
     const bot = this.ctx.feishuBot().getFeishuBotConfig(record.workspace_id);
     const remi = bot?.agentId ? this.ctx.agents().getAgent(bot.agentId) : null;
     if (remi && !remi.archivedAt && remi.workspaceId === record.workspace_id && remi.id !== message.sender_id) {
       record.summary_wait_until = new Date(Date.now() + 60_000).toISOString();
-      let presentationSession = session;
-      if (handler) {
-        // A Chat execution lane belongs to its configured Agent. Remi gets a
-        // notification Chat, while root_question_id keeps the original Q.
-        const human = this.ctx.workspaces().getWorkspaceMember(handler.id);
-        if (!human || human.archivedAt || human.workspaceId !== record.workspace_id) return;
-        const creator = human.userId ?? human.id;
-        const existing = record.presentation_session_id ? this.ctx.chat().getChatSession(record.presentation_session_id) : null;
-        const chat = existing?.status === 'active' && existing.workspaceId === record.workspace_id
-          && existing.agentId === remi.id && existing.creatorId === creator ? existing
-          : this.ctx.chat().createChatSessionWithinTransaction({ workspaceId: record.workspace_id, agentId: remi.id,
-            creatorId: creator, title: `原问题 ${message.id} 呈现` });
-        presentationSession = chat.id;
-        record.presentation_session_id = chat.id;
-      }
-      sendMessageWithinTransaction(this.ctx, { session_id: presentationSession, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now',
+      sendMessageWithinTransaction(this.ctx, { session_id: session, sender: { type: 'platform', id: null }, to: { type: 'agent', ref: remi.id }, message_kind: 'request', wake_requested: 'now',
         dedupe_key: `question-present:${message.id}:${record.route_revision}`, metadata: { root_question_id: message.id, question_route_revision: record.route_revision, question_present_request: true },
-        body_md: `请读取原问题 ${message.id}（remi message question get ${message.id}），总结背景、原选项与建议，然后用 remi message question present ${message.id} --revision ${record.route_revision} --summary <总结> 呈现同一个问题。${handler ? `Chat 问题处理人 ${handler.id}` : '问题已交给工作区成员处理'}；不要另建 AUQ，也不要代答批准。` }, events);
+        body_md: `请读取原问题 ${message.id}（remi message question get ${message.id}），总结背景、原选项与建议，然后用 remi message question present ${message.id} --revision ${record.route_revision} --summary <总结> 呈现同一个问题。问题已交给工作区成员处理；不要另建 AUQ，也不要代答批准。` }, events);
     } else record.summary_wait_until = null;
     // This intent is durable, but dispatch waits for Remi present or its
     // explicit deadline; the web always retains the original question.

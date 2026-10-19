@@ -22,6 +22,7 @@ import { createChatStore, registerChatStore, useChatStore, useRecentContextStore
 import { setCurrentWorkspace } from "@multiremi/core/platform";
 import { clearChatLogPool } from "@multiremi/core/session-log/chat-log-pool";
 import { chatKeys } from "@multiremi/core/chat/queries";
+import { humanRequestsOptions } from "@multiremi/core/chat/human-requests";
 import { workspaceKeys } from "@multiremi/core/workspace/queries";
 import { agentTaskSnapshotKeys } from "@multiremi/core/agents/queries";
 import { pinKeys } from "@multiremi/core/pins/queries";
@@ -266,6 +267,8 @@ function Shell() {
 
 function isDeferredShellKey(key: readonly unknown[]): boolean {
   if (["chat", "pins", "invitations", "task-messages", "task-human-requests"].includes(String(key[0]))) return true;
+  // The Chat's question lines (HumanRequestDock) sit under the Q key space.
+  if (key[0] === "question") return key[2] === "requests";
   if (key[0] === "workspaces") return ["agents", "squads", "agent-task-snapshot", "members"].includes(String(key[2]));
   if (key[0] === "inbox") return key[2] === "summary";
   if (key[0] === "runtimes") return key[1] === "latestVersion";
@@ -388,7 +391,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       [chatKeys.pendingTasks("ws-1"), { tasks: [] }],
       [chatKeys.pendingTask(sessionId), { task_id: taskId, status: "running" }],
       [chatKeys.queue("ws-1", sessionId), { items: [], paused: null }],
-      [["task-trace", taskId], CACHED_TRACE], [[...chatKeys.humanRequests(taskId), sessionId], []],
+      [["task-trace", taskId], CACHED_TRACE], [humanRequestsOptions("ws-1", sessionId, { open: true }).queryKey, []],
     ];
     for (const [key, data] of cached) client.setQueryData(key, data);
     // The reopened chat still finds its session, so the queue mounts again.
