@@ -152,6 +152,46 @@ export function deriveAgentPresenceDetail(input: DerivePresenceInput): AgentPres
   };
 }
 
+// How far presence may judge a runtime list past the moment it was read. The
+// list is re-read every 30 s while the page is visible and not at all while it
+// is hidden, so in normal use it is never this old. A list that is older (a
+// tab back from the background, a laptop back from sleep) still holds the
+// heartbeats it was read with: judged against the current clock, a machine
+// that was online then reads as five minutes silent, and the agent as offline
+// until the next read lands. Twice the refresh interval, and well inside the
+// five-minute heartbeat threshold minus the 15 s heartbeat cadence.
+export const PRESENCE_RUNTIME_LIST_MAX_AGE_MS = 60_000;
+
+export interface PresenceClock {
+  /** The instant presence is judged at. */
+  at: number;
+  /** The runtime list is older than PRESENCE_RUNTIME_LIST_MAX_AGE_MS. */
+  aged: boolean;
+}
+
+// An aged list is judged at most PRESENCE_RUNTIME_LIST_MAX_AGE_MS after its
+// read, so it keeps saying what it said when it was fresh instead of decaying
+// against the wall clock. A failed read is the exception: no fresher list is
+// on its way, so the list it left behind is judged at the current time.
+export function presenceClock(
+  now: number,
+  runtimeList: { readAt: number; failed: boolean },
+): PresenceClock {
+  const aged = !runtimeList.failed && now - runtimeList.readAt > PRESENCE_RUNTIME_LIST_MAX_AGE_MS;
+  return { at: aged ? runtimeList.readAt + PRESENCE_RUNTIME_LIST_MAX_AGE_MS : now, aged };
+}
+
+// Whether a derived detail may be shown. An aged list can keep its last
+// `online`, but it cannot establish `offline` or `unstable`: those wait for a
+// fresh read (callers treat the detail as still loading), so an alarm such as
+// the Chat offline banner never comes from a list too old to judge.
+export function isPresenceEstablished(
+  detail: AgentPresenceDetail,
+  clock: PresenceClock,
+): boolean {
+  return !clock.aged || detail.availability === "online" || detail.availability === "archived";
+}
+
 // Workspace-level batch builder. One pass over the workspace's agents
 // produces a Map<agentId, AgentPresenceDetail> that every list / card /
 // runtime sub-page can read without re-deriving.

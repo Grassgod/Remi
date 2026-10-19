@@ -9,6 +9,8 @@ import { agentTaskSnapshotOptions } from "./queries";
 import {
   buildPresenceMap,
   deriveAgentPresenceDetail,
+  isPresenceEstablished,
+  presenceClock,
   resolveAgentRuntimes,
 } from "./derive-presence";
 import type { AgentPresenceDetail } from "./types";
@@ -41,7 +43,9 @@ function usePresenceTick(): number {
  * `Map.get(id)` — O(1) reads, no extra subscriptions.
  *
  * Returned value:
- *   - `byAgent`: ready-to-read Map. Empty if data is still loading.
+ *   - `byAgent`: ready-to-read Map. Empty if data is still loading; an agent
+ *      an aged runtime list cannot judge (see `presenceClock`) has no entry
+ *      until the list is re-read.
  *   - `loading`: true until all three input queries have resolved at least
  *      once. Callers can render skeletons during loading.
  *
@@ -70,7 +74,12 @@ export function useWorkspacePresenceMap(
     ...agentListOptions(wsId ?? ""),
     enabled: !!wsId && snapshotGated,
   });
-  const { data: runtimes, isPending: runtimesPending, isError: runtimesErr } = useQuery({
+  const {
+    data: runtimes,
+    dataUpdatedAt: runtimesReadAt,
+    isPending: runtimesPending,
+    isError: runtimesErr,
+  } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
@@ -89,14 +98,20 @@ export function useWorkspacePresenceMap(
     if (!safeAgents || !safeRuntimes || !safeSnapshot) {
       return new Map<string, AgentPresenceDetail>();
     }
-    return buildPresenceMap({
+    const clock = presenceClock(Date.now(), { readAt: runtimesReadAt, failed: runtimesErr });
+    const map = buildPresenceMap({
       agents: safeAgents,
       runtimes: safeRuntimes,
       snapshot: safeSnapshot,
-      now: Date.now(),
+      now: clock.at,
     });
+    // Rows an aged runtime list cannot judge read as loading until it is re-read.
+    for (const [id, detail] of map) {
+      if (!isPresenceEstablished(detail, clock)) map.delete(id);
+    }
+    return map;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [agents, runtimes, runtimesReadAt, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
 
   return {
     byAgent,
@@ -112,8 +127,10 @@ export function useWorkspacePresenceMap(
 
 /**
  * Single-agent presence detail: availability + last task state + counts +
- * (when failed) failure reason and timestamp. Returns "loading" only while
- * the underlying queries haven't resolved yet — a missing runtime is a
+ * (when failed) failure reason and timestamp. Returns "loading" while the
+ * underlying queries haven't resolved yet, and while a runtime list older than
+ * PRESENCE_RUNTIME_LIST_MAX_AGE_MS would be the only evidence for offline /
+ * unstable (see `presenceClock`) — a missing runtime in a fresh list is a
  * real state (offline) and resolves into a non-loading detail.
  *
  * For surfaces that already have a list of agents in hand (Agents page,
@@ -144,7 +161,7 @@ export function useAgentPresenceDetail(
     ...agentListOptions(wsId ?? ""),
     enabled: !!wsId && snapshotGated,
   });
-  const { data: runtimes, isError: runtimesErr } = useQuery({
+  const { data: runtimes, dataUpdatedAt: runtimesReadAt, isError: runtimesErr } = useQuery({
     ...runtimeListOptions(wsId ?? ""),
     enabled: !!wsId,
   });
@@ -176,7 +193,12 @@ export function useAgentPresenceDetail(
     const candidates = resolveAgentRuntimes(agent, safeRuntimes);
 
     const tasks = safeSnapshot.filter((t) => t.agent_id === agentId);
-    return deriveAgentPresenceDetail({ agent, runtimes: candidates, tasks, now: Date.now() });
+    // A runtime list cached across a hidden tab or a sleep is judged as of its
+    // read, and cannot report offline until it is re-read: the composer must not
+    // flash "no online machine" for an agent whose machine is online.
+    const clock = presenceClock(Date.now(), { readAt: runtimesReadAt, failed: runtimesErr });
+    const detail = deriveAgentPresenceDetail({ agent, runtimes: candidates, tasks, now: clock.at });
+    return isPresenceEstablished(detail, clock) ? detail : "loading";
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [wsId, agentId, agents, runtimes, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
+  }, [wsId, agentId, agents, runtimes, runtimesReadAt, snapshot, agentsErr, runtimesErr, snapshotErr, tick]);
 }
