@@ -11,6 +11,7 @@
     "placeholder_default": "メッセージを入力…",
     "send_tooltip": "送信",
     "stop_tooltip": "停止",
+    "stop_confirm": "もう一度 Esc を押して確定：{{label}}",
     "send_failed": "送信できませんでした。下書きは保存されています。再試行してください。",
     "context_label": "コンテキストウィンドウの使用量",
     "context_usage": "使用済み {{used}} / {{size}} · {{percent}}",

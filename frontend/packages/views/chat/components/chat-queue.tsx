@@ -57,9 +57,14 @@ interface PendingDelete {
   commit: () => Promise<void>;
 }
 
-/** Lets the composer settle deletes still behind their undo before it enqueues. */
+/**
+ * Lets the composer settle deletes still behind their undo before it enqueues,
+ * and steer the first queued row from its steer shortcut.
+ */
 export interface ChatQueueController {
   flushDeletes: () => Promise<void>;
+  /** Steers the first row its 「引导」 button could steer; false when there is none. */
+  steerFirst: () => boolean;
 }
 
 /**
@@ -175,9 +180,11 @@ export function ChatQueue({
     [flushDelete],
   );
 
+  // Set each render below, once the rows are known.
+  const steerFirstRef = useRef<() => boolean>(() => false);
   useEffect(() => {
     if (!controllerRef) return;
-    controllerRef.current = { flushDeletes };
+    controllerRef.current = { flushDeletes, steerFirst: () => steerFirstRef.current() };
     return () => {
       if (controllerRef.current?.flushDeletes === flushDeletes) controllerRef.current = null;
     };
@@ -291,6 +298,15 @@ export function ChatQueue({
         else if (!queueErrorItem(error)) toast.error(refusalText(error));
       },
     });
+  };
+
+  // The composer's steer shortcut on an empty composer (Codex): the first row
+  // whose 「引导」 is enabled, steered as that button would.
+  steerFirstRef.current = () => {
+    const first = archived ? undefined : rows.find((row) => row.kind === "server" && row.state === "queued");
+    if (first?.kind !== "server") return false;
+    runSteer(first.item);
+    return true;
   };
 
   /** Text the queue cannot keep goes back into the composer, never lost. */

@@ -19,7 +19,13 @@ vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "ws-1" }));
 vi.mock("sonner", () => ({ toast }));
 
 import { ApiError } from "@multiremi/core/api";
-import { ChatQueue, QUEUE_DELETE_UNDO_MS, QUEUE_PREVIEW_DELAY_MS, QUEUE_STALLED_GRACE_MS } from "./chat-queue";
+import {
+  ChatQueue,
+  QUEUE_DELETE_UNDO_MS,
+  QUEUE_PREVIEW_DELAY_MS,
+  QUEUE_STALLED_GRACE_MS,
+  type ChatQueueController,
+} from "./chat-queue";
 
 const row = (fields: Partial<QueuedChatMessage> = {}): QueuedChatMessage => ({
   id: "qmsg_1", session_id: "chat_1", body_md: "Then run the\n\n   migration tests", attachments: [],
@@ -29,11 +35,22 @@ const row = (fields: Partial<QueuedChatMessage> = {}): QueuedChatMessage => ({
 let queue: ChatQueueData;
 let client: QueryClient;
 
-function mount(props: { pendingTaskId?: string | null; onReleased?: () => void } = {}) {
+function mount(props: {
+  pendingTaskId?: string | null;
+  onReleased?: () => void;
+  archived?: boolean;
+  controllerRef?: { current: ChatQueueController | null };
+} = {}) {
   const onReleased = props.onReleased ?? vi.fn();
   const view = renderWithI18n(
     <QueryClientProvider client={client}>
-      <ChatQueue sessionId="chat_1" pendingTaskId={props.pendingTaskId === undefined ? "task_1" : props.pendingTaskId} onReleased={onReleased} />
+      <ChatQueue
+        sessionId="chat_1"
+        pendingTaskId={props.pendingTaskId === undefined ? "task_1" : props.pendingTaskId}
+        onReleased={onReleased}
+        archived={props.archived}
+        controllerRef={props.controllerRef}
+      />
     </QueryClientProvider>,
   );
   return { ...view, onReleased };
@@ -171,6 +188,42 @@ describe("ChatQueue steer", () => {
     fireEvent.click(within(item).getByRole("button", { name: RETRY }));
     await waitFor(() => expect(mock.resumeChatQueue).toHaveBeenCalledWith("chat_1"));
     await waitFor(() => expect(onReleased).toHaveBeenCalledOnce());
+  });
+
+  it("steers the first row its Steer button could steer for the composer's shortcut", async () => {
+    queue = { items: [
+      row({ id: "qmsg_failed", client_id: "client-f", status: "failed", error: "x" }),
+      row({ id: "qmsg_edit", client_id: "client-e" }),
+      row({ id: "qmsg_next", client_id: "client-n" }),
+      row({ id: "qmsg_last", client_id: "client-l" }),
+    ], paused: { reason: "send_failed", at: "t" } };
+    mock.steerQueuedChatMessage.mockResolvedValue({ item: row({ status: "released" }), message: { id: "msg_1" } });
+    const controllerRef: { current: ChatQueueController | null } = { current: null };
+    const { onReleased } = mount({ controllerRef });
+    await screen.findByRole("listitem", { name: /4:/ });
+    act(() => useChatStore.getState().startQueueEdit("chat_1", { itemId: "qmsg_edit", revision: 1, body_md: row().body_md, attachments: {} }));
+    let steered: boolean | undefined;
+    act(() => { steered = controllerRef.current?.steerFirst(); });
+    expect(steered).toBe(true);
+    await waitFor(() => expect(mock.steerQueuedChatMessage).toHaveBeenCalledWith("chat_1", "qmsg_next"));
+    expect(mock.steerQueuedChatMessage).toHaveBeenCalledOnce();
+    await waitFor(() => expect(onReleased).toHaveBeenCalledOnce());
+  });
+
+  it("steers nothing from the shortcut without a steerable row or in an archived Chat", async () => {
+    queue = { items: [row({ status: "failed", error: "x" })], paused: { reason: "send_failed", at: "t" } };
+    const controllerRef: { current: ChatQueueController | null } = { current: null };
+    const view = mount({ controllerRef });
+    await screen.findByRole("listitem", { name: /1:/ });
+    expect(controllerRef.current?.steerFirst()).toBe(false);
+    view.unmount();
+    expect(controllerRef.current).toBeNull();
+    queue = { items: [row()], paused: null };
+    client.clear();
+    mount({ controllerRef, archived: true });
+    await screen.findByRole("listitem", { name: /1:/ });
+    expect(controllerRef.current?.steerFirst()).toBe(false);
+    expect(mock.steerQueuedChatMessage).not.toHaveBeenCalled();
   });
 });
 

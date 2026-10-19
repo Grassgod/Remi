@@ -176,22 +176,35 @@ describe("new chat project selection", () => {
 });
 
 describe("follow-up preference", () => {
-  it("defaults to steer and persists the choice globally across workspaces", () => {
+  it("defaults to queue and persists the choice globally across workspaces", () => {
     const storage = memoryStorage();
     const store = createChatStore({ storage });
-    expect(store.getState().followUpMode).toBe("steer");
-    store.getState().setFollowUpMode("queue");
-    expect(storage.getItem("multimira:chat:followUpMode")).toBe("queue");
+    expect(store.getState().followUpMode).toBe("queue");
+    store.getState().setFollowUpMode("steer");
+    expect(storage.getItem("multimira:chat:followUpMode")).toBe("steer");
     workspace.slug = "workspace-b";
     workspace.rehydrate.forEach(callback => callback());
-    expect(store.getState().followUpMode).toBe("queue");
-    expect(createChatStore({ storage }).getState().followUpMode).toBe("queue");
+    expect(store.getState().followUpMode).toBe("steer");
+    expect(createChatStore({ storage }).getState().followUpMode).toBe("steer");
+  });
+
+  it("does not store the default, so a browser that never chose follows it", () => {
+    const storage = memoryStorage();
+    createChatStore({ storage });
+    workspace.rehydrate.forEach(callback => callback());
+    expect(storage.getItem("multimira:chat:followUpMode")).toBeNull();
+  });
+
+  it("keeps a stored steer choice made before queue became the default", () => {
+    const storage = memoryStorage();
+    storage.setItem("multimira:chat:followUpMode", "steer");
+    expect(createChatStore({ storage }).getState().followUpMode).toBe("steer");
   });
 
   it("ignores an unknown stored value", () => {
     const storage = memoryStorage();
     storage.setItem("multimira:chat:followUpMode", "interrupt");
-    expect(createChatStore({ storage }).getState().followUpMode).toBe("steer");
+    expect(createChatStore({ storage }).getState().followUpMode).toBe("queue");
   });
 });
 

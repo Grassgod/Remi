@@ -1017,6 +1017,7 @@ export function ChatWindow({
         onStop={handleStop}
         // The turn's own stop leaves background tasks running (PR 6 §6.3); its label says so.
         stopLabel={backgroundTasksRunning > 0 ? t(($) => $.bg_tasks.stop_turn_hint) : undefined}
+        onSteerFirstQueued={() => queueController.current?.steerFirst()}
         isRunning={!!pendingTaskId}
         disabled={isSessionArchived}
         noAgent={noAgent}
