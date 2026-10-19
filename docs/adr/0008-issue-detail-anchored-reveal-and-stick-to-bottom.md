@@ -75,6 +75,21 @@ so the mechanism cannot be owned by the issue timeline component.
    keys, dragging the scrollbar — releases the pin. Returning to within the pin
    threshold, `pin()`, or the existing "back to latest" control re-engages it.
 
+   The same observer also watches the scroll root, because the viewport can
+   change size while the content does not. Chat stacks its question lines,
+   follow-up queue, presence banners and archived row between the list and
+   the composer in one column; they answer on their own queries, usually after
+   the reveal, and a floating window can be resized. Each one moves the end of
+   the content out of view without resizing the content, so a content-only
+   observer never fired: a pinned list was left short of its end until some
+   unrelated resize, and the next scroll event read the gap as the reader
+   leaving and released the pin. A pinned bottom-mode list now holds its
+   distance across viewport changes in the same frame. A released or returning
+   list is left where it is, and element mode does not move, since a viewport
+   change leaves the target's offset in the content unchanged. Before the
+   reveal the reveal hook still owns the position: it re-aims every frame, and
+   a viewport change resets its stable-frame count through the target position.
+
    The "back to latest" control drives the hook's own return trip rather than the
    virtualizer's `scrollToIndex(LAST)`. The virtualizer can only place the last
    *row* at the viewport edge, while the agent-stream row and the composer live

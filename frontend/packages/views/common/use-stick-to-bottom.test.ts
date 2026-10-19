@@ -146,6 +146,134 @@ describe("useStickToBottom", () => {
     expect(fixture.root.scrollTop).toBe(300);
   });
 
+  describe("when the scroll root resizes and the content does not", () => {
+    // Chat's question lines, follow-up queue and banners sit between the list and
+    // the composer, and a floating window can be resized: the viewport changes by
+    // their height while the content keeps its own, so only the scroll root
+    // reports a resize.
+    const bottomDistance = (): number =>
+      fixture.root.scrollHeight - fixture.root.scrollTop - fixture.root.clientHeight;
+
+    it("keeps a pinned list at its end, inside the resize callback", () => {
+      fixture.userScroll(600);
+      const { result } = renderStick(baseProps());
+      expect(resize.countFor(fixture.root)).toBe(1);
+
+      fixture.setClientHeight(300);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+
+      expect(scrollTopInCallback).toEqual([700]);
+      expect(bottomDistance()).toBe(0);
+      expect(result.current.state).toBe("pinned");
+
+      // The scroll event the correction causes is the hook's own; before, the
+      // next scroll event read the uncorrected gap as the reader leaving.
+      fire(() => {
+        fixture.root.dispatchEvent(new Event("scroll"));
+      });
+      expect(result.current.state).toBe("pinned");
+    });
+
+    it("holds the pinned distance both ways", () => {
+      const { result } = renderStick(baseProps());
+      // 20px from the end: inside the pin window, so the machine stays pinned.
+      fire(() => {
+        fixture.userScroll(580);
+      });
+      expect(result.current.state).toBe("pinned");
+
+      fixture.setClientHeight(250);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(fixture.root.scrollTop).toBe(730);
+      expect(bottomDistance()).toBe(20);
+
+      // The chrome goes away again: the viewport grows back.
+      fixture.setClientHeight(400);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(fixture.root.scrollTop).toBe(580);
+      expect(bottomDistance()).toBe(20);
+      expect(result.current.state).toBe("pinned");
+    });
+
+    it("leaves a released reader where they are", () => {
+      const { result } = renderStick(baseProps());
+      fire(() => {
+        fixture.userScroll(300);
+      });
+      expect(result.current.state).toBe("released");
+
+      fixture.setClientHeight(300);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(fixture.root.scrollTop).toBe(300);
+      expect(result.current.state).toBe("released");
+    });
+
+    it("does not re-aim a returning glide", () => {
+      const { result } = renderStick(baseProps());
+      fire(() => {
+        fixture.userScroll(200);
+      });
+      vi.useFakeTimers();
+      Object.defineProperty(fixture.root, "scrollTo", { configurable: true, value: vi.fn() });
+      act(() => {
+        result.current.returnToBottom();
+      });
+
+      fixture.setClientHeight(300);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(fixture.root.scrollTop).toBe(200);
+      expect(result.current.state).toBe("returning");
+    });
+
+    it("does not move an element anchor, whose offset in the content is unchanged", () => {
+      fixture.setScrollHeight(2000);
+      fixture.addRow({ id: "comment-42", offset: 700, height: 100 });
+      fixture.root.scrollTop = 500;
+      const { result } = renderStick(baseProps({ mode: { kind: "element", id: "comment-42" } }));
+      expect(result.current.state).toBe("pinned");
+
+      fixture.setClientHeight(300);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(fixture.root.scrollTop).toBe(500);
+      expect(result.current.state).toBe("pinned");
+    });
+
+    it("follows the viewport from wherever the reveal left the list", () => {
+      // While hidden, the reveal owns the position and re-aims every frame; the
+      // machine is not observing yet.
+      const { result, rerender } = renderStick(baseProps({ enabled: false }));
+      expect(resize.countFor(fixture.root)).toBe(0);
+      fixture.setClientHeight(300);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(fixture.root.scrollTop).toBe(0);
+
+      // The reveal aims at the end of the shrunk viewport and enables the machine.
+      fixture.root.scrollTop = 700;
+      rerender(baseProps({ enabled: true }));
+      expect(result.current.state).toBe("pinned");
+
+      fixture.setClientHeight(220);
+      fire(() => {
+        resize.trigger(fixture.root);
+      });
+      expect(bottomDistance()).toBe(0);
+    });
+  });
+
   it.each([
     ["wheel up", (el: HTMLElement) => el.dispatchEvent(new WheelEvent("wheel", { deltaY: -1, bubbles: true }))],
     ["touch drag", (el: HTMLElement) => el.dispatchEvent(new Event("touchmove", { bubbles: true }))],
@@ -475,6 +603,7 @@ describe("useStickToBottom", () => {
     const { result, rerender } = renderStick(baseProps({ enabled: false }));
     expect(result.current.state).toBe("pinned");
     expect(resize.countFor(fixture.content)).toBe(0);
+    expect(resize.countFor(fixture.root)).toBe(0);
 
     fixture.setScrollHeight(1300);
     fire(() => {
@@ -488,6 +617,7 @@ describe("useStickToBottom", () => {
     // is at when it is enabled, so the next growth keeps that distance.
     rerender(baseProps({ enabled: true }));
     expect(resize.countFor(fixture.content)).toBe(1);
+    expect(resize.countFor(fixture.root)).toBe(1);
     fixture.setScrollHeight(1500);
     fire(() => {
       resize.trigger();
@@ -602,5 +732,6 @@ describe("useStickToBottom", () => {
     unmount();
     expect(vi.getTimerCount()).toBe(0);
     expect(resize.observed).not.toContain(fixture.content);
+    expect(resize.observed).not.toContain(fixture.root);
   });
 });
