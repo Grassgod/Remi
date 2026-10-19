@@ -143,7 +143,7 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 运行中有两种后续发送方式，取舍见 [ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md)：
 
 - **引导**：普通发送 `POST /api/sessions/:id/messages`，`wake_requested:"now"`，行为不变，送进正在运行的这一轮。Claude 与 Codex 的 daemon 用桥的原生引导把它注入正在进行的 prompt，不打断正在运行的命令（Claude 等当前工具调用结束后再注入，最多 30 s）；桥不支持、出错、这一轮恰好结束，或有待回答的权限或提问卡片时，退回到中止当前 prompt 后在同一会话重新提示（[ADR 0020](adr/0020-chat-follow-up-queue-and-native-steering.md)“原生引导”）。未读消息可用 `PATCH`/`DELETE /api/messages/:id` 编辑或删除，已进入轮输入的返回 409；编辑和删除留下日志标记。
-- **排队**：`POST /api/sessions/:id/queue` 把消息存进服务端队列表，不写对话日志。lane 没有 pending、running 或 awaiting_human 轮且未暂停时立即放行；否则在当前轮 completed 的终态事务里按入队顺序放行。放行把每条转成普通成员 now request，第一条建 pending 轮，其余合并进同一轮，正文全部内联；它们排在本轮回复之后进入日志。
+- **排队**：`POST /api/sessions/:id/queue` 把消息存进服务端队列表，不写对话日志。条目按入队顺序一次放行一条，与 Codex 一致：lane 没有 pending、running 或 awaiting_human 轮且未暂停时，入队立即放行最早的一条；否则在当前轮 completed 的终态事务里放行下一条，其余继续排队，等这一条开启的轮 completed 再放行下一条。放行的条目转成普通成员 now request，建 pending 轮、正文内联，排在本轮回复之后进入日志；这一轮没读到的 now 消息仍合并进同一个 pending 轮。
 
 排队的条目只有原发送人能改：`PATCH .../queue/:qid` 可带 `expected_revision`，`DELETE` 幂等，`POST .../queue/:qid/steer` 立即放行这一条（改为引导，重复调用返回同一条消息）。
 已被轮放行的条目再改或引导返回 409 `queued_message_consumed`，版本不符返回 409 `revision_conflict`，归档的 Chat 入队、引导和继续返回 409。每个 Chat 最多 50 条未放行条目，每条最多 10 个附件。
@@ -156,7 +156,7 @@ Project 资源列表变化或项目不可用时，已有工作副本保留。
 | `turn_ended` | 轮 failed，或被成员以外的身份（agent、supervisor 等）取消 | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行；或 resume |
 | `send_failed` | 放行某条失败；该条标为 failed，后面的条目不越过它 | resume，或编辑、删除、引导该条后不再有 failed 条目 |
 
-resume 清除暂停、把 failed 条目重置为 queued，lane 空闲时全部放行；队列为空时暂停自动清除。
+resume 清除暂停、把 failed 条目重置为 queued，lane 空闲时放行最早的一条；队列为空时暂停自动清除。
 归档时被取消的轮既不放行也不暂停；恢复后条目保留，resume、下一次入队或下一轮 completed 时放行。`wake=next_turn` 的含义不变，仍不会单独补铃。
 Web 输入框运行中按偏好（设置 →「偏好」→「聊天」，默认排队，与 Codex 一致；浏览器里已保存的选择优先）发送：↵ 换行，⌘↵ 用偏好的方式，⌘⇧↵ 这一条换用另一种；空闲时都是普通发送。输入框只有一个主按钮：空闲时是「发送」；运行中输入框为空时是「停止」，有内容时是向上箭头，名称为 ⌘↵ 会采用的「排队」或「引导」；编辑排队消息时是「保存」。运行中在输入框里连按两次 Esc（2 秒内）也会停止当前运行，输入框有内容时用它停止，草稿保留。偏好为排队时，在空输入框按 ⌘⇧↵ 引导第一条可引导的排队消息，焦点留在输入框；⌘↵ 在空输入框不做任何事。排队的消息显示在输入框上方的队列里，可逐条引导、编辑（载入输入框，保存时带 `expected_revision`）或删除（5 秒内可撤销）；暂停时显示原因和「继续」。没有 API 应答（网络错误、超时或网关 408/502/503/504）的排队请求标为无法确认送达，不自动重试。前端实现见[前端开发上下文](dev/frontend.md)。
 

@@ -564,8 +564,8 @@ export function ChatWindow({
     if (!sessionId || getCurrentWsId() !== wsId) throw new Error("Chat workspace changed");
     if (mode === "queue") {
       // Queued (排队): the row waits outside the log until this turn completes.
-      // An enqueue on an idle lane releases every queued row, so deletes still
-      // behind their undo are sent first.
+      // An enqueue on an idle lane releases the oldest queued row, which may be
+      // one still behind its undo, so those deletes are sent first.
       await queueController.current?.flushDeletes();
       try {
         const result = await enqueueMessage({
