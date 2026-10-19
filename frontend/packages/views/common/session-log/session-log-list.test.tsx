@@ -423,6 +423,71 @@ describe("SessionLogList", () => {
     view.restore();
   });
 
+  it("badges the arrow with whole log rows when the newest rendered row is a local send", () => {
+    // Chat's optimistic sends render at a fractional seq between two log rows and
+    // keep it once the server's row (same client id) replaces them.
+    const local = { clientId: "c_4", seq: 2 + 4 / 1_000_000 };
+    const keyOf = (row: SessionLogEntry) => {
+      const clientId = (row as SessionLogEntry & { metadata?: { client_id?: string } }).metadata?.client_id;
+      return clientId ?? row.id;
+    };
+    const transformEntries = (rows: readonly SessionLogEntry[]): SessionLogEntry[] => {
+      const confirmed = rows.some((row) => keyOf(row) === local.clientId);
+      const merged = rows.map((row) => keyOf(row) === local.clientId ? { ...row, seq: local.seq, id: "optimistic-c_4" } : row);
+      if (!confirmed) merged.push(entry(local.seq, { id: "optimistic-c_4", metadata: { client_id: local.clientId } } as Partial<SessionLogEntry>));
+      return merged.sort((left, right) => left.seq - right.seq);
+    };
+    const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1), entry(2)] } });
+    const view = renderList(replica, { scrollButton: "arrow", transformEntries, entryKey: keyOf });
+    reveal();
+
+    // The reader leaves the bottom while their own send is still local.
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+      view.root.scrollTop = 0;
+      fireEvent.scroll(view.root);
+    });
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).not.toBeNull();
+    expect(view.container.querySelector("[data-session-log-scroll-bottom-count]")).toBeNull();
+
+    // The server's row only confirms what the reader already sees: no badge.
+    act(() => {
+      replica.append(SESSION, [entry(3, { metadata: { client_id: local.clientId } } as Partial<SessionLogEntry>)]);
+    });
+    expect(view.container.querySelector("[data-session-log-scroll-bottom-count]")).toBeNull();
+
+    // One real reply arrives: exactly one, never a fraction.
+    act(() => {
+      replica.append(SESSION, [entry(4)]);
+    });
+    const badge = view.container.querySelector("[data-session-log-scroll-bottom-count]");
+    expect(badge!.textContent).toBe("1");
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")!.getAttribute("aria-label")).toContain("1");
+    view.restore();
+  });
+
+  it("shows no badge when the reader releases on a confirmed local send", () => {
+    // The newest rendered row is the server's row at its local seq (2.000001)
+    // while the log's head is that row's real seq (3).
+    const keyOf = (row: SessionLogEntry) =>
+      (row as SessionLogEntry & { metadata?: { client_id?: string } }).metadata?.client_id ?? row.id;
+    const transformEntries = (rows: readonly SessionLogEntry[]): SessionLogEntry[] =>
+      rows.map((row) => keyOf(row) === "c_1" ? { ...row, seq: 2 + 1 / 1_000_000 } : row);
+    const replica = new MemorySessionReplica({
+      [SESSION]: { entries: [entry(1), entry(2), entry(3, { metadata: { client_id: "c_1" } } as Partial<SessionLogEntry>)] },
+    });
+    const view = renderList(replica, { scrollButton: "arrow", transformEntries, entryKey: keyOf });
+    reveal();
+    act(() => {
+      fireEvent.wheel(view.root, { deltaY: -120 });
+      view.root.scrollTop = 0;
+      fireEvent.scroll(view.root);
+    });
+    expect(view.container.querySelector("[data-session-log-scroll-bottom]")).not.toBeNull();
+    expect(view.container.querySelector("[data-session-log-scroll-bottom-count]")).toBeNull();
+    view.restore();
+  });
+
   it("shows no arrow when a wheel-up releases a log that does not overflow", () => {
     const replica = new MemorySessionReplica({ [SESSION]: { entries: [entry(1)] } });
     const view = renderList(replica, { scrollButton: "arrow" });

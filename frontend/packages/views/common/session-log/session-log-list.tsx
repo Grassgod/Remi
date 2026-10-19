@@ -45,6 +45,15 @@ export const NEW_MESSAGE_DISPLAY_CAP = 99;
 /** Chat's arrow shows only once the reader is further than this from the end. */
 export const SCROLL_BUTTON_DISTANCE_PX = 24;
 
+/** The newest whole-number seq in the replica's own window: a real log row. */
+function newestLogSeq(entries: readonly SessionLogEntry[]): number | null {
+  let newest: number | null = null;
+  for (const entry of entries) {
+    if (Number.isInteger(entry.seq) && (newest === null || entry.seq > newest)) newest = entry.seq;
+  }
+  return newest;
+}
+
 /** Stable identity for the empty window, so `useSyncExternalStore` sees no change. */
 const EMPTY_SNAPSHOT = { sessionId: "", entries: [], head: null, fresh: false, ready: false } as const;
 
@@ -334,26 +343,39 @@ export function SessionLogList({
     };
   }, [scrollButton, scrollEl, contentEl, stick.state]);
 
-  // The count is derived rather than stored: `head` minus the newest row the
-  // reader was at when they released. Keeping it derived means a re-render, a
-  // resize or a remount cannot drift from the replica.
-  const [releasedAtSeq, setReleasedAtSeq] = useState<number | null>(null);
+  // The count is derived rather than stored: `head` minus the newest log row the
+  // replica held when the reader released. Keeping it derived means a re-render,
+  // a resize or a remount cannot drift from the replica.
+  //
+  // Both ends are real log seqs. The rendered window is not: a consumer's
+  // `transformEntries` may add local rows (Chat's optimistic sends carry a
+  // fractional seq between two log rows, and keep it after the server's row
+  // arrives), so its newest seq is neither a whole number nor the log's. The
+  // keys rendered at release also discount a log row that only confirms a local
+  // row the reader was already looking at: that is not a new message.
+  const [released, setReleased] = useState<{ seq: number; keys: ReadonlySet<string> } | null>(null);
+  const keyOf = useCallback((entry: SessionLogEntry) => entryKey?.(entry) ?? String(entry.seq), [entryKey]);
   const previousStateRef = useRef(stick.state);
   useEffect(() => {
     const previous = previousStateRef.current;
     previousStateRef.current = stick.state;
     if (previous === "pinned" && stick.state === "released") {
-      const newest = entries.length > 0 ? entries[entries.length - 1]!.seq : null;
-      setReleasedAtSeq(newest);
+      const newest = newestLogSeq(snapshot.entries);
+      setReleased(newest === null ? null : { seq: newest, keys: new Set(entries.map(keyOf)) });
       return;
     }
-    if (stick.state === "pinned") setReleasedAtSeq(null);
-  }, [stick.state, entries]);
+    if (stick.state === "pinned") setReleased(null);
+  }, [stick.state, entries, snapshot.entries, keyOf]);
 
   const head = snapshot.head;
-  const newMessageCount = stick.state === "released" && head !== null && releasedAtSeq !== null
-    ? Math.max(0, head - releasedAtSeq)
-    : 0;
+  const newMessageCount = useMemo(() => {
+    if (stick.state !== "released" || head === null || released === null) return 0;
+    let seen = 0;
+    for (const entry of snapshot.entries) {
+      if (entry.seq > released.seq && entry.seq <= head && released.keys.has(keyOf(entry))) seen += 1;
+    }
+    return Math.max(0, head - released.seq - seen);
+  }, [stick.state, head, released, snapshot.entries, keyOf]);
 
   // The height hook reads rows through a getter, and the getter reads the two
   // things that are only correct after commit: the element refs (populated by
