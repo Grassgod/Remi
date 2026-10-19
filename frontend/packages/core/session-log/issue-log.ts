@@ -30,6 +30,12 @@ export class IssueLogReplica extends ReplicaView {
   private to = Number.MAX_SAFE_INTEGER;
   private targetCommentId: string | null = null;
   private knownWindows: Array<{ range: HubSeqRange; entries: SessionLogRow[] }> = [];
+  /**
+   * Per session and seq, the newest revision the read route was asked about
+   * during hydration and did not serve. A hidden placeholder at that revision
+   * or older brings nothing new; a newer one can be a row that became visible.
+   */
+  private settledHidden = new Map<string, Map<number, number>>();
   private frameQueue: Promise<void> = Promise.resolve();
   private importingWindows = 0;
   private syncBrowser: (() => void) | null = null;
@@ -107,6 +113,30 @@ export class IssueLogReplica extends ReplicaView {
     if (commentId && this.missingCommentId === commentId) return this.targetCommentId === null;
     return this.targetCommentId === (commentId ?? null) && (!commentId
       || this.getSnapshot(this.sessionId).entries.some(entry => entry.id === commentId));
+  }
+
+  /**
+   * The window a connection imports into C7.
+   *
+   * C7 owns which rows are shown, and a new connection's C7 can start with
+   * only what this import gives it: a per-tab memory replica (no Web Locks or
+   * OPFS, as on a plain-HTTP origin) is new for every connection, and the
+   * stream resumes after the window's head. The rows on screen are what the
+   * previous connection's C7 held, including rows that arrived as frames after
+   * the last read, so the import is the last read with those rows merged in
+   * and without the read's rows C7 had removed since (deleted or hidden).
+   */
+  private windowForImport(): SessionLogWindow | null {
+    const window = this.window;
+    const shown = this.getSnapshot(this.sessionId).entries.filter(entry => entry.seq > 0);
+    if (!window || !shown.length) return window;
+    const shownSeqs = new Set(shown.map(entry => entry.seq));
+    const entries = mergeRows(window.entries.filter(entry => entry.seq === 0 || shownSeqs.has(entry.seq)),
+      shown.map(entry => SessionLogEntrySchema.parse(entry)));
+    const first = entries[0]!.seq, last = entries.at(-1)!.seq;
+    this.knownWindows.push({ range: { from: first, to: last }, entries });
+    this.knownWindows = this.knownWindows.slice(-32);
+    return { ...window, entries };
   }
 
   loadAround(commentId: string, preserveWindow = false): Promise<void> {
@@ -274,7 +304,8 @@ export class IssueLogReplica extends ReplicaView {
     this.importingWindows++;
     try {
       browser.open(this.sessionId);
-      if (this.window) await this.persist(this.window);
+      const imported = this.windowForImport();
+      if (imported) await this.persist(imported);
     } finally {
       this.importingWindows--;
       if (this.browser === browser) update();
@@ -303,10 +334,19 @@ export class IssueLogReplica extends ReplicaView {
       // bare hidden placeholder, also for a row this reader may see, such as
       // their own message just sent. One that could remove a row shown here,
       // or settle a seq not read yet, is checked against the read route first.
+      // So is one at a seq known only as hidden, unless the read route already
+      // left that revision out: a placeholder is a write, and a write can make
+      // a row visible (a Chat turn card when its turn ends).
       const held = this.browser?.port.getSnapshot(sessionId);
       const readUpTo = Math.max(held?.head ?? -1, own ? this.window?.head_seq ?? -1 : -1);
-      const mayHideReadable = (seq: number) => seq > readUpTo || !!held?.entries.some(entry => entry.seq === seq)
-        || candidates.some(rows => rows.some(row => row.seq === seq));
+      const settled = this.settledHidden.get(sessionId);
+      const mayHideReadable = (seq: number, revision: number) => seq > readUpTo || !!held?.entries.some(entry => entry.seq === seq)
+        || candidates.some(rows => rows.some(row => row.seq === seq)) || (settled?.get(seq) ?? -1) < revision;
+      const settle = (seq: number, revision: number) => {
+        const bySeq = this.settledHidden.get(sessionId) ?? new Map<number, number>();
+        bySeq.set(seq, Math.max(bySeq.get(seq) ?? -1, revision));
+        this.settledHidden.set(sessionId, bySeq);
+      };
       for (const frame of frames) {
         if (frame.kind !== "entry" || !frame.payload || typeof frame.payload !== "object") continue;
         const payload = frame.payload as Record<string, unknown>;
@@ -315,7 +355,7 @@ export class IssueLogReplica extends ReplicaView {
         if (payload.session_id !== undefined && payload.session_id !== sessionId) throw new Error("Log payload belongs to another session");
         if (payload.seq !== undefined && payload.seq !== frame.seq) throw new Error("Log payload has an inconsistent sequence");
         if (placeholder) {
-          if (mayHideReadable(frame.seq)) missing.push(frame);
+          if (mayHideReadable(frame.seq, Number(payload.revision ?? 0))) missing.push(frame);
           continue;
         }
         const candidate = candidates.map(rows => rows.find(row => row.seq === frame.seq)).find(Boolean);
@@ -342,11 +382,13 @@ export class IssueLogReplica extends ReplicaView {
             // the placeholder's revision or later, stays. Otherwise it hides.
             const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq);
             if (row && row.revision >= Number(payload.revision ?? 0)) entries.set(frame.seq, row);
+            else settle(frame.seq, Number(payload.revision ?? 0));
             continue;
           }
           const row = window.entries.find(row => row.session_id === sessionId && row.seq === frame.seq && row.id === payload.id);
           if (row && row.revision < Number(payload.revision ?? 0)) throw new Error(`Log entry ${frame.seq} was unavailable for hydration`);
           if (row) entries.set(frame.seq, row);
+          else settle(frame.seq, Number(payload.revision ?? 0));
         }
         if (own) {
           this.knownWindows.push({ range: { from: first, to: last }, entries: window.entries });
@@ -420,6 +462,7 @@ export class IssueLogReplica extends ReplicaView {
     this.window = null;
     this.headRow = null;
     this.knownWindows = [];
+    this.settledHidden.clear();
     this.targetCommentId = null;
     this.missingCommentId = null;
     this.dropAll();

@@ -115,11 +115,86 @@ describe("read window subscription and hydration", () => {
     reads.get.mockResolvedValueOnce(windowOf([own]));
     await replica.hydratedFrames("s", [placeholder(10, 2)]);
     expect(delivered.mock.calls.at(-1)?.[1][0]).toEqual(placeholder(10, 2));
-    // A placeholder at a read seq without a shown row removes nothing: no read.
+    // A placeholder at a read seq without a shown row is still a write there, so
+    // it is checked once; the same revision again removes nothing: no read.
+    reads.get.mockClear();
+    reads.get.mockResolvedValueOnce(windowOf([], { head_seq: 11 }));
+    await replica.hydratedFrames("s", [placeholder(5)]);
+    expect(reads.get).toHaveBeenCalledExactlyOnceWith("s", { anchor: 4, after: 1 });
+    expect(delivered.mock.calls.at(-1)?.[1][0]).toEqual(placeholder(5));
     reads.get.mockClear();
     await replica.hydratedFrames("s", [placeholder(5)]);
     expect(reads.get).not.toHaveBeenCalled();
     expect(delivered.mock.calls.at(-1)?.[1][0]).toEqual(placeholder(5));
+  });
+
+  /**
+   * A Chat log over the per-tab memory replica (no Web Locks or OPFS, as on a
+   * plain-HTTP origin), read once and acked, ready for frames.
+   */
+  async function connectedChat(tail: () => SessionLogWindow, hydrate: (p: { anchor: number; after: number }) => SessionLogWindow) {
+    reads.get.mockImplementation(async (_id, p) => p.anchor === undefined ? tail() : hydrate(p));
+    const replica = new IssueLogReplica("s", undefined, true, false, false);
+    void replica.loadTail();
+    const cleanup = await replica.connect({ userId: "u", workspaceId: "w", subscribe: vi.fn(), unsubscribe: vi.fn(), env: { hasOpfs: false } });
+    replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: tail().head_seq, log_version: 1, gap: null });
+    const seqs = () => replica.getSnapshot("s").entries.map(entry => entry.seq);
+    return { replica, cleanup, seqs };
+  }
+  const hiddenPlaceholder = (seq: number, revision: number): HubFrame =>
+    ({ seq, kind: "entry", payload: { session_id: "s", seq, revision, visibility: "hidden" } });
+
+  it("checks a placeholder at a seq it settled hidden at an older revision: a turn card that completes is shown", async () => {
+    const sent = row(1), card = row(2, { kind: "turn", id: "turn", revision: 9, author_type: "agent" });
+    let completed = false;
+    const { replica, cleanup, seqs } = await connectedChat(
+      () => windowOf([row(0, { kind: "head" }), sent], { head_seq: 2, has_more_before: false }),
+      () => windowOf(completed ? [card] : [], { head_seq: 2, has_more_before: false }));
+    try {
+      // While the turn runs its card is hidden: the read route does not serve it.
+      await replica.hydratedFrames("s", [hiddenPlaceholder(2, 3)]);
+      expect(seqs()).toEqual([1]);
+      // The same revision again carries nothing new and costs no read.
+      reads.get.mockClear();
+      await replica.hydratedFrames("s", [hiddenPlaceholder(2, 3)]);
+      expect(reads.get).not.toHaveBeenCalled();
+      // The projection failed closed on the completed card: a newer revision of
+      // a seq the replica only knows as hidden can be visible now.
+      completed = true;
+      await replica.hydratedFrames("s", [hiddenPlaceholder(2, 9)]);
+      expect(reads.get).toHaveBeenCalledExactlyOnceWith("s", { anchor: 1, after: 1 });
+      expect(seqs()).toEqual([1, 2]);
+    } finally { cleanup(); replica.disconnect(); }
+  });
+
+  it("keeps rows that only arrived as frames when it connects again to a fresh memory replica", async () => {
+    const head = row(0, { kind: "head" }), sent = row(1);
+    const card = row(2, { kind: "turn", id: "turn", revision: 9, author_type: "agent" });
+    const reply = row(3, { author_type: "agent", body_md: "reply" });
+    let tail = windowOf([head, sent], { head_seq: 2, has_more_before: false });
+    const { replica, cleanup, seqs } = await connectedChat(() => tail,
+      () => windowOf([card, reply], { head_seq: 3, has_more_before: false }));
+    let reconnect: (() => void) | undefined;
+    try {
+      await replica.hydratedFrames("s", [frame(2, { kind: "turn", id: "turn", revision: 9 }), frame(3)]);
+      expect(seqs()).toEqual([1, 2, 3]);
+      // The read's own row is deleted afterwards (a tombstone patch).
+      await replica.hydratedFrames("s", [{ seq: 1, kind: "patch", payload: {
+        session_id: "s", target_seq: 1, revision: 3, fields: { deleted_at: "2026-10-19T00:00:00Z" } } }]);
+      expect(seqs()).toEqual([2, 3]);
+      tail = windowOf([head, card, reply], { head_seq: 3, has_more_before: false });
+      reads.get.mockClear();
+      // A new connection starts an empty memory replica, and the stream resumes
+      // after the head of the last read: neither replays the card or the reply.
+      cleanup(); replica.disconnect();
+      const subscribe = vi.fn();
+      reconnect = await replica.connect({ userId: "u", workspaceId: "w", subscribe, unsubscribe: vi.fn(), env: { hasOpfs: false } });
+      replica.ack("s", { stream: "log", id: "s", first_seq: 0, head_seq: 3, log_version: 2, gap: null });
+      // The rows on screen stay, the deleted row stays gone, and nothing is read.
+      expect(seqs()).toEqual([2, 3]);
+      expect(reads.get).not.toHaveBeenCalled();
+      expect(subscribe).toHaveBeenCalledExactlyOnceWith("s", 3);
+    } finally { reconnect?.(); replica.disconnect(); }
   });
 
   it("keeps reusing window rows after an ack with a new log_version", async () => {

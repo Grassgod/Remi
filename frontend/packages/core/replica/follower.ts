@@ -162,7 +162,12 @@ export class ReplicaFollower implements SessionReplicaPort {
         const pending = this.pending.get(message.requestId);
         if (!pending || pending.sessionId !== message.sessionId) return;
         this.pending.delete(message.requestId);
-        this.options.view.setWindow(message.sessionId, message.entries, {
+        // The answer covers only the range asked for (a page's window import or
+        // a deep link): rows outside it stay, or a narrower read would drop the
+        // newer rows this tab shows until the next append.
+        const outside = this.options.view.getSnapshot(message.sessionId).entries
+          .filter((entry) => entry.seq < pending.from || entry.seq > pending.to);
+        this.options.view.setWindow(message.sessionId, [...outside, ...message.entries], {
           head: message.snapshot.head,
           fresh: message.snapshot.fresh,
           ready: message.snapshot.ready,

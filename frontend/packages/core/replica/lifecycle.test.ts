@@ -108,6 +108,32 @@ describe("page and subscription lifetimes", () => {
     expect(h.subscriptions).toEqual([8]);
   });
 
+  test("a follower's narrower window answer keeps the rows outside the range it asked for", () => {
+    const view = new ReplicaView();
+    const queries: Array<{ requestId: string; from: number; to: number }> = [];
+    const follower = new ReplicaFollower({ view, broadcast: () => {}, requestWindow: (q) => queries.push(q) });
+    const row = (seq: number, revision = 1) => ({ session_id: "session", seq, id: `r${seq}`, kind: "message", revision,
+      body_md: `body ${seq}`, body_html: null, render_version: null });
+    follower.getSnapshot("session");
+    follower.handle({ type: "replica:window", sessionId: "session", requestId: queries.at(-1)!.requestId,
+      entries: [row(0), row(1), row(2), row(3)], snapshot: { head: 3, fresh: true, ready: true } });
+    // A page imports its last read, which ended before the reply its log already shows.
+    void follower.request("session", { from: 0, to: 1 });
+    follower.handle({ type: "replica:window", sessionId: "session", requestId: queries.at(-1)!.requestId,
+      entries: [row(0), row(1, 2)], snapshot: { head: 3, fresh: true, ready: true } });
+    expect(view.getSnapshot("session").entries.map((entry) => [entry.seq, entry.revision]))
+      .toEqual([[0, 1], [1, 2], [2, 1], [3, 1]]);
+    // A row the leader no longer holds in the range is gone; the full window replaces everything.
+    void follower.request("session", { from: 2, to: 2 });
+    follower.handle({ type: "replica:window", sessionId: "session", requestId: queries.at(-1)!.requestId,
+      entries: [], snapshot: { head: 3, fresh: true, ready: true } });
+    expect(view.getSnapshot("session").entries.map((entry) => entry.seq)).toEqual([0, 1, 3]);
+    void follower.request("session");
+    follower.handle({ type: "replica:window", sessionId: "session", requestId: queries.at(-1)!.requestId,
+      entries: [row(3)], snapshot: { head: 3, fresh: true, ready: true } });
+    expect(view.getSnapshot("session").entries.map((entry) => entry.seq)).toEqual([3]);
+  });
+
   test("follower reopens an already ready cache and receives future appends", () => {
     const view = new ReplicaView();
     const broadcasts: ReplicaChannelMessage[] = [];
