@@ -72,11 +72,11 @@ Chat 跟进队列（[ADR 0020](../adr/0020-chat-follow-up-queue-and-native-steer
 | HTTP | 输入 | 响应 | 错误 |
 |---|---|---|---|
 | `GET /api/sessions/:sessionId/queue` | 无 | `{items,paused}`；items 为 queued 与 failed 条目，按入队顺序；paused 为 `{reason,at}` 或 null | 400 `not_a_chat` |
-| `POST /api/sessions/:sessionId/queue` | `{body_md,attachment_ids?,client_id}` | `{item,released}`；lane 空闲且未暂停时 released 为 `{message,turn_id?}`，否则 null | 400 正文或附件无效、超过 10 个附件、`queue_full`（50 条）；403；409 `chat_archived` / `queued_message_deleted`（该 `client_id` 的条目已删除） |
+| `POST /api/sessions/:sessionId/queue` | `{body_md,attachment_ids?,client_id}` | `{item,released}`；lane 空闲且未暂停时放行最早的一条，是这一条时 released 为 `{message,turn_id?}`，否则 null | 400 正文或附件无效、超过 10 个附件、`queue_full`（50 条）；403；409 `chat_archived` / `queued_message_deleted`（该 `client_id` 的条目已删除） |
 | `PATCH .../queue/:qid` | `{body_md,attachment_ids?,expected_revision?}` | `{item}`；failed 条目重置为 queued | 403；404；409 `queued_message_consumed` / `revision_conflict` |
 | `DELETE .../queue/:qid` | 无 | `{item}`，重复删除幂等 | 403；404；409 `queued_message_consumed` |
 | `POST .../queue/:qid/steer` | `{}` | `{item,message,turn_id?}`；已引导的重复调用返回同一条消息 | 403；404（含已删除）；409 `queued_message_consumed`（已被轮放行）/ `chat_archived` / `queued_message_send_failed`（附带 failed 的 item） |
-| `POST .../queue/resume` | `{}` | `{items,paused,released}`；released 为本次放行的 `{message,turn_id?}` 数组 | 403；409 `chat_archived` |
+| `POST .../queue/resume` | `{}` | `{items,paused,released}`；released 为本次放行的 `{message,turn_id?}` 数组，lane 空闲时只放行最早的一条，所以至多一项 | 403；409 `chat_archived` |
 
 item 为 `{id,session_id,body_md,attachments:[{id,filename,content_type,size}],client_id,status,error,revision,released_message_id,released_via,released_at,created_at,updated_at}`，status 为 queued/failed/released/deleted，released_via 为 `turn`（作为后续轮放行）或 `steer`。错误响应为 `{error,code}`。类型见 [queued-message.ts](../../packages/contracts/src/queued-message.ts)。
 
@@ -86,9 +86,9 @@ item 为 `{id,session_id,body_md,attachments:[{id,filename,content_type,size}],c
 
 | 暂停原因 | 解除 |
 |---|---|
-| `turn_ended` | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行；或 resume |
+| `turn_ended` | 该 lane 任一轮 completed（包括失败轮重试成功、之后的直接发送完成）时自动解除并放行一条；或 resume |
 | `interrupted` | 只由 resume 解除，期间轮 completed 也不放行 |
-| `send_failed` | resume；或编辑、删除、引导失败条目后不再有 failed 条目时自动解除，lane 空闲时继续放行 |
+| `send_failed` | resume；或编辑、删除、引导失败条目后不再有 failed 条目时自动解除，lane 空闲时放行最早的一条 |
 
 归档的 Chat 仍可编辑、删除条目以整理队列：`send_failed` 照常解除，但不放行，Chat 保持归档。放行本身从不重新打开归档的 Chat。CLI 不提供队列命令，manifest 按 pure_ui 豁免；CLI 与 agent 直接用 `remi message send --wake` 选择叫醒方式。
 

@@ -84,9 +84,10 @@ pendingTurnBackendTests('MUL-493 B4 Chat terminal re-ring', fixture => {
     }, 120_000);
   }
 
-  // ADR 0020: the follow-up queue releases inside the same terminal transaction,
-  // before this re-ring scan, which then merges into the released turn.
-  it('completed releases queued rows after the unread steer into one successor', () => {
+  // ADR 0020: the follow-up queue releases its next row inside the same terminal
+  // transaction, before this re-ring scan, which then merges into the released turn.
+  // One queued row per turn; an unread now message still shares that turn.
+  it('completed releases the next queued row after the unread steer into one successor', () => {
     const f = setup();
     const queued = ['Queued one', 'Queued two'].map(body => f.store.enqueueQueuedMessage({
       session_id: f.session.id, sender_member_id: 'mem_local_local', body_md: body, client_id: body }).item);
@@ -96,9 +97,11 @@ pendingTurnBackendTests('MUL-493 B4 Chat terminal re-ring', fixture => {
     expect(turns).toHaveLength(2);
     const successor = turns.find(turn => turn.id !== f.first.turn_id)!;
     const released = f.store.listMessages(f.session.id).filter(message => message.metadata.queued_message_id);
-    expect(released.map(message => message.metadata.queued_message_id)).toEqual(queued.map(item => item.id));
-    expect(released.every(message => message.seq > f.late.message.seq && message.metadata.delivery_turn_id === successor.id)).toBe(true);
-    expect(successor).toMatchObject({ status: 'pending', trigger_message_id: released[0]!.id });
+    expect(released.map(message => message.metadata.queued_message_id)).toEqual([queued[0]!.id]);
+    expect(released[0]!.seq).toBeGreaterThan(f.late.message.seq);
+    expect(released[0]!.metadata.delivery_turn_id).toBe(successor.id);
+    expect(successor).toMatchObject({ status: 'pending', trigger_message_id: released[0]!.id, wake_seq: released[0]!.seq });
+    expect(f.store.listQueuedMessages(f.session.id)).toMatchObject({ paused: null, items: [{ id: queued[1]!.id, status: 'queued' }] });
     // The unread scan joined the turn the queue release created; its audit says so.
     const rings = fixture().db.query("SELECT payload FROM multiremi_system_events WHERE event='re_ring' AND resource_id=?")
       .all(successor.id) as Array<{ payload: string }>;
@@ -106,9 +109,10 @@ pendingTurnBackendTests('MUL-493 B4 Chat terminal re-ring', fixture => {
     const attempt = f.store.claimTask(f.runtime.id)!;
     f.store.startTask(attempt.id);
     const offer = f.bridge.offerInput(f.store.getTaskWithAgent(attempt.id)!);
+    // The successor's member input is the unread steer, then the one released row (the reply sits between).
     const ids = offer.input_messages.map(message => message.id);
-    expect(ids.indexOf(f.late.message.id)).toBeLessThan(ids.indexOf(released[0]!.id));
-    expect(ids.slice(ids.indexOf(released[0]!.id))).toEqual(released.map(message => message.id));
+    expect(offer.input_messages.slice(ids.indexOf(f.late.message.id)).filter(message => message.sender_type === 'member')
+      .map(message => message.id)).toEqual([f.late.message.id, released[0]!.id]);
   }, 120_000);
 
   for (const status of ['cancelled', 'failed'] as const) {

@@ -74,32 +74,73 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     expect(f.store.listQueuedMessages(f.chat.id)).toEqual({ items: [], paused: null });
   }, 120_000);
 
-  it('releases queued rows in order after completion, merged into one pending turn after the reply', () => {
+  it('releases one queued row per completed turn, in send order, each after the previous reply', () => {
     const f = setup();
     const first = f.running();
     const queued = ['Q1', 'Q2', 'Q3'].map(body => f.enqueue(body).item);
-    f.store.completeTask(first.attemptId, { output: 'First answer' });
-    expect(f.store.getTurn(first.turnId)?.status).toBe('completed');
-    expect(f.store.listQueuedMessages(f.chat.id).items).toEqual([]);
-    const log = f.store.listMessages(f.chat.id);
-    const reply = log.find(message => message.sender_type === 'agent')!;
-    const released = log.filter(message => message.metadata.queued_message_id);
-    expect(released.map(message => message.body_md)).toEqual(['Q1', 'Q2', 'Q3']);
-    expect(released.map(message => message.metadata.queued_message_id)).toEqual(queued.map(item => item.id));
-    expect(released.every(message => message.seq > reply.seq)).toBe(true);
-    const successors = f.turns().filter(turn => turn.id !== first.turnId);
-    expect(successors).toHaveLength(1);
-    expect(successors[0]).toMatchObject({ status: 'pending', trigger_message_id: released[0]!.id });
-    expect(new Set(released.map(message => message.metadata.delivery_turn_id))).toEqual(new Set([successors[0]!.id]));
-    for (const id of queued.map(item => item.id)) expect(f.row(id)).toMatchObject({ status: 'released', released_via: 'turn' });
-    // Every released body is a now trigger, so the next offer inlines all of them in send order.
+    let current: { turnId: string; attemptId: string } = first;
+    for (const [index, item] of queued.entries()) {
+      const before = f.turns().map(turn => turn.id);
+      f.store.completeTask(current.attemptId, { output: `Answer ${index}` });
+      expect(f.store.getTurn(current.turnId)?.status).toBe('completed');
+      // Only the next row left the queue; the others keep waiting in order.
+      expect(f.store.listQueuedMessages(f.chat.id).items.map(entry => entry.id)).toEqual(queued.slice(index + 1).map(entry => entry.id));
+      const log = f.store.listMessages(f.chat.id);
+      const released = log.filter(message => message.metadata.queued_message_id);
+      expect(released.map(message => message.body_md)).toEqual(queued.slice(0, index + 1).map(entry => entry.body_md));
+      const message = released.at(-1)!;
+      expect(message.seq).toBeGreaterThan(log.filter(entry => entry.sender_type === 'agent').at(-1)!.seq);
+      expect(f.row(item.id)).toMatchObject({ status: 'released', released_via: 'turn', released_message_id: message.id });
+      for (const later of queued.slice(index + 1)) expect(f.row(later.id)).toMatchObject({ status: 'queued', released_message_id: null });
+      // Exactly one new turn, triggered by this row alone.
+      const created = f.turns().filter(turn => !before.includes(turn.id));
+      expect(created).toHaveLength(1);
+      expect(created[0]).toMatchObject({ status: 'pending', trigger_message_id: message.id, wake_seq: message.seq });
+      expect(message.metadata.delivery_turn_id).toBe(created[0]!.id);
+      const attempt = f.store.claimTask(f.runtime.id)!;
+      expect(attempt.id).toBe(created[0]!.current_attempt_id!);
+      f.store.startTask(attempt.id);
+      // The offer's unread part holds this one queued body; earlier queued rows were read by earlier turns.
+      const previousInput = Number(f.store.getTurn(current.turnId)!.input_to_seq);
+      const offer = f.store.getDaemonTurnBridge().offerInput(f.store.getTaskWithAgent(attempt.id)!);
+      const unreadQueued = offer.input_messages.filter(entry => entry.seq > previousInput && released.some(own => own.id === entry.id));
+      expect(unreadQueued.map(entry => entry.id)).toEqual([message.id]);
+      expect(unreadQueued[0]!.body_md).toContain(item.body_md);
+      current = { turnId: created[0]!.id, attemptId: attempt.id };
+    }
+    f.store.completeTask(current.attemptId, { output: 'Last answer' });
+    expect(f.store.listQueuedMessages(f.chat.id)).toEqual({ items: [], paused: null });
+    expect(f.turns().filter(turn => turn.status === 'pending')).toEqual([]);
+    expect(f.turns()).toHaveLength(4);
+  }, 120_000);
+
+  it('an idle enqueue releases only the first queued row; the rest wait for completion', () => {
+    const f = setup();
+    const a = f.enqueue('Idle A');
+    const b = f.enqueue('Idle B');
+    expect(a.item.status).toBe('released');
+    expect(b).toMatchObject({ item: { status: 'queued' }, released: null });
+    expect(f.turns()).toHaveLength(1);
     const attempt = f.store.claimTask(f.runtime.id)!;
-    expect(attempt.id).toBe(successors[0]!.current_attempt_id!);
+    expect(attempt.id).toBe(f.store.getTurn(a.released!.turn_id!)!.current_attempt_id!);
     f.store.startTask(attempt.id);
-    const offer = f.store.getDaemonTurnBridge().offerInput(f.store.getTaskWithAgent(attempt.id)!);
-    const offered = offer.input_messages.filter(message => released.some(entry => entry.id === message.id));
-    expect(offered.map(message => message.id)).toEqual(released.map(message => message.id));
-    for (const [index, message] of offered.entries()) expect(message.body_md).toContain(`Q${index + 1}`);
+    f.store.completeTask(attempt.id, { output: 'A answer' });
+    expect(f.row(b.item.id)).toMatchObject({ status: 'released', released_via: 'turn' });
+    // Rows kept while the Chat was archived go first: the new row waits behind them.
+    const second = f.turns().find(turn => turn.status === 'pending')!;
+    const running = f.store.claimTask(f.runtime.id)!;
+    expect(running.id).toBe(second.current_attempt_id!);
+    f.store.startTask(running.id);
+    const kept = ['Kept 1', 'Kept 2'].map(body => f.enqueue(body).item);
+    f.store.updateChatSession(f.chat.id, { status: 'archived' });
+    f.store.updateChatSession(f.chat.id, { status: 'active' });
+    expect(f.turns().filter(turn => ['pending', 'running'].includes(turn.status))).toEqual([]);
+    expect(f.store.listQueuedMessages(f.chat.id)).toMatchObject({ paused: null, items: kept.map(item => ({ id: item.id, status: 'queued' })) });
+    const fresh = f.enqueue('After restore');
+    expect(fresh).toMatchObject({ item: { status: 'queued' }, released: null });
+    expect(f.row(kept[0]!.id)).toMatchObject({ status: 'released', released_via: 'turn' });
+    expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.id)).toEqual([kept[1]!.id, fresh.item.id]);
+    expect(f.turns().filter(turn => turn.status === 'pending')).toHaveLength(1);
   }, 120_000);
 
   for (const [label, stop, reason] of [
@@ -112,6 +153,7 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
       const events: Array<{ inTransaction: boolean }> = [];
       const first = f.running();
       const queued = f.enqueue('After stop').item;
+      const next = f.enqueue('Second after stop').item;
       const unsubscribe = f.store.onWorkspaceEvent(event => {
         if (event.type === 'chat:queue_updated' && event.chatSessionId === f.chat.id) events.push({ inTransaction: !!f.db.inTransaction });
       });
@@ -123,7 +165,7 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
       expect(f.pause()).toMatchObject({ reason });
       expect(events.length).toBeGreaterThan(0);
       expect(events.every(event => !event.inTransaction)).toBe(true);
-      expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.id)).toEqual([queued.id]);
+      expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.id)).toEqual([queued.id, next.id]);
       expect(f.turns().filter(turn => turn.status === 'pending')).toEqual([]);
       // A direct steer still starts work. Its completion clears turn_ended and releases;
       // a member's interrupted pause leaves the queue alone until resume.
@@ -133,17 +175,27 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
       f.store.startTask(attempt.id);
       f.store.completeTask(attempt.id, { output: 'Direct answer' });
       if (reason === 'turn_ended') {
+        // The clearing completion releases one row; the next waits for that turn.
         expect(f.pause()).toBeNull();
         expect(f.row(queued.id)).toMatchObject({ status: 'released', released_via: 'turn' });
+        expect(f.row(next.id)).toMatchObject({ status: 'queued' });
+        expect(f.turns().filter(turn => turn.status === 'pending')).toHaveLength(1);
         return;
       }
-      expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.status)).toEqual(['queued']);
+      expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.status)).toEqual(['queued', 'queued']);
       expect(f.memberMessages().some(message => message.metadata.queued_message_id)).toBe(false);
+      // Resume on the idle lane releases the first row only.
       const resumed = f.store.resumeQueuedMessages(f.chat.id, MEMBER);
       expect(resumed.paused).toBeNull();
-      expect(resumed.items).toEqual([]);
+      expect(resumed.items.map(item => item.id)).toEqual([next.id]);
       expect(resumed.released.map(entry => entry.message.body_md)).toEqual(['After stop']);
-      expect(f.store.getTurn(resumed.released[0]!.turn_id!)?.status).toBe('pending');
+      const pending = f.store.getTurn(resumed.released[0]!.turn_id!)!;
+      expect(pending.status).toBe('pending');
+      const resumedAttempt = f.store.claimTask(f.runtime.id)!;
+      expect(resumedAttempt.id).toBe(pending.current_attempt_id!);
+      f.store.startTask(resumedAttempt.id);
+      f.store.completeTask(resumedAttempt.id, { output: 'After stop answer' });
+      expect(f.row(next.id)).toMatchObject({ status: 'released', released_via: 'turn' });
     }, 120_000);
   }
 
@@ -209,6 +261,8 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     const first = f.running();
     const earlier = f.enqueue('Earlier').item;
     const later = f.enqueue('Promote me').item;
+    const last = f.enqueue('Last').item;
+    // The second row overtakes the first, which keeps waiting for completion.
     const steered = f.store.steerQueuedMessage(f.chat.id, later.id, MEMBER);
     if (!steered.message) throw new Error('steer failed');
     expect(steered.item).toMatchObject({ id: later.id, status: 'released', released_via: 'steer' });
@@ -217,10 +271,18 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     const again = f.store.steerQueuedMessage(f.chat.id, later.id, MEMBER);
     expect(again.message?.id).toBe(steered.message.id);
     expect(f.memberMessages().filter(message => message.metadata.queued_message_id === later.id)).toHaveLength(1);
-    expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.id)).toEqual([earlier.id]);
-    // The steered row reached the running turn; the earlier row still waits for completion.
+    expect(f.store.listQueuedMessages(f.chat.id).items.map(item => item.id)).toEqual([earlier.id, last.id]);
+    // The steered row reached the running turn; completion releases only the earlier row.
     f.store.completeTask(first.attemptId, { output: 'Answer' });
     expect(f.row(earlier.id)).toMatchObject({ status: 'released', released_via: 'turn' });
+    expect(f.row(last.id)).toMatchObject({ status: 'queued' });
+    const pending = f.turns().filter(turn => turn.status === 'pending');
+    expect(pending).toHaveLength(1);
+    // Steering the last row joins the pending turn the earlier row created.
+    const joined = f.store.steerQueuedMessage(f.chat.id, last.id, MEMBER);
+    expect(joined).toMatchObject({ item: { status: 'released', released_via: 'steer' }, turn_id: pending[0]!.id });
+    expect(f.store.listQueuedMessages(f.chat.id).items).toEqual([]);
+    expect(f.turns().filter(turn => turn.status === 'pending')).toHaveLength(1);
   }, 120_000);
 
   it('steer and edits answer 409 once the turn consumed the row, and 404 for a deleted row', () => {

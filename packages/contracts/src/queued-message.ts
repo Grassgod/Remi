@@ -92,6 +92,7 @@ export interface SteerQueuedMessageResponse<M = UnifiedMessage> extends QueuedMe
 }
 
 export interface ResumeQueueResponse<M = UnifiedMessage> extends SessionQueue {
+  /** At most one entry: the queue releases one row per turn (ADR 0020 decision 3). */
   released: QueuedMessageRelease<M>[];
 }
 

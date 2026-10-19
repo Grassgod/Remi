@@ -80,8 +80,9 @@ export function reRingAfterTurnEnd(ctx: StoreContext, turnId: string, events: Co
   const chat=ctx.chat().getChatSession(turn.session_id);
   if (!agent || agent.archivedAt || session?.status==='archived' || chat?.status==='archived') return;
   lockLane(ctx,turn.session_id,turn.agent_id,turn.execution_scope);
-  // ADR 0020: a completed Chat turn releases the follow-up queue as ordinary now
-  // requests; the scan below then merges them into the same pending turn.
+  // ADR 0020: a completed Chat turn releases the next follow-up queue row (one
+  // per turn) as an ordinary now request; the scan below then merges unread now
+  // messages into the same pending turn.
   const queueTurn=chat?settleQueueAfterTurnEndWithinTransaction(ctx,turn,events):undefined;
   const lane=ctx.db.query(`SELECT cursor_seq FROM multiremi_session_lanes
     WHERE session_id=? AND reader_type='agent' AND reader_id=? AND execution_scope=?`).get(turn.session_id,turn.agent_id,turn.execution_scope)!;

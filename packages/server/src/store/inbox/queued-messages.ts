@@ -47,7 +47,10 @@ export type SteerQueuedMessageResult =
   | ({ item: QueuedMessage } & QueuedMessageRelease)
   | { item: QueuedMessage; message: null; error: string };
 
-interface ReleaseOutcome { released: Array<{ id: string } & QueuedMessageRelease>; failed: { id: string; error: string } | null }
+type ReleasedRow = { id: string } & QueuedMessageRelease;
+interface ReleaseOutcome { released: ReleasedRow | null; failed: { id: string; error: string } | null }
+
+const releaseOfRow = ({ id: _id, ...release }: ReleasedRow): QueuedMessageRelease => release;
 
 const LIVE = "status IN ('queued','failed')";
 const LANE_SQL = 'session_id=? AND agent_id=? AND execution_scope=?';
@@ -151,59 +154,68 @@ function listRows(ctx: StoreContext, lane: QueueLane, where = LIVE, params: unkn
     .all(...laneParams(lane), ...params) as QueueRow[];
 }
 
+function firstRow(ctx: StoreContext, lane: QueueLane, where: string, params: unknown[] = []): QueueRow | null {
+  return ctx.db.query(`SELECT * FROM multiremi_queued_messages WHERE ${LANE_SQL} AND ${where} ORDER BY seq,id LIMIT 1`)
+    .get(...laneParams(lane), ...params) as QueueRow | null;
+}
+
 function sessionQueue(ctx: StoreContext, lane: QueueLane): SessionQueue {
   const rows = listRows(ctx, lane), index = attachmentsById(ctx, rows);
   return { items: rows.map(row => toQueuedMessage(ctx, row, index)), paused: pauseOf(ctx, lane) };
 }
 
 /**
- * Release queued rows of one lane in send order. Each row becomes an ordinary
- * member `wake=now` request through the single message writer, inside its own
- * savepoint and event queue. The first release creates the pending turn, the
- * rest merge into it. A failure marks that row failed, pauses the lane with
- * `send_failed` and stops, so later rows never overtake it. Caller holds the
- * workspace and lane locks.
+ * Release at most one queued row of a lane: `onlyId` for a steer, otherwise
+ * the first `queued` row in send order. One row per call, so the queue drains
+ * one item per turn like Codex (ADR 0020 decision 3, amended 2026-10-19); the
+ * next row waits for the turn this one starts or joins to complete. The row
+ * becomes an ordinary member `wake=now` request through the single message
+ * writer, inside its own savepoint and event queue. A failure marks the row
+ * failed and pauses the lane with `send_failed`, so later rows never overtake
+ * it. Caller holds the workspace and lane locks.
  */
-export function releaseQueuedMessagesWithinTransaction(ctx: StoreContext, lane: QueueLane, events: CommitEventQueue,
+export function releaseQueuedMessageWithinTransaction(ctx: StoreContext, lane: QueueLane, events: CommitEventQueue,
   via: QueuedMessageReleaseVia, onlyId?: string): ReleaseOutcome {
-  if (!ctx.db.inTransaction) throw new Error('releaseQueuedMessagesWithinTransaction requires a transaction');
-  const outcome: ReleaseOutcome = { released: [], failed: null };
+  if (!ctx.db.inTransaction) throw new Error('releaseQueuedMessageWithinTransaction requires a transaction');
+  const none: ReleaseOutcome = { released: null, failed: null };
   // A member send reopens an archived Chat; a queue release never does.
-  if (ctx.chat().getChatSession(lane.sessionId)?.status === 'archived') return outcome;
-  const rows = onlyId ? listRows(ctx, lane, `${LIVE} AND id=?`, [onlyId]) : listRows(ctx, lane, "status='queued'");
-  for (const row of rows) {
-    const rowEvents = createCommitEventQueue();
-    let sent;
-    try {
-      sent = withSavepoint(ctx.db, () => sendMessageWithinTransaction(ctx, {
-        session_id: row.session_id, sender: { type: 'member', id: row.sender_member_id },
-        to: { type: 'agent', ref: row.agent_id }, message_kind: 'request', wake_requested: 'now',
-        body_md: row.body_md, attachment_ids: attachmentIdsOf(row), execution_scope: row.execution_scope,
-        dedupe_key: `${QUEUED_MESSAGE_DEDUPE_PREFIX}${row.id}`,
-        metadata: { queued_message_id: row.id, queued_at: row.created_at },
-      }, rowEvents));
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      // Any send error becomes a failed row, including transient database errors; keep them visible.
-      log.warn(`queued message ${row.id} in ${row.session_id} failed to release: ${message}`);
-      ctx.db.run(`UPDATE multiremi_queued_messages SET status='failed',error=?,revision=revision+1,updated_at=? WHERE id=?`,
-        [message, nowIso(), row.id]);
-      pauseLane(ctx, lane, 'send_failed');
-      queueUpdated(events, lane);
-      outcome.failed = { id: row.id, error: message };
-      break;
-    }
-    const at = nowIso();
-    ctx.db.run(`UPDATE multiremi_queued_messages SET status='released',error=NULL,released_message_id=?,released_via=?,
-      released_at=?,revision=revision+1,updated_at=? WHERE id=?`, [sent.message.id, via, at, at, row.id]);
-    events.workspace.push(...rowEvents.workspace);
-    events.enqueuedTasks.push(...rowEvents.enqueuedTasks);
-    events.issueActivities.push(...rowEvents.issueActivities);
-    queueUpdated(events, lane);
-    outcome.released.push({ id: row.id, message: sent.message, ...(sent.turn_id ? { turn_id: sent.turn_id } : {}) });
-  }
+  if (ctx.chat().getChatSession(lane.sessionId)?.status === 'archived') return none;
+  const row = onlyId ? firstRow(ctx, lane, `${LIVE} AND id=?`, [onlyId]) : firstRow(ctx, lane, "status='queued'");
+  const outcome = row ? releaseRow(ctx, lane, row, events, via) : none;
   if (!countRows(ctx, lane, 'live') && clearPause(ctx, lane)) queueUpdated(events, lane);
   return outcome;
+}
+
+function releaseRow(ctx: StoreContext, lane: QueueLane, row: QueueRow, events: CommitEventQueue,
+  via: QueuedMessageReleaseVia): ReleaseOutcome {
+  const rowEvents = createCommitEventQueue();
+  let sent;
+  try {
+    sent = withSavepoint(ctx.db, () => sendMessageWithinTransaction(ctx, {
+      session_id: row.session_id, sender: { type: 'member', id: row.sender_member_id },
+      to: { type: 'agent', ref: row.agent_id }, message_kind: 'request', wake_requested: 'now',
+      body_md: row.body_md, attachment_ids: attachmentIdsOf(row), execution_scope: row.execution_scope,
+      dedupe_key: `${QUEUED_MESSAGE_DEDUPE_PREFIX}${row.id}`,
+      metadata: { queued_message_id: row.id, queued_at: row.created_at },
+    }, rowEvents));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Any send error becomes a failed row, including transient database errors; keep them visible.
+    log.warn(`queued message ${row.id} in ${row.session_id} failed to release: ${message}`);
+    ctx.db.run(`UPDATE multiremi_queued_messages SET status='failed',error=?,revision=revision+1,updated_at=? WHERE id=?`,
+      [message, nowIso(), row.id]);
+    pauseLane(ctx, lane, 'send_failed');
+    queueUpdated(events, lane);
+    return { released: null, failed: { id: row.id, error: message } };
+  }
+  const at = nowIso();
+  ctx.db.run(`UPDATE multiremi_queued_messages SET status='released',error=NULL,released_message_id=?,released_via=?,
+    released_at=?,revision=revision+1,updated_at=? WHERE id=?`, [sent.message.id, via, at, at, row.id]);
+  events.workspace.push(...rowEvents.workspace);
+  events.enqueuedTasks.push(...rowEvents.enqueuedTasks);
+  events.issueActivities.push(...rowEvents.issueActivities);
+  queueUpdated(events, lane);
+  return { released: { id: row.id, message: sent.message, ...(sent.turn_id ? { turn_id: sent.turn_id } : {}) }, failed: null };
 }
 
 /**
@@ -211,8 +223,9 @@ export function releaseQueuedMessagesWithinTransaction(ctx: StoreContext, lane: 
  * archived checks. A failed or cancelled turn pauses the queue (`turn_ended`)
  * so a failing agent does not swallow queued instructions. Any completed turn
  * in the lane, including a successful retry, clears a `turn_ended` pause and
- * releases the queue; `interrupted` and `send_failed` stay until resume or the
- * failed row is fixed. Returns the turn the release created or joined.
+ * releases the next queued row, only that one; `interrupted` and `send_failed`
+ * stay until resume or the failed row is fixed. Returns the turn the release
+ * created or joined.
  */
 export function settleQueueAfterTurnEndWithinTransaction(ctx: StoreContext,
   turn: { workspace_id: string; session_id: string; agent_id: string; execution_scope: string; status: string },
@@ -226,7 +239,7 @@ export function settleQueueAfterTurnEndWithinTransaction(ctx: StoreContext,
   }
   if (pause && pause.reason !== 'turn_ended') return;
   if (pause) { clearPause(ctx, lane); queueUpdated(events, lane); }
-  return releaseQueuedMessagesWithinTransaction(ctx, lane, events, 'turn').released[0]?.turn_id;
+  return releaseQueuedMessageWithinTransaction(ctx, lane, events, 'turn').released?.turn_id;
 }
 
 /** A member stopping the turn pauses the queue before the cancel runs. Caller holds the lane lock. */
@@ -340,10 +353,11 @@ export class QueuedMessages {
       [id, lane.workspaceId, lane.sessionId, lane.agentId, lane.scope, seq, input.sender_member_id, body, JSON.stringify(attachments), clientId, at, at]);
       queueUpdated(events, lane);
       let released: QueuedMessageRelease | null = null;
+      // An idle lane starts the next turn with the first queued row, which is
+      // this one unless older rows wait (e.g. kept while the Chat was archived).
       if (!pauseOf(this.ctx, lane) && laneIdle(this.ctx, lane)) {
-        const outcome = releaseQueuedMessagesWithinTransaction(this.ctx, lane, events, 'turn');
-        const own = outcome.released.find(entry => entry.id === id);
-        if (own) released = { message: own.message, ...(own.turn_id ? { turn_id: own.turn_id } : {}) };
+        const next = releaseQueuedMessageWithinTransaction(this.ctx, lane, events, 'turn').released;
+        if (next?.id === id) released = releaseOfRow(next);
       }
       return { item: toQueuedMessage(this.ctx, readRow(this.ctx, id)!), released };
     });
@@ -390,16 +404,15 @@ export class QueuedMessages {
         return { item: toQueuedMessage(this.ctx, row), ...release };
       }
       if (this.chat(sessionId).status === 'archived') throw new QueuedMessageError(409, 'chat_archived', 'Chat session is archived');
-      const outcome = releaseQueuedMessagesWithinTransaction(this.ctx, lane, events, 'steer', row.id);
+      const outcome = releaseQueuedMessageWithinTransaction(this.ctx, lane, events, 'steer', row.id);
       const item = toQueuedMessage(this.ctx, readRow(this.ctx, id)!);
       if (outcome.failed) return { item, message: null, error: outcome.failed.error };
       if (row.status === 'failed') this.continueAfterFailedRow(lane, events);
-      const own = outcome.released[0]!;
-      return { item, message: own.message, ...(own.turn_id ? { turn_id: own.turn_id } : {}) };
+      return { item, ...releaseOfRow(outcome.released!) };
     });
   }
 
-  /** Clear the pause, retry failed rows and release everything when the lane is idle. */
+  /** Clear the pause, retry failed rows and, on an idle lane, release the first queued row. */
   resume(sessionId: string, memberId: string): SessionQueue & { released: QueuedMessageRelease[] } {
     return this.transaction(events => {
       const { chat, lane } = this.lockActiveChat(sessionId);
@@ -408,15 +421,16 @@ export class QueuedMessages {
       const retried = this.ctx.db.run(`UPDATE multiremi_queued_messages SET status='queued',error=NULL,revision=revision+1,updated_at=?
         WHERE ${LANE_SQL} AND status='failed'`, [nowIso(), ...laneParams(lane)]).changes;
       if (cleared || retried) queueUpdated(events, lane);
-      const released = laneIdle(this.ctx, lane)
-        ? releaseQueuedMessagesWithinTransaction(this.ctx, lane, events, 'turn').released.map(({ id: _id, ...release }) => release) : [];
+      const next = laneIdle(this.ctx, lane) ? releaseQueuedMessageWithinTransaction(this.ctx, lane, events, 'turn').released : null;
+      const released = next ? [releaseOfRow(next)] : [];
       return { ...sessionQueue(this.ctx, lane), released };
     });
   }
 
   /**
    * Editing, deleting or steering the failed row is the documented remedy for
-   * `send_failed`: once no failed row remains the queue continues by itself.
+   * `send_failed`: once no failed row remains the queue continues by itself,
+   * releasing the first queued row when the lane is idle.
    * Other pause reasons wait for an explicit resume. Edits and deletes stay
    * allowed in an archived Chat so the queue can be tidied; there the pause is
    * cleared but nothing is released, so the Chat is not reopened.
@@ -426,6 +440,6 @@ export class QueuedMessages {
     clearPause(this.ctx, lane);
     queueUpdated(events, lane);
     if (this.chat(lane.sessionId).status === 'archived') return;
-    if (laneIdle(this.ctx, lane)) releaseQueuedMessagesWithinTransaction(this.ctx, lane, events, 'turn');
+    if (laneIdle(this.ctx, lane)) releaseQueuedMessageWithinTransaction(this.ctx, lane, events, 'turn');
   }
 }

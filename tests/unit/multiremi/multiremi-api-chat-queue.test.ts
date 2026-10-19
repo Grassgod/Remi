@@ -152,6 +152,8 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue API', fixture => {
     expect(steerDeleted.status).toBe(404);
     expect((await steerDeleted.json()).code).toBe('queued_message_not_found');
     // Released by the turn, not by its sender: steering it is a consumed conflict.
+    // Bob withdraws his earlier row so the completion releases this one (one row per turn).
+    f.store.deleteQueuedMessage(f.chat.id, foreign.id, f.bobMember.id);
     const followUp = (await f.enqueue('released by turn')).item;
     expect(followUp.status).toBe('queued');
     f.store.completeTask(attemptId, { output: 'done' });
@@ -197,16 +199,17 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue API', fixture => {
     expect((await (await f.request('GET', f.base)).json()).paused).toMatchObject({ reason: 'send_failed' });
   }, 120_000);
 
-  it('pauses on a member stop but not on the agent stopping its own turn, and resume releases', async () => {
+  it('pauses on a member stop but not on the agent stopping its own turn, and resume releases one row', async () => {
     const f = await setup();
     const first = await f.running();
     const queued = (await f.enqueue('after stop')).item;
+    const waiting = (await f.enqueue('waits for the next turn')).item;
     expect((await f.request('POST', `/api/turns/${first.turnId}/cancel`, {})).status).toBe(200);
     expect((await (await f.request('GET', f.base)).json()).paused).toMatchObject({ reason: 'interrupted' });
     const resumed = await f.request('POST', `${f.base}/resume`, {});
     expect(resumed.status).toBe(200);
     const result = await resumed.json();
-    expect(result).toMatchObject({ items: [], paused: null });
+    expect(result).toMatchObject({ paused: null, items: [{ id: waiting.id, status: 'queued' }] });
     expect(result.released.map((entry: any) => entry.message.metadata.queued_message_id)).toEqual([queued.id]);
     expect(result.released[0].message.attachments).toEqual([]);
     // The agent cancelling its own turn is not a member stop: the queue pauses as turn_ended.

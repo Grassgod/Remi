@@ -641,7 +641,7 @@ describe("ChatWindow follow-up delivery", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Queue test message" }));
     await waitFor(() => expect(sent).toHaveBeenCalledWith("resolved"));
     expect(backend.enqueue).toHaveBeenCalledWith("chat-a", { body_md: "Queue this", attachment_ids: ["att-1"], client_id: expect.any(String) });
-    // Deletes still behind their undo go out first: an idle lane releases every queued row.
+    // Deletes still behind their undo go out first: an idle lane releases its oldest queued row.
     expect(queueFlush.mock.invocationCallOrder[0]).toBeLessThan(backend.enqueue.mock.invocationCallOrder[0]!);
     expect(backend.send).not.toHaveBeenCalled();
     expect(backend.refresh).not.toHaveBeenCalled();
