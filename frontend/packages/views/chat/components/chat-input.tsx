@@ -521,6 +521,11 @@ export function ChatInput({
         aria-disabled={noAgent || disabled || undefined}
         data-chat-composer=""
         onKeyDownCapture={handleKeyDownCapture}
+        // The editor reports text after its debounce; typing replaces Stop
+        // with the submit at once, so Stop never sits under typed text.
+        onInput={(event) => {
+          if (isEmpty && (event.target as HTMLElement).textContent?.trim()) setIsEmpty(false);
+        }}
       >
         {queueEdit && (
           <div

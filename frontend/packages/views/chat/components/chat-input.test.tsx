@@ -665,6 +665,19 @@ describe("ChatInput follow-up modes", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBe(stop);
   });
 
+  it("replaces Stop with the submit as soon as text is typed, before the editor's debounced update", () => {
+    renderInput({ onStop: vi.fn(), isRunning: true });
+    expect(screen.getByRole("button", { name: "Stop" })).toBeInTheDocument();
+    // An editing host the mock does not report through onUpdate.
+    const host = document.createElement("div");
+    host.textContent = "t";
+    document.querySelector("[data-chat-composer]")!.appendChild(host);
+    fireEvent.input(host);
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Queue" })).toBeInTheDocument();
+    expect(useChatStore.getState().setInputDraft).not.toHaveBeenCalled();
+  });
+
   it("does not stop the run from the second click of a double click on submit", async () => {
     const onSend = vi.fn().mockResolvedValue(undefined);
     const onStop = vi.fn();
