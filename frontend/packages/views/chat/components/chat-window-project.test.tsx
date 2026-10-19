@@ -9,6 +9,7 @@ import type { ChatSession } from "@multiremi/core/types";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 import enRuntimes from "../../locales/en/runtimes.json";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
@@ -96,7 +97,7 @@ vi.mock("../../layout/page-header", () => ({ PageHeader: ({ children }: { childr
 vi.mock("./use-chat-resize", () => ({ useChatResize: () => ({ boundsReady: true }) }));
 vi.mock("./use-chat-context-items", () => ({ useChatContextItems: () => [] }));
 vi.mock("./chat-message-list", () => ({ ChatMessageList: () => null, ChatMessageSkeleton: () => null }));
-vi.mock("./human-request-dock", () => ({ HumanRequestDock: () => null }));
+vi.mock("./human-request-dock", () => ({ HumanRequestDock: ({ className }: { className?: string }) => <div data-testid="human-request-dock" className={className} /> }));
 vi.mock("./offline-banner", () => ({ OfflineBanner: () => null }));
 vi.mock("./no-agent-banner", () => ({ NoAgentBanner: () => null }));
 const queueFlush = vi.hoisted(() => vi.fn(async () => {}));
@@ -722,3 +723,17 @@ describe("ChatWindow follow-up delivery", () => {
   });
 });
 
+describe("ChatWindow Chat column", () => {
+  it("puts the question lines, the archived-chat row and the action error in the shared Chat column", async () => {
+    backend.sessions = [{ ...session, status: "archived" }];
+    backend.update.mockRejectedValueOnce(new Error("offline"));
+    mount(true);
+    const column = CHAT_COLUMN_CLASS.split(" ");
+    // The question lines drop the dock's own band and sit edge to edge with the composer.
+    expect(screen.getByTestId("human-request-dock")).toHaveClass(...column, "border-t-0", "bg-transparent", "py-0");
+    const restore = await screen.findByRole("button", { name: "Restore chat" });
+    expect(restore.parentElement).toHaveClass(...column);
+    fireEvent.click(restore);
+    expect(await screen.findByText("Action failed. Please try again.")).toHaveClass(...column);
+  });
+});

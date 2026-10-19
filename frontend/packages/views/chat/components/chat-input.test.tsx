@@ -175,6 +175,7 @@ import { ChatInput, chatComposerAction, STOP_CONFIRM_MS } from "./chat-input";
 import { ApiError } from "@multiremi/core/api";
 import { useChatStore } from "@multiremi/core/chat";
 import { setCurrentWorkspace } from "@multiremi/core/platform";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 beforeEach(() => {
   vi.clearAllMocks();
   setCurrentWorkspace("demo", "ws-1");
@@ -933,3 +934,13 @@ describe("ChatInput queued-message edit", () => {
   });
 });
 
+describe("ChatInput Chat column", () => {
+  it("puts the composer's border on the shared Chat column's edges, like the message text", () => {
+    renderInput({});
+    const composer = document.querySelector<HTMLElement>("[data-chat-composer]")!;
+    expect(composer.parentElement).toHaveClass(...CHAT_COLUMN_CLASS.split(" "));
+    // The card fills the column: no width or inset of its own to drift from the list's.
+    expect(composer).toHaveClass("w-full");
+    expect(composer.className).not.toMatch(/(^|\s)(max-w-|mx-|px-)/);
+  });
+});

@@ -31,7 +31,7 @@ const COLLAPSED_CONTEXT_HEIGHT_PX = 128;
  * answer, with or without an in-flight turn: the Chat's member answers its own
  * Q here whatever state the pending task is in.
  */
-export function HumanRequestDock({ taskId, sessionId, turnId, open = false, enabled = true, getActorName }: { taskId: string | null; sessionId?: string; turnId?: string; open?: boolean; enabled?: boolean; getActorName?: (type: string, id: string) => string }) {
+export function HumanRequestDock({ taskId, sessionId, turnId, open = false, enabled = true, getActorName, className }: { taskId: string | null; sessionId?: string; turnId?: string; open?: boolean; enabled?: boolean; getActorName?: (type: string, id: string) => string; className?: string }) {
   const { t } = useT("chat");
   const wsId = useWorkspaceId();
   const names = useActorName({ enabled: enabled && !getActorName });
@@ -42,7 +42,7 @@ export function HumanRequestDock({ taskId, sessionId, turnId, open = false, enab
   });
   if (active && error) {
     return (
-      <div className="flex items-center justify-between gap-2 border-t border-destructive/30 bg-destructive/5 px-3 py-2">
+      <div className={cn("flex items-center justify-between gap-2 border-t border-destructive/30 bg-destructive/5 px-3 py-2", className)}>
         <span className="text-xs text-destructive">{t(($) => $.human_requests.load_failed)}</span>
         <Button size="sm" variant="outline" disabled={isFetching} onClick={() => void refetch()}>
           {t(($) => $.human_requests.retry)}
@@ -53,7 +53,7 @@ export function HumanRequestDock({ taskId, sessionId, turnId, open = false, enab
   const requests = data ?? [];
   if (!active || requests.length === 0) return null;
   return (
-    <div className="flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2">
+    <div className={cn("flex flex-col gap-2 border-t border-border bg-muted/30 px-3 py-2", className)}>
       {requests.map((request) => (
         <LinkedQuestion key={request.id} id={request.id} getActorName={getActorName ?? names.getActorName} />
       ))}

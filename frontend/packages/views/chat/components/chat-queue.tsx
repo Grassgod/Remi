@@ -36,6 +36,7 @@ import {
   type QueuedChatMessage,
 } from "@multiremi/core/chat/queue";
 import { useT } from "../../i18n";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 /** Undo window before a deleted row is really deleted (R7). */
 export const QUEUE_DELETE_UNDO_MS = 5_000;
@@ -402,12 +403,12 @@ export function ChatQueue({
   const archivedHint = archived ? t(($) => $.queue.archived) : null;
 
   return (
-    <div className="shrink-0 px-5">
+    <div className={cn(CHAT_COLUMN_CLASS, "shrink-0")}>
       <section
         ref={sectionRef}
         aria-label={t(($) => $.queue.title)}
         data-chat-queue=""
-        className="mx-auto mb-2 max-h-[30dvh] w-full max-w-4xl overflow-y-auto rounded-lg border bg-card text-sm"
+        className="mb-2 max-h-[30dvh] overflow-y-auto rounded-lg border bg-card text-sm"
       >
         {banner && (
           <div role="status" className="flex items-center gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground">

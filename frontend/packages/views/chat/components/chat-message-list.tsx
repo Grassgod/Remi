@@ -48,11 +48,20 @@ import { doorbellTaskIds, rowDoorbell } from "../lib/background-tasks";
 import { isTraceLateSubagent, type TraceLateSubagent } from "@multiremi/contracts/trace";
 import { useT } from "../../i18n";
 import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 /** Bumped when Chat's row layout changes, so cached row heights from the old layout are misses. */
 const CHAT_LAYOUT_VERSION = ":chat-layout-v2";
-/** Codex reading column: 768px including 16px side padding. */
-const CHAT_CONTENT_CLASS = "max-w-[768px] px-4 py-6";
+/** The shared Chat column; the composer and the rows above it use the same one. */
+const CHAT_CONTENT_CLASS = `${CHAT_COLUMN_CLASS} py-6`;
+/**
+ * An always-visible scrollbar narrows only the list, which would center its
+ * column half a scrollbar left of the composer's. From 800px of list width
+ * (the column is capped there) the list reserves the same gutter on its left
+ * too, so both keep one center line; narrower, the column fills the width and
+ * the scrollbar keeps to the right edge. Overlay scrollbars reserve nothing.
+ */
+const CHAT_LIST_CLASS = "@container/chat-log @min-[800px]/chat-log:[&>[data-session-log-scroll]]:[scrollbar-gutter:stable_both-edges]";
 /**
  * Message actions stay out of the way until the row is hovered or holds
  * keyboard focus; devices without hover always show them. Opacity, not
@@ -273,7 +282,7 @@ export function ChatMessageList({
     && (!foldShown || waitingOnHuman);
 
   return <SessionLogList sessionId={sessionId} replica={replica} perfScroll="session-log"
-    contentClassName={CHAT_CONTENT_CLASS} scrollButton="arrow"
+    className={CHAT_LIST_CLASS} contentClassName={CHAT_CONTENT_CLASS} scrollButton="arrow"
     onScrollRoot={element => { scrollRoot.current = element; }}
     initialPositioned={initialPositioned} showPendingSkeleton={false}
     localDataReady={optimisticRows.length > 0}

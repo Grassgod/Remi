@@ -70,6 +70,7 @@ import { ChatContextUsage } from "./chat-context-usage";
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
 import { clientIdOf, type OptimisticChatRow } from "../lib/optimistic-log";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 import { ChatInput, type ChatSendMode } from "./chat-input";
 import { AgentDropdown } from "./agent-dropdown";
 import { SessionDropdown } from "./session-dropdown";
@@ -99,6 +100,8 @@ import { useChatBackgroundTasks } from "./use-background-tasks";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
+/** Question lines sit in the Chat column above the composer, edge to edge with it: no band of their own. */
+const CHAT_DOCK_CLASS = `${CHAT_COLUMN_CLASS} mb-2 border-t-0 bg-transparent py-0`;
 export function ChatWindow({
   presentation = "window",
   onSessionChange,
@@ -963,7 +966,7 @@ export function ChatWindow({
        *  first agent-list response stays banner-free. */}
       {/* The Chat's own open questions stay answerable here whether or not a
        *  turn is in flight; the running turn's answered ones stay as its record. */}
-      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} open enabled={chatVisible} />
+      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} open enabled={chatVisible} className={CHAT_DOCK_CLASS} />
 
       {noAgent ? (
         <NoAgentBanner />
@@ -987,12 +990,12 @@ export function ChatWindow({
         />
       )}
       {actionError && (
-        <p role="alert" className="mx-5 mb-2 text-xs text-destructive">
+        <p role="alert" className={`${CHAT_COLUMN_CLASS} mb-2 text-xs text-destructive`}>
           {t(($) => $.sessions.failed)}
         </p>
       )}
       {isSessionArchived && activeSessionId && (
-        <div className="flex items-center justify-between gap-2 px-5 py-2 text-sm text-muted-foreground">
+        <div className={`${CHAT_COLUMN_CLASS} flex items-center justify-between gap-2 py-2 text-sm text-muted-foreground`}>
           <span>{t(($) => $.input.placeholder_archived)}</span>
           <Button
             size="sm"

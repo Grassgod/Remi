@@ -14,6 +14,7 @@ import { createChatStore, registerChatStore, useChatStore } from "@multiremi/cor
 import { chatKeys } from "@multiremi/core/chat/queries";
 import { setCurrentWorkspace } from "@multiremi/core/platform";
 import { bgSnapshot, bgTask } from "../lib/__fixtures__/background-tasks";
+import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 const { copiedText } = vi.hoisted(() => ({ copiedText: vi.fn().mockResolvedValue(true) }));
 vi.mock("@multiremi/ui/lib/clipboard", () => ({ copyText: copiedText }));
@@ -888,5 +889,19 @@ describe("live turn steps", () => {
       fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-chat-live-turn] [data-subagent-row="sa:1"]')!);
       expect(useChatStore.getState().subagentPanel).toMatchObject({ sessionId: "cs-1", attemptId: TASK_ID, live: true, path: ["sa:1"] });
     } finally { view.unmount(); client.clear(); }
+  });
+});
+
+describe("Chat column", () => {
+  it("lays the rows out in the shared Chat column the composer also uses", () => {
+    const view = renderList([terminalReply("reply-1")], null, false, null);
+    try {
+      const scroll = view.container.querySelector<HTMLElement>("[data-session-log-scroll]")!;
+      expect(scroll.firstElementChild).toHaveClass(...CHAT_COLUMN_CLASS.split(" "), "py-6");
+      // From 800px the list reserves its scrollbar's gutter on the left too, so
+      // the centered column stays on the composer's center line.
+      expect(scroll.parentElement).toHaveClass("@container/chat-log",
+        "@min-[800px]/chat-log:[&>[data-session-log-scroll]]:[scrollbar-gutter:stable_both-edges]");
+    } finally { view.unmount(); }
   });
 });
