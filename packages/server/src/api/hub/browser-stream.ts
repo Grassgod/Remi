@@ -41,6 +41,14 @@ import {
   decideTraceSubscription,
   type StreamAuthReader,
 } from "./stream-auth.js";
+import { createLogger } from "@shared/logger.js";
+
+const log = createLogger("hub-browser-stream");
+
+/** Tries per `log:` batch before its projection failure ends the subscription. */
+export const LOG_PROJECTION_ATTEMPTS = 2;
+/** Wait before a failed batch is projected again. */
+export const LOG_PROJECTION_RETRY_MS = 250;
 
 /** Which stream kind an endpoint serves. */
 export type BrowserStreamEndpoint = HubStreamName;
@@ -51,6 +59,10 @@ export interface BrowserStreamHandlerDeps {
   /** The kind this socket accepts; the other one answers `wrong_endpoint`. */
   endpoint: BrowserStreamEndpoint;
   projectLogFrames?: (client: MultiremiWebSocketClient, sessionId: string, frames: readonly HubFrame[]) => Promise<HubFrame[]>;
+  /** Where a failed projection is reported; the process logger by default. */
+  warn?: (message: string) => void;
+  /** Overrides {@link LOG_PROJECTION_RETRY_MS}, for tests. */
+  projectionRetryMs?: number;
 }
 
 interface ActiveStreamSubscription {
@@ -121,6 +133,12 @@ function sendFrame(client: MultiremiWebSocketClient, type: string, payload: unkn
   client.sendText(JSON.stringify({ type, payload }));
 }
 
+/** An error's name and message, bounded; never the batch or a row. */
+function errorSummary(error: unknown): string {
+  const text = error instanceof Error ? `${error.name}: ${error.message}` : `non-Error ${typeof error}`;
+  return text.length > 200 ? `${text.slice(0, 200)}…` : text;
+}
+
 /**
  * Build the handler for one server process.
  *
@@ -145,6 +163,31 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
 
   const sendError = (client: MultiremiWebSocketClient, stream: HubStreamName, id: string, code: string): void => {
     sendFrame(client, "stream.error", { stream, id, code });
+  };
+  const warn = deps.warn ?? ((message: string) => { log.warn(message); });
+  const retryMs = deps.projectionRetryMs ?? LOG_PROJECTION_RETRY_MS;
+
+  /**
+   * Project one `log:` batch for this reader, trying it once more after a
+   * short wait: a read that failed (the pool timed out, a row another process
+   * just wrote is not visible yet) usually answers the second time. Only a
+   * projection that succeeded is ever sent, so a retry cannot let an unchecked
+   * row through; the delivery chain waits for it, so the order is kept. A
+   * batch that still fails ends the subscription with `unavailable`.
+   */
+  const projectLog = async (client: MultiremiWebSocketClient, id: string, batch: readonly HubFrame[],
+    alive: () => boolean): Promise<HubFrame[]> => {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        return await deps.projectLogFrames!(client, id, batch);
+      } catch (error) {
+        const last = attempt >= LOG_PROJECTION_ATTEMPTS || !alive();
+        warn(`log projection failed for ${subscriptionKey("log", id)} (${batch.length} frames, attempt ${attempt}): `
+          + `${errorSummary(error)}; ${last ? "closing the stream with unavailable" : `retrying in ${retryMs}ms`}`);
+        if (last) throw error;
+        await new Promise(resolve => setTimeout(resolve, retryMs));
+      }
+    }
   };
 
   const authorize = async (
@@ -251,7 +294,7 @@ export function createBrowserStreamHandler(deps: BrowserStreamHandlerDeps): Brow
           emit(async () => {
             try {
               const frames = parsed.stream === "log" && deps.projectLogFrames
-                ? await deps.projectLogFrames(client, parsed.id, batch) : batch;
+                ? await projectLog(client, parsed.id, batch, () => alive) : batch;
               if (alive && frames.length) sendFrame(client, "stream.data", { stream: parsed.stream, id: parsed.id, frames });
             } finally {
               projectionBytes -= bytes;

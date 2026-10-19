@@ -99,6 +99,13 @@ function useLogSnapshot(replica: IssueLogReplica, sessionId: string) {
 }
 
 /** The replica's connection and the page's `log:` stream while the log is shown. */
+/** First wait before a `log:` stream the hub ended as `unavailable` is opened again; it doubles per failure. */
+export const LOG_STREAM_RETRY_BASE_MS = 500;
+/** Longest wait between those attempts. */
+export const LOG_STREAM_RETRY_MAX_MS = 8_000;
+/** Attempts per stream in any minute; past them the log shows its error. */
+export const LOG_STREAM_RETRIES_PER_MINUTE = 6;
+
 function useLiveLog(replica: IssueLogReplica, sessionId: string, enabled: boolean,
   setError: (error: boolean) => void, blocked?: RefObject<boolean>) {
   const { subscribeStream, onReconnect } = useWS();
@@ -125,6 +132,34 @@ function useLiveLog(replica: IssueLogReplica, sessionId: string, enabled: boolea
         void qc.invalidateQueries({ queryKey: ["decision-replies", workspaceId] });
       }, 100);
     };
+    // The hub ends a subscription it cannot serve with `stream.error`, and
+    // nothing arrives on it after that. `unavailable` (a read the hub could not
+    // answer) opens it again from the replica's head, with backoff, and the
+    // shown log reads its tail so rows written meanwhile appear; another
+    // session this page leads for recovers through its ack's gap. Other codes
+    // are refusals: the shown log reports its error, nothing loops.
+    const retries = new Map<string, { failures: number; at: number[]; timer?: ReturnType<typeof setTimeout> }>();
+    const reopen = (id: string, code: string) => {
+      if (!active) return;
+      const state = retries.get(id) ?? { failures: 0, at: [] };
+      retries.set(id, state);
+      const now = Date.now();
+      state.at = state.at.filter(at => now - at < 60_000);
+      if (code !== "unavailable" || state.at.length >= LOG_STREAM_RETRIES_PER_MINUTE) {
+        if (id === sessionId) setError(true);
+        return;
+      }
+      if (state.timer) return;
+      const wait = Math.min(LOG_STREAM_RETRY_MAX_MS, LOG_STREAM_RETRY_BASE_MS * 2 ** state.failures);
+      state.failures += 1;
+      state.at.push(now);
+      state.timer = setTimeout(() => {
+        state.timer = undefined;
+        if (!active) return;
+        replica.resubscribe(id);
+        if (id === sessionId) void replica.refreshVisible().catch(() => { if (active) setError(true); });
+      }, wait / 2 + Math.random() * (wait / 2));
+    };
     void replica.connect({ userId, workspaceId, env,
       // As the replica's leader this page also subscribes for the sessions other
       // tabs and logs show; `id` is not necessarily this page's session.
@@ -132,7 +167,12 @@ function useLiveLog(replica: IssueLogReplica, sessionId: string, enabled: boolea
         subscriptions.get(id)?.unsubscribe();
         const failed = () => { if (id === sessionId) setError(true); };
         const subscription = subscribeStream("log", id, {
-          onFrames: frames => { void replica.hydratedFrames(id, frames).then(refreshSurfaces).catch(failed); },
+          onFrames: frames => {
+            const retry = retries.get(id);
+            if (retry) retry.failures = 0;
+            void replica.hydratedFrames(id, frames).then(refreshSurfaces).catch(failed);
+          },
+          onError: error => reopen(id, error.code),
           onAck: ack => replica.ack(id, ack),
           onGap: gap => {
             void (id === sessionId ? replica.refreshVisible() : replica.backfill(id, { from: gap.from, to: gap.to })).catch(failed);
@@ -143,6 +183,12 @@ function useLiveLog(replica: IssueLogReplica, sessionId: string, enabled: boolea
       unsubscribe: id => { subscriptions.get(id)?.unsubscribe(); subscriptions.delete(id); },
     }).then(cleanup => { if (active) disconnect = cleanup; else cleanup(); }).catch(() => { if (active) setError(true); });
     const offReconnect = onReconnect(() => { void replica.refreshVisible().catch(() => setError(true)); });
-    return () => { active = false; if (refreshTimer) clearTimeout(refreshTimer); offReconnect(); disconnect?.(); replica.disconnect(); for (const s of subscriptions.values()) s.unsubscribe(); };
+    return () => {
+      active = false;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      for (const retry of retries.values()) if (retry.timer) clearTimeout(retry.timer);
+      offReconnect(); disconnect?.(); replica.disconnect();
+      for (const s of subscriptions.values()) s.unsubscribe();
+    };
   }, [replica, sessionId, enabled, userId, workspaceId, subscribeStream, onReconnect, env, qc, setError, blocked]);
 }

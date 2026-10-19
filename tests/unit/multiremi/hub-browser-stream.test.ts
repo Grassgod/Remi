@@ -17,7 +17,8 @@ const auth: StreamAuthReader = {
   traceFacts: async () => ({ ok: true, facts: { workspaceId: "w", chatSessionId: null, chatCreatorId: null, agentId: null, agentVisibility: null, agentOwnerId: null, requesterIsWorkspaceAdmin: true } }),
 };
 
-function fixture(stream: "log" | "trace" = "log", options: Partial<HubOptions> = {}) {
+function fixture(stream: "log" | "trace" = "log", options: Partial<HubOptions> = {},
+  handlerDeps: Partial<Parameters<typeof createBrowserStreamHandler>[0]> = {}) {
   const hub = createHub({ transport: createLocalHubTransport(), scheduleFlush: () => {}, limits: { ring: { streamMaxFrames: 3 }, laggingBytes: 10 }, ...options });
   hubs.push(hub);
   const frames: Array<{ type: string; payload: any }> = [];
@@ -28,7 +29,7 @@ function fixture(stream: "log" | "trace" = "log", options: Partial<HubOptions> =
     close: () => {},
     getBufferedAmount: () => buffered,
   } satisfies MultiremiWebSocketClient;
-  const handler = createBrowserStreamHandler({ hub, auth, endpoint: stream });
+  const handler = createBrowserStreamHandler({ hub, auth, endpoint: stream, ...handlerDeps });
   const subscribe = (fromSeq = 0) => handler.handleSubscribe(client, { type: "stream.subscribe", payload: { stream, id: "s", from_seq: fromSeq } });
   const row = (seq: number) => {
     if (stream === "log") hub.onEntry("s", { session_id: "s", seq, revision: 1, kind: "message", visibility: "shown" });
@@ -196,4 +197,57 @@ describe("MUL-436 regression 4C: browser inclusive resume", () => {
       }
     });
   }
+});
+
+describe("log projection failures", () => {
+  const until = async (done: () => boolean) => {
+    for (let n = 0; n < 200 && !done(); n++) await new Promise(resolve => setTimeout(resolve, 2));
+    expect(done()).toBe(true);
+  };
+  const secretRow = (hub: HubImpl, seq: number) =>
+    hub.onEntry("s", { session_id: "s", seq, revision: 1, kind: "message", visibility: "shown", body_md: "SECRET_BODY" } as never);
+  const seqs = (frames: Array<{ type: string; payload: any }>) =>
+    frames.filter(frame => frame.type === "stream.data").flatMap(frame => frame.payload.frames.map((f: { seq: number }) => f.seq));
+
+  it("projects a failed batch once more and keeps the stream when that answers, and says why", async () => {
+    const warnings: string[] = [];
+    let failures = 1;
+    const { hub, frames, subscribe } = fixture("log", {}, {
+      projectionRetryMs: 1, warn: message => { warnings.push(message); },
+      projectLogFrames: async (_client, _id, batch) => {
+        if (failures-- > 0) throw new Error("Missing turn for conversation pointer: tsk_1");
+        return [...batch];
+      },
+    });
+    await subscribe(1);
+    secretRow(hub, 1); hub.flushNow();
+    await until(() => seqs(frames).includes(1));
+    secretRow(hub, 2); hub.flushNow();
+    await until(() => seqs(frames).includes(2));
+    expect(frames.some(frame => frame.type === "stream.error")).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("log:s");
+    expect(warnings[0]).toContain("Error: Missing turn for conversation pointer: tsk_1");
+    expect(warnings[0]).toContain("retrying");
+    expect(warnings[0]).not.toContain("SECRET_BODY");
+  });
+
+  it("ends the subscription with unavailable when the retry fails too, logs it, and sends nothing unchecked", async () => {
+    const warnings: string[] = [];
+    const { hub, frames, subscribe } = fixture("log", {}, {
+      projectionRetryMs: 1, warn: message => { warnings.push(message); },
+      projectLogFrames: async () => { throw new Error(`read pool timed out ${"x".repeat(400)}`); },
+    });
+    await subscribe(1);
+    secretRow(hub, 1); hub.flushNow();
+    await until(() => frames.some(frame => frame.type === "stream.error"));
+    secretRow(hub, 2); hub.flushNow();
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(frames.filter(frame => frame.type !== "stream.ack")).toEqual([
+      { type: "stream.error", payload: { stream: "log", id: "s", code: "unavailable" } },
+    ]);
+    expect(warnings).toHaveLength(2);
+    expect(warnings[1]).toContain("closing the stream with unavailable");
+    expect(warnings.every(message => message.length < 400 && !message.includes("SECRET_BODY"))).toBe(true);
+  });
 });

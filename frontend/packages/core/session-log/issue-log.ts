@@ -417,6 +417,13 @@ export class IssueLogReplica extends ReplicaView {
     return job;
   }
   /**
+   * Subscribe to a session's `log:` stream again, from the head the replica
+   * holds: the hub ended the previous subscription (`stream.error`). Only the
+   * tab that leads the replica subscribes, so a follower does nothing.
+   */
+  resubscribe(sessionId: string): void { this.browser?.resubscribe(sessionId); }
+
+  /**
    * A mid-stream gap in a session another tab or log shows: read the range into
    * the shared replica, which publishes it to whoever shows that session. This
    * session's own gaps refresh its window instead (`refreshVisible`).

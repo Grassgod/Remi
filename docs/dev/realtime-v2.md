@@ -44,7 +44,7 @@ B5 的 `GET /api/tasks/:id/trace` 和 `GET /api/shares/:token/tasks/:task_id/tra
 | `resync` | 无 |
 | `pong` | 无 |
 
-`stream.error` 的 code 集在 [contracts/live-hub.ts](../../packages/contracts/src/live-hub.ts) 冻结：`invalid_payload`、`forbidden`、`wrong_endpoint`、`unavailable`。`forbidden` 同时用于「不存在」与「无权限」，订阅者无法据此枚举 id；`unavailable` 表示鉴权查询本身失败（只读池饱和/超时），可重试。
+`stream.error` 的 code 集在 [contracts/live-hub.ts](../../packages/contracts/src/live-hub.ts) 冻结：`invalid_payload`、`forbidden`、`wrong_endpoint`、`unavailable`。`forbidden` 同时用于「不存在」与「无权限」，订阅者无法据此枚举 id；`unavailable` 表示鉴权查询本身失败（只读池饱和/超时），或订阅中某批 `log:` 帧的投影失败，可重试。`stream.error` 之后服务端已退订，这条订阅不再有帧。浏览器（[use-issue-log.ts](../../frontend/packages/core/session-log/use-issue-log.ts) 的 `useLiveLog`）收到 `unavailable` 时按退避重新订阅（0.5s 起每次加倍、最长 8s、带抖动，每条流每分钟最多 6 次），经 `IssueLogReplica.resubscribe` 让副本从已持有的 head 续订，正在显示的会话同时读一次尾部，补上断开期间写入的行；该页为其他会话做 leader 时同样续订，缺口由续订的 ack 补读。其他 code 是拒绝，不重试，显示的会话进入日志错误状态；超过每分钟次数也一样。
 
 `stream.ack.gap` 与 `stream.gap` 不是同一件事：前者是订阅建立时环尾已追不回，后者是订阅期间掉队。
 
@@ -82,7 +82,7 @@ A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部�
 避免部分字段遗漏来源；提问、答复、轮卡片及引用它们的编辑/生命周期标记沿来源任务/agent 鉴权。
 无权行只发送 `{session_id,seq,revision,visibility:"hidden"}`，供本地副本记录连续覆盖范围；查不到行时同样以它失败关闭，所以浏览器（[issue-log.ts](../../frontend/packages/core/session-log/issue-log.ts) 的 `hydratedFrames`）在它可能删去页面已有的行、落在尚未读到的 seq，或是副本只知其隐藏的 seq 的更新 revision 时（占位符代表一次写入，例如 Chat 轮卡片在轮结束时由隐藏变为显示），先经读取接口核对：读取接口仍以不低于该 revision 返回的行保留，否则按隐藏处理，并记下这个 revision，同一 seq 不高于它的占位符不再读取；
 有权帧递归脱除 `card_token_*`。权限只缓存到当前批次，保留的 ring 不按用户改写。
-Postgres 的行与来源事实通过异步 read pool 读取；查询失败停止该订阅并返回 `unavailable`。
+Postgres 的行与来源事实通过异步 read pool 读取。一批帧的投影失败（查询失败或超时，或另一个进程刚写入的行还读不到）时，[browser-stream.ts](../../packages/server/src/api/hub/browser-stream.ts) 等 250ms 重新投影这一批一次，投递链等它完成，顺序不变；只发送投影成功的帧，所以重试不会放出未经检查的行。仍失败才停止该订阅并返回 `unavailable`。每次失败记一条 warn：流 key（`log:<session_id>`）、帧数、第几次、错误名和截断到 200 字符的消息，不含帧内容或凭证。
 
 `task:*` 状态、结果和进度事件也按来源任务权限选择工作区成员，local 与 peer 使用同一个发送函数。
 `inbox:new/read/batch-read` 仅发送 `{index_only:true}`，由客户端重新读取带权限的 inbox API；

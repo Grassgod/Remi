@@ -122,6 +122,48 @@ describe("useIssueLog visibility lifecycle", () => {
     hook.unmount();
   });
 
+  it("opens a stream the hub ended as unavailable again, reads the tail, and shows rows that arrive after", async () => {
+    type Handlers = { onFrames: (frames: unknown[]) => void; onError: (error: { stream: string; id: string; code: string }) => void };
+    const handles: Array<{ fromSeq: number; handlers: Handlers; unsubscribe: ReturnType<typeof vi.fn> }> = [];
+    socket.subscribeStream.mockImplementation((_stream: string, _id: string, handlers: Handlers, options: { fromSeq: number }) => {
+      const handle = { fromSeq: options.fromSeq, handlers, unsubscribe: vi.fn() };
+      handles.push(handle);
+      return handle;
+    });
+    // Row 2 was written while no subscription was open.
+    vi.mocked(api.getSessionLog).mockImplementation(async () => ({ ...initial.window, entries: [row(1), row(2)], head_seq: 2 }));
+    const hook = renderHook(() => useIssueLog("s", initial));
+    try {
+      await waitFor(() => expect(handles).toHaveLength(1));
+      // The hub could not project a batch and ended the subscription.
+      await act(async () => { handles[0]!.handlers.onError({ stream: "log", id: "s", code: "unavailable" }); });
+      await waitFor(() => expect(handles).toHaveLength(2), { timeout: 3_000 });
+      expect(handles[0]!.unsubscribe).toHaveBeenCalled();
+      expect(handles[1]!.fromSeq).toBeGreaterThanOrEqual(2);
+      await waitFor(() => expect(hook.result.current.snapshot.entries.map(entry => entry.seq)).toContain(2));
+      await act(async () => { handles[1]!.handlers.onFrames([{ seq: 3, kind: "entry", payload: row(3) }]); });
+      await waitFor(() => expect(hook.result.current.snapshot.entries.map(entry => entry.seq)).toContain(3));
+      expect(hook.result.current.error).toBe(false);
+    } finally { hook.unmount(); vi.mocked(api.getSessionLog).mockReset(); }
+  });
+
+  it("reports a refused stream as the log's error and does not open it again", async () => {
+    type Handlers = { onError: (error: { stream: string; id: string; code: string }) => void };
+    const handles: Handlers[] = [];
+    socket.subscribeStream.mockImplementation((_stream: string, _id: string, handlers: Handlers) => {
+      handles.push(handlers);
+      return { unsubscribe: vi.fn() };
+    });
+    const hook = renderHook(() => useIssueLog("s", initial));
+    try {
+      await waitFor(() => expect(handles).toHaveLength(1));
+      await act(async () => { handles[0]!.onError({ stream: "log", id: "s", code: "forbidden" }); });
+      await waitFor(() => expect(hook.result.current.error).toBe(true));
+      await new Promise(resolve => setTimeout(resolve, 600));
+      expect(handles).toHaveLength(1);
+    } finally { hook.unmount(); }
+  });
+
   it("batches log frames into cursor, message and turn surface invalidations", async () => {
     const client = new QueryClient();
     const invalidate = vi.spyOn(client, "invalidateQueries");
