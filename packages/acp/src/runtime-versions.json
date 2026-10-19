@@ -1,11 +1,11 @@
 {
   "schema": 1,
-  "preparedFor": "0.2.91",
-  "checkedAt": "2026-10-18T03:58:43.969Z",
+  "preparedFor": "0.2.92",
+  "checkedAt": "2026-10-19T03:14:11.134Z",
   "claude": {
     "acp": "0.93.0",
-    "sdk": "0.3.302",
-    "executable": "2.1.302"
+    "sdk": "0.3.303",
+    "executable": "2.1.303"
   },
   "codex": {
     "acp": "2.2.2",
