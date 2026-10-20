@@ -51,7 +51,7 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 | `bun run e2e:acp` / `bun run e2e:acp:full` | [ACP 冒烟](tests/integration/acp-e2e.ts) / [场景套件](tests/integration/acp-e2e-full.ts) | 对应 provider CLI 和凭据 |
 | `bun run probe:feishu` | [飞书流式卡片](tests/integration/feishu-streaming-probe.ts) | 专用测试会话与飞书凭据 |
 | `bun run replay:coverage` | [ACP fixture 重放检查](tests/integration/replay-coverage.ts) | 仓库内 fixture |
-| `bun run smoke:chat` | 独立 Chat 页面、队列、会话管理和附件；隔离 Next ↔ Bun API ↔ 临时 SQLite，模拟 Agent 输出 | 前端依赖与 Chromium；不调用真实 provider |
+| `bun run smoke:chat` | [独立 Chat 页面](tests/integration/smoke-chat-workspace.ts)（模型标签、「/」菜单）、跟进队列（排队、编辑、每轮放行一条、引导、删除）、停止、未确认送达的重试、会话管理和附件；隔离 Next ↔ Bun API ↔ 临时 SQLite，状态、上传等路径都在临时目录，由脚本自己领取并完成任务 | 前端依赖与 Chromium（`CHROME_EXECUTABLE` 可指定）；`--port=` 改前端端口，默认 3318；不调用真实 provider |
 
 `frontend/e2e/` 仍有继承的 Playwright 用例和上游登录/数据库假设；[配置](frontend/playwright.config.ts)只指定浏览器与 baseURL，不启动服务。它不能替代根 `e2e:frontend` 对 Remi Bun API 的验证。针对这些用例开发时，先核对 [env.ts](frontend/e2e/env.ts) 和实际 helper。
 
