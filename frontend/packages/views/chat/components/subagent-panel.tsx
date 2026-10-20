@@ -484,9 +484,6 @@ function SubagentsPanel({ target, trace, turns: recordTurns, title, onClose }: {
       <SubagentTraceContext.Provider value={source}>
         <div key={target.path.join("/")} data-subagent-panel-body className="min-h-0 flex-1 overflow-y-auto">{body}</div>
       </SubagentTraceContext.Provider>
-      <div data-subagent-panel-footer className="shrink-0 border-t px-4 py-2.5 text-xs text-muted-foreground">
-        {t(($) => $.subagents.read_only)}
-      </div>
     </div>
   );
 }

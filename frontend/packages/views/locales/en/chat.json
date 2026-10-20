@@ -376,7 +376,6 @@
     "pending_result": "The result appears here when it finishes.",
     "stopped_output": "Output before it stopped",
     "working": "Working",
-    "read_only": "Subagents are read-only. To change course, say so in the main chat.",
     "loading": "Loading…",
     "not_found": "Subagent not found",
     "model": "Model {{model}}",

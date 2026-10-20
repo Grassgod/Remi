@@ -39,7 +39,7 @@ claude-agent-acp 0.90.0 与 codex-acp 2.2.2 都能把子代理的工作放在子
    - **完成事实 `late_subagents`。** 最终回复开始后才结束的顶层子代理，至多 5 个 `{item_id, name, status, duration_ms}`。daemon 的 fold 计算，随 `turn.complete` 的完成字段上报；服务端校验后写入 `multiremi_turn_attempts.late_subagents` 并投影到轮卡。可选字段：旧 daemon 不发时写 null，旧服务端只取已知字段、忽略它。Chat 已结束的轮据此在回复下方显示后台完成行，不读 trace（MUL-472）。
    - **运行中计数 `running_subagents`。** 翻译器在子代理状态变化时给出顶层与嵌套计数，daemon 用 best-effort 上行帧 `task.activity { task_id, runtime_id?, running_subagents }` 上报：500 ms 去抖，计数大于 0 时每 30 s 及重连时重发，attempt 结束时报 0。服务端写入 `multiremi_turn_attempts.running_subagents`，值变化时向 Chat 创建者推 `task:subagents`；`GET /api/turns` 的每行带当前尝试的计数，侧栏据此显示「N 个子代理」。用 best-effort 帧是因为计数能从本地状态重算，丢一帧由下次变化或刷新补上，旧服务端按规则忽略未知的 best-effort 帧；复用 `task.progress` 会被服务端按摘要去重，新的可靠事件又需要协议门槛。协议见 [daemon 协议 v2](../daemon-protocol-v2.md)。
    - **存储。** 迁移 `20261017_turn_attempt_subagents` 在两条迁移链上给 `multiremi_turn_attempts` 加两列，加法变更，不迁移旧数据。
-9. **子代理只读。** Chat 的子代理面板只读，提示到主对话里调整。两个桥给子会话的 capabilities 都是 `{}`，claude-agent-acp 的 `prompt()` 不认子会话 id，所以不提供给子代理发消息或停止子代理的入口；运行条也没有停止按钮。
+9. **子代理只读。** Chat 的子代理面板只读，提示到主对话里调整。两个桥给子会话的 capabilities 都是 `{}`，claude-agent-acp 的 `prompt()` 不认子会话 id，所以不提供给子代理发消息或停止子代理的入口；运行条也没有停止按钮。（2026-10-20 用户决定：去掉面板底部的这条提示。面板没有输入框，提示是多余的；要调整仍在主对话里说。）
 
 ## 未采用的方案
 

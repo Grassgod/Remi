@@ -80,8 +80,7 @@ describe("subagent panel", () => {
     open();
     expect(panel()).toHaveAttribute("data-subagent-panel", "overview");
     expect(screen.getByTestId("chat-conversation")).toBe(conversation);
-    // Read-only: no composer, the note says where to steer.
-    expect(document.querySelector("[data-subagent-panel-footer]")).toHaveTextContent("子代理只读。如需调整，请在主对话中说明。");
+    // Read-only: no composer; subagents are steered through the main chat.
     expect(panel()!.querySelector("textarea, [contenteditable]")).toBeNull();
   });
 

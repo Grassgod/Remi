@@ -366,7 +366,6 @@
     "pending_result": "완료되면 여기에 결과가 표시됩니다.",
     "stopped_output": "중지 전 출력",
     "working": "처리 중",
-    "read_only": "하위 에이전트는 읽기 전용입니다. 방향을 바꾸려면 메인 채팅에서 말해 주세요.",
     "loading": "불러오는 중…",
     "not_found": "하위 에이전트를 찾을 수 없습니다",
     "model": "모델 {{model}}",
