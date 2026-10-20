@@ -315,9 +315,9 @@ function traceAttachments(value: unknown): Array<{ id: string; name: string | nu
     return [{ id: row.id, name: typeof row.filename === "string" ? row.filename : typeof row.name === "string" ? row.name : null }];
   });
 }
-/** A failed layout sweep is retried with this backoff; the daemon does not register meanwhile. */
 /** ADR 0025: catalogues kept for attempts that have not sent their terminal report yet. */
 const ATTEMPT_SLASH_COMMANDS_LIMIT = 256;
+/** A failed layout sweep is retried with this backoff; the daemon does not register meanwhile. */
 const LEGACY_SWEEP_RETRY_MIN_MS = 1_000;
 const LEGACY_SWEEP_RETRY_MAX_MS = 30_000;
 const RUNTIME_MODEL_PROBE_TIMEOUT_MS = 30_000;
