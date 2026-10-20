@@ -710,7 +710,7 @@ CHAT_PANEL_TOKEN=<token> CHAT_PANEL_CHAT=<第一个 chat> CHAT_PANEL_ROUNDS=5 bu
 
 ## CI 测试成本
 
-后端文件耗时与分片归属由 [ci-backend.ts](../../scripts/ci-backend.ts)报告，发现范围、初始权重来源、报告 artifact 和更新命令见 [CI 覆盖](../../TESTING.md#ci-覆盖)。历史标题间隔用于调度估算，包含 runner 开销；每文件时间总和不等于整条工作流墙钟时间或计费时间。比较同一范围与环境时，分别记录分片关键路径、所有 job 的总 runner 时间、安装/服务启动与构建开销。
+后端文件耗时与分片归属由 [ci-backend.ts](../../scripts/ci-backend.ts)报告，发现范围、权重来源、分片数、报告 artifact 和更新命令见 [CI 覆盖](../../TESTING.md#ci-覆盖)。历史文件时间只用于调度估算，不含每片 runner 准备与安装开销；每文件时间总和不等于整条工作流墙钟时间或计费时间。比较同一范围与环境时，分别记录分片关键路径、所有 job 的总 runner 时间、安装/服务启动与构建开销。
 
 [路由矩阵夹具](../../tests/helpers/routing-matrix-database.ts)输出创建、初始化、迁移、重置、连接计数及 setup/reset 实采时间；只代表该夹具使用范围。矩阵恢复已改变初始化方式；定向数据库验证保留两后端各304组合且通过，实采每后端一次Store初始化、304次重置。尚无同条件完整CI前后对照，不能据构造次数宣称总体耗时改善已验证，也不能把测试setup时间当作产品延迟。长期去重要求与隔离限制见 [测试说明](../../TESTING.md)。
 

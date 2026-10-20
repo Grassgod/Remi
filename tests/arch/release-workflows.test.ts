@@ -41,7 +41,16 @@ describe("release workflows", () => {
 
   test("parallel backend remains an exact-coverage gate with independent services", () => {
     const ci = readWorkflow("release-build-check.yml");
-    expect(ci.jobs.backend.strategy.matrix.shard).toEqual([0, 1, 2, 3]);
+    // One shard count: the plan step owns it and the matrix is the plan's own indices.
+    const planJob = ci.jobs["backend-plan"];
+    expect(Number.isInteger(planJob.env.BACKEND_SHARDS) && planJob.env.BACKEND_SHARDS > 1).toBe(true);
+    const planStep = planJob.steps.find((step: any) => step.id === "plan");
+    expect(planStep.run).toContain('scripts/ci-backend.ts plan --sha "$GITHUB_SHA" --shards "$BACKEND_SHARDS" --out ci-backend/plan.json');
+    expect(planStep.run).toContain("jq -c '[.shards[].index]' ci-backend/plan.json");
+    expect(JSON.stringify(ci).match(/--shards/g)).toHaveLength(1);
+    expect(planJob.outputs.shards).toBe("${{ steps.plan.outputs.shards }}");
+    expect(ci.jobs.backend.needs).toBe("backend-plan");
+    expect(ci.jobs.backend.strategy.matrix).toEqual({ shard: "${{ fromJSON(needs.backend-plan.outputs.shards) }}" });
     expect(ci.jobs.backend.strategy["fail-fast"]).toBe(false);
     expect(ci.jobs.backend.services.postgres.image).toBe("pgvector/pgvector:pg17");
     const shard = ci.jobs.backend.steps.find((step: any) => step.name === "Backend test shard");
@@ -88,6 +97,9 @@ describe("release workflows", () => {
       expect(image.with.outputs).toContain("oci-mediatypes=true");
       expect(image.with.outputs).toContain("needs.guards.outputs.candidate == 'true'");
       expect(image.with.labels).toContain("org.opencontainers.image.revision=${{ github.sha }}");
+      // Pull requests read the shared layer cache but never export to it.
+      expect(image.with["cache-from"]).toBe(`type=gha,scope=platform-${kind}`);
+      expect(image.with["cache-to"]).toBe(`\${{ github.event_name != 'pull_request' && 'type=gha,scope=platform-${kind},mode=max' || '' }}`);
     }
     const platform = readWorkflow("platform-release.yml");
     const publish = platform.jobs.publish.steps.find((step: any) => step.name === "Publish verified candidate images without rebuilding");

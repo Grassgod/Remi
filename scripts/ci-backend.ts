@@ -146,7 +146,8 @@ if (import.meta.main) {
     const config = currentConfig();
     const scope = config.scope;
     const weights = json(option("weights", "scripts/ci-backend-weights.json"));
-    const plan = createPlan(discoverTests(process.cwd(), scope), Number(option("shards", "4")), weights.seconds, option("sha"), scope, config.preload, weights.source);
+    // No default: the workflow's BACKEND_SHARDS is the only shard count.
+    const plan = createPlan(discoverTests(process.cwd(), scope), Number(option("shards")), weights.seconds, option("sha"), scope, config.preload, weights.source);
     plan.configDigest = config.digest; validatePlan(plan);
     save(option("out"), plan);
     console.log(JSON.stringify({ files: plan.files.length, estimates: plan.shards.map(s => s.estimatedSeconds), defaultSeconds: plan.defaultSeconds }));
