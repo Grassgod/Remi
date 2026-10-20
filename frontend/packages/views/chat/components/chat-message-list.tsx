@@ -51,7 +51,7 @@ import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../
 import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
 
 /** Bumped when Chat's row layout changes, so cached row heights from the old layout are misses. */
-const CHAT_LAYOUT_VERSION = ":chat-layout-v2";
+const CHAT_LAYOUT_VERSION = ":chat-layout-v3";
 /** The shared Chat column; the composer and the rows above it use the same one. */
 const CHAT_CONTENT_CLASS = `${CHAT_COLUMN_CLASS} py-6`;
 /**
@@ -120,8 +120,11 @@ function turnStepsRef(metadata: Record<string, unknown> | undefined, attemptId: 
   };
 }
 
-/** Row heights are cached per render version; an open fold is a different layout. */
-const STEPS_OPEN_VERSION = ":steps-open";
+/**
+ * Row heights are cached per render version; an open fold is a different
+ * layout. v2: the execution-log button left the fold for the reply's footer.
+ */
+const STEPS_OPEN_VERSION = ":steps-open-v2";
 
 const endedBadly = (status: string | null | undefined): status is "failed" | "cancelled" =>
   status === "failed" || status === "cancelled";
@@ -247,7 +250,8 @@ export function ChatMessageList({
       const question = row.kind === "message" && linkedQuestionId(row.id, row.metadata) ? ":question-line-v1"
         // A doorbell is one centered line, not a bubble (PR 6).
         : rowDoorbell(row) ? ":doorbell-v1" : "";
-      // The Chat column, bubble and turn rows changed size; old cached heights are misses.
+      // The Chat column, bubble and turn rows changed size, and the execution-log
+      // button moved into each reply's footer row; old cached heights are misses.
       const steps = openSteps.has(entry.id) ? STEPS_OPEN_VERSION : "";
       return { ...entry, render_version: `${entry.render_version ?? ""}${question}${CHAT_LAYOUT_VERSION}${steps}` };
     }), optimisticRows);
@@ -332,10 +336,11 @@ export function ChatMessageList({
       const stepsRef = card ? card.steps : row.kind === "turn" && !isPush ? turnStepsRef(row.metadata, row.task_id) : null;
       // A failed or cancelled turn's notice carries its own execution log.
       const endNotice = !!(card && endedBadly(card.status)) || !!(turnId && endedBadly(turnStatus));
+      // The execution log is never in the fold: the reply's footer row or the
+      // end notice carries it, in one place whether or not there are steps.
       const stepsFold = stepsRef ? <FinishedTurnSteps attemptId={stepsRef.attemptId} turnId={stepsRef.turnId} sessionId={sessionId}
         header={finishedFoldHeader(stepsRef)} visible={visible} open={openSteps.has(row.id)}
-        onOpenChange={(open) => setStepsOpen(row.id, open)}
-        footer={endNotice ? undefined : <ChatTraceButton taskId={stepsRef.attemptId} turnId={stepsRef.turnId} visible={visible} />} /> : null;
+        onOpenChange={(open) => setStepsOpen(row.id, open)} /> : null;
       // Subagents that finished after the reply started: rows under the reply,
       // read from the card (MUL-472: no trace until the reader opens one).
       const lateRef = card ? (card.attemptId && card.lateSubagents ? { attemptId: card.attemptId, turnId: card.turnId, late: card.lateSubagents } : null)
@@ -452,16 +457,16 @@ function AssistantMessage({
 
   // Legacy failure bubble: an assistant row written by the server's FailTask
   // fallback before turns carried their own status. Canonical failed turns
-  // render TurnEndNotice instead.
+  // render TurnEndNotice instead. Like that notice, a failure keeps its
+  // execution log visible; it sits in the footer row, where a reply has it.
   if (message.failure_reason) {
     return (
-      <div className="w-full space-y-1.5"><FailureBubble
+      <FailureBubble
         reason={message.failure_reason}
         rawError={message.content}
         elapsedMs={message.elapsed_ms}
+        trace={traceRef ? <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} /> : null}
       />
-        {traceRef && <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} />}
-      </div>
     );
   }
 
@@ -480,8 +485,8 @@ function AssistantMessage({
       <MessageFooter
         message={message}
         isPending={isPending}
-        // The steps fold carries the execution log for the turns that have one.
-        trace={traceRef && !steps
+        // Every reply keeps its execution log here, with or without a steps fold.
+        trace={traceRef
           ? <ChatTraceButton taskId={traceRef.taskId} turnId={traceRef.turnId} visible={visible} quiet /> : null}
       />
     </div>
@@ -611,9 +616,10 @@ function NotWokenHint({ wakeApplied, wakeReason }: { wakeApplied?: string | null
 }
 
 // Inline footer row beneath the assistant reply: "Replied in 38s · [Copy] [Log]".
-// The elapsed caption always shows; the actions appear on hover or keyboard
-// focus (see REVEAL_ON_ROW). Copy is suppressed during streaming because the
-// final text is still being appended.
+// The one place a reply's execution log sits, with or without a steps fold
+// above the reply. The elapsed caption always shows; the actions appear on
+// hover or keyboard focus (see REVEAL_ON_ROW). Copy is suppressed during
+// streaming because the final text is still being appended.
 function MessageFooter({
   message,
   isPending,
@@ -626,7 +632,7 @@ function MessageFooter({
   const showCopy = !isPending;
   if (message.elapsed_ms == null && !showCopy && !trace) return null;
   return (
-    <div className="flex min-h-6 items-center gap-1.5">
+    <div data-chat-message-footer className="flex min-h-6 items-center gap-1.5">
       {message.elapsed_ms != null && (
         <ElapsedCaption variant="replied" elapsedMs={message.elapsed_ms} />
       )}
@@ -705,10 +711,13 @@ function FailureBubble({
   reason,
   rawError,
   elapsedMs,
+  trace,
 }: {
   reason: string;
   rawError: string;
   elapsedMs?: number | null;
+  /** The execution-log button, after the elapsed caption as in a reply's footer. */
+  trace?: React.ReactNode;
 }) {
   const { t } = useT("chat");
   const [open, setOpen] = useState(false);
@@ -749,8 +758,11 @@ function FailureBubble({
           )}
         </div>
       </div>
-      {elapsedMs != null && (
-        <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />
+      {(elapsedMs != null || trace) && (
+        <div data-chat-message-footer className="flex min-h-6 items-center gap-1.5">
+          {elapsedMs != null && <ElapsedCaption variant="failed" elapsedMs={elapsedMs} />}
+          {trace}
+        </div>
       )}
     </div>
   );

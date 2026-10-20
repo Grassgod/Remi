@@ -452,7 +452,12 @@ describe("ChatMessageList with mid-run agent attachments", () => {
     fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')!);
     expect(screen.getByText("Provider rejected the prompt")).toBeInTheDocument();
     expect(getTaskTrace).not.toHaveBeenCalled();
-    expect(view.container.querySelector("[data-chat-trace]")).toBeInTheDocument();
+    // One log button, after the failed-after caption in the footer row where a
+    // reply has it; a failure keeps it visible, as the end notice does.
+    const logs = view.container.querySelectorAll<HTMLButtonElement>("[data-chat-trace]");
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.parentElement).toHaveAttribute("data-chat-message-footer");
+    expect(logs[0]!.className).not.toContain("opacity-0");
     view.unmount();
   });
   it("keeps the running task's live steps visible after an attachment push lands", () => {
@@ -723,8 +728,6 @@ describe("finished turn steps fold (MUL-472)", () => {
       expect(fold).not.toBeNull();
       const header = fold.querySelector<HTMLButtonElement>("[data-chat-steps-header]")!;
       expect(header).toHaveAttribute("aria-expanded", "false");
-      // The fold carries the execution log, so the reply footer has none of its own.
-      expect(reply.querySelector("[data-chat-trace]")).toBeNull();
       // An old card without a count gets no fold and keeps the quiet log button.
       const old = view.container.querySelector<HTMLElement>('[data-perf-key="turn_8"]')!;
       expect(old.querySelector("[data-chat-steps]")).toBeNull();
@@ -734,24 +737,85 @@ describe("finished turn steps fold (MUL-472)", () => {
       fireEvent.click(header);
       await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("attempt_7", { itemCursor: 0, turnId: "turn_7" }));
       expect(getTaskTrace).toHaveBeenCalledTimes(1);
-      await waitFor(() => expect(reply.querySelector('[data-chat-steps="finished"] [data-chat-trace]')).not.toBeNull());
+      await waitFor(() => expect(fold.querySelector('[role="status"]')).toBeNull());
+      // Open and loaded, the fold still carries no log button of its own.
+      expect(fold.querySelector("[data-chat-trace]")).toBeNull();
+      expect(reply.querySelectorAll("[data-chat-trace]")).toHaveLength(1);
     } finally { view.unmount(); client.clear(); }
   });
 
-  it("puts a failed turn's steps above its failure notice and keeps the notice's own log button", () => {
-    const getTaskTrace = vi.fn();
+  it("puts the execution log in the reply's footer row, after copy, with or without a steps fold", async () => {
+    const getTaskTrace = vi.fn().mockResolvedValue(turnPage(traceTurn({ id: "attempt_13", status: "completed" }), []));
+    const getTask = vi.fn(async (id: string, turnId?: string) => ({ id, turn_id: turnId, agent_id: "", runtime_id: "", issue_id: "",
+      status: "completed", priority: 0, created_at: "2026-10-05T00:00:00Z", started_at: null, dispatched_at: null, completed_at: null, result: null, error: null }));
+    setApiInstance({ getTaskTrace, getTask, getTurn: vi.fn(), getTaskPrompt: vi.fn().mockRejectedValue({ status: 404 }) } as never);
+    const { view, client } = renderRows([
+      { seq: 1, id: "turn_13", kind: "turn", task_id: "attempt_13", body_md: "",
+        metadata: { turn_id: "turn_13", status: "completed", final_entry_id: "msg_13", process_item_count: 2, worked_ms: 20_000, elapsed_ms: 21_000 } },
+      { seq: 2, id: "msg_13", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_13", body_md: "With steps", metadata: { elapsed_ms: 21_000 } },
+      { seq: 3, id: "turn_14", kind: "turn", task_id: "attempt_14", body_md: "",
+        metadata: { turn_id: "turn_14", status: "completed", final_entry_id: "msg_14", elapsed_ms: 12_000 } },
+      { seq: 4, id: "msg_14", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_14", body_md: "Without steps", metadata: { elapsed_ms: 12_000 } },
+    ]);
+    try {
+      const withSteps = view.container.querySelector<HTMLElement>('[data-perf-key="msg_13"]')!;
+      const without = view.container.querySelector<HTMLElement>('[data-perf-key="msg_14"]')!;
+      expect(withSteps.querySelector('[data-chat-steps="finished"]')).not.toBeNull();
+      expect(without.querySelector("[data-chat-steps]")).toBeNull();
+      for (const reply of [withSteps, without]) {
+        const logs = reply.querySelectorAll<HTMLButtonElement>("[data-chat-trace]");
+        expect(logs).toHaveLength(1);
+        const footer = logs[0]!.parentElement!;
+        expect(footer).toHaveAttribute("data-chat-message-footer");
+        // The footer row is the reply's last line, and the log is its last action.
+        expect(footer.closest("[data-chat-steps]")).toBeNull();
+        expect(footer.querySelector("[data-chat-copy]")!.compareDocumentPosition(logs[0]!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        expect(footer.lastElementChild).toBe(logs[0]);
+        // Revealed with copy on hover or focus.
+        expect(logs[0]!.className).toContain("opacity-0");
+      }
+      expect(getTask).not.toHaveBeenCalled();
+      // Each opens the execution dialog of its own attempt and turn.
+      fireEvent.click(withSteps.querySelector<HTMLButtonElement>("[data-chat-trace]")!);
+      await waitFor(() => expect(getTask).toHaveBeenCalledWith("attempt_13", "turn_13"));
+      expect(await screen.findByRole("dialog")).toBeInTheDocument();
+      await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("attempt_13", { itemCursor: 0, turnId: "turn_13" }));
+      fireEvent.click(without.querySelector<HTMLButtonElement>("[data-chat-trace]")!);
+      await waitFor(() => expect(getTask).toHaveBeenCalledWith("attempt_14", "turn_14"));
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("puts a failed turn's steps above its failure notice and keeps the notice's own log button", async () => {
+    const getTaskTrace = vi.fn().mockResolvedValue(turnPage(traceTurn({ id: "attempt_9", status: "failed" }), [command("cmd_1", [read("a.ts")])]));
     setApiInstance({ getTaskTrace, getTurn: vi.fn() } as never);
     const { view, client } = renderRows([
       { seq: 1, id: "turn_9", kind: "turn", task_id: "attempt_9", body_md: "",
         metadata: { turn_id: "turn_9", status: "failed", failure_reason: "agent_error", process_item_count: 2, elapsed_ms: 5000 } },
+      // The same with its reply row loaded: the reply row shows the notice.
+      { seq: 2, id: "turn_15", kind: "turn", task_id: "attempt_15", body_md: "",
+        metadata: { turn_id: "turn_15", status: "failed", failure_reason: "agent_error", final_entry_id: "msg_15", process_item_count: 2, elapsed_ms: 5000 } },
+      { seq: 3, id: "msg_15", kind: "message", sender_type: "agent", message_kind: "reply", task_id: "turn_15",
+        body_md: "Provider rejected the prompt", metadata: { failure_reason: "agent_error", elapsed_ms: 5000 } },
     ]);
     try {
+      for (const key of ["turn_9", "msg_15"]) {
+        const row = view.container.querySelector<HTMLElement>(`[data-perf-key="${key}"]`)!;
+        const fold = row.querySelector('[data-chat-steps="finished"]')!;
+        const notice = row.querySelector('[data-turn-notice="failed"]')!;
+        expect(fold.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+        // Exactly one log button: the notice's, never a second in the fold or a footer.
+        const logs = row.querySelectorAll("[data-chat-trace]");
+        expect(logs).toHaveLength(1);
+        expect(notice.contains(logs[0]!)).toBe(true);
+        expect(row.querySelector("[data-chat-message-footer]")).toBeNull();
+      }
+      expect(getTaskTrace).not.toHaveBeenCalled();
       const row = view.container.querySelector<HTMLElement>('[data-perf-key="turn_9"]')!;
       const fold = row.querySelector('[data-chat-steps="finished"]')!;
-      const notice = row.querySelector('[data-turn-notice="failed"]')!;
-      expect(fold.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-      expect(notice.querySelector("[data-chat-trace]")).not.toBeNull();
-      expect(getTaskTrace).not.toHaveBeenCalled();
+      fireEvent.click(fold.querySelector<HTMLButtonElement>("[data-chat-steps-header]")!);
+      await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("attempt_9", { itemCursor: 0, turnId: "turn_9" }));
+      await waitFor(() => expect(fold.querySelector('[role="status"]')).toBeNull());
+      expect(row.querySelectorAll("[data-chat-trace]")).toHaveLength(1);
     } finally { view.unmount(); client.clear(); }
   });
 

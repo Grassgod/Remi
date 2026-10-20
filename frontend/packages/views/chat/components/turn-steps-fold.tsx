@@ -161,8 +161,10 @@ export function LiveTurnSteps({ trace, sessionId = null }: { trace: Pick<TurnTra
  * notice) under "Worked for {t}". Renders only for a card that counted process
  * items. Collapsed by default, and the trace is read only once the reader
  * opens it (MUL-472: Chat never reads a finished turn's trace on its own).
+ * The execution-log button is not here: the reply's footer row (or the end
+ * notice) carries it, in the same place as for a turn without a fold.
  */
-export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header, visible, open, onOpenChange, footer }: {
+export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header, visible, open, onOpenChange }: {
   attemptId: string;
   turnId?: string;
   /** The chat the turn belongs to: its subagent rows open the panel there. */
@@ -171,8 +173,6 @@ export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header,
   visible: boolean;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Rendered under the steps once they load: the execution-log button. */
-  footer?: ReactNode;
 }) {
   const { t } = useT("chat");
   const { t: ta } = useT("agents");
@@ -214,7 +214,6 @@ export function FinishedTurnSteps({ attemptId, turnId, sessionId = null, header,
       ) : read?.format === "legacy" ? null : (
         <div className="text-sm text-muted-foreground">{t(($) => $.turn_steps.empty)}</div>
       )}
-      {footer && trace.loaded && <div className="mt-3">{footer}</div>}
     </StepsFold>
   );
 }
