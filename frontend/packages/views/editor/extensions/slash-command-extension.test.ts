@@ -79,6 +79,25 @@ describe("slash command tokenizer", () => {
     expect(tokenize(md)?.attributes.label).toBe("deploy[prod]");
   });
 
+  it("sends a menu chip as its raw invocation, never its hint", () => {
+    expect(renderMarkdown({ attrs: { id: "agent:compact", label: "compact", invocation: "/compact", hint: "[instructions]" } }))
+      .toBe("/compact");
+    expect(renderMarkdown({ attrs: { id: "skill:s1", label: "Deploy Prod", invocation: "$deploy-prod" } }))
+      .toBe("$deploy-prod");
+  });
+
+  it("shows a menu chip as its invocation", () => {
+    const [, attrs, text] = renderHTML.call(
+      { options: { HTMLAttributes: { class: "slash-command" } } },
+      {
+        node: { attrs: { id: "skill:s1", label: "Deploy Prod", invocation: "/deploy-prod" } },
+        HTMLAttributes: { "data-invocation": "/deploy-prod" },
+      },
+    );
+    expect(text).toBe("/deploy-prod");
+    expect(attrs).toMatchObject({ "data-invocation": "/deploy-prod" });
+  });
+
   it("does not match ordinary markdown links", () => {
     expect(tokenize("[docs](https://example.com)")).toBeUndefined();
   });

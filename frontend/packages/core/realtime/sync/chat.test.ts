@@ -338,3 +338,19 @@ describe("chat:background_tasks (PR 6 §7)", () => {
     } finally { unsubscribe(); }
   });
 });
+
+describe("slash-command catalogue realtime (ADR 0025)", () => {
+  const catalogue = { state: "session", provider: "claude", reported_at: null, commands: [] };
+  it.each([
+    ["chat:done", { chat_session_id: "chat-1", task_id: "task-1", message_id: "m1" }],
+    ["task:failed", { chat_session_id: "chat-1", task_id: "task-1" }],
+  ] as const)("marks every catalogue of the workspace stale on %s", (event, payload) => {
+    qc.setQueryData(chatKeys.slashCommands("ws-1", "agent-1", "chat-1"), catalogue);
+    qc.setQueryData(chatKeys.slashCommands("ws-1", "agent-1", null), { ...catalogue, state: "preview" });
+    qc.setQueryData(chatKeys.slashCommands("ws-2", "agent-1", "chat-1"), catalogue);
+    handlers[event]?.(payload);
+    expect(qc.getQueryState(chatKeys.slashCommands("ws-1", "agent-1", "chat-1"))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(chatKeys.slashCommands("ws-1", "agent-1", null))?.isInvalidated).toBe(true);
+    expect(qc.getQueryState(chatKeys.slashCommands("ws-2", "agent-1", "chat-1"))?.isInvalidated).toBe(false);
+  });
+});

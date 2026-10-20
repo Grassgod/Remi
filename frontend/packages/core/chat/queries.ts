@@ -37,7 +37,31 @@ export const chatKeys = {
   backgroundTasksAll: (wsId: string) => [...chatKeys.all(wsId), "background-tasks"] as const,
   /** One Chat's background tasks (PR 6): the session registry, never a trace. */
   backgroundTasks: (wsId: string, sessionId: string) => [...chatKeys.backgroundTasksAll(wsId), sessionId] as const,
+  /** Prefix of every composer slash-command catalogue (ADR 0025). */
+  slashCommandsAll: (wsId: string) => [...chatKeys.all(wsId), "slash-commands"] as const,
+  /** The catalogue of one agent in one Chat; a Chat not created yet is `"new"`. */
+  slashCommands: (wsId: string, agentId: string, sessionId: string | null) =>
+    [...chatKeys.slashCommandsAll(wsId), agentId, sessionId ?? "new"] as const,
 };
+
+/**
+ * The agent's command catalogue for the composer menu (ADR 0025). It changes
+ * only when a turn ends, which invalidates it (`chat:done`, `task:failed`);
+ * the stale time only bounds a missed event.
+ */
+export function chatSlashCommandsOptions(
+  wsId: string,
+  agentId: string | null,
+  sessionId: string | null,
+  options: { enabled?: boolean } = {},
+) {
+  return queryOptions({
+    queryKey: chatKeys.slashCommands(wsId, agentId ?? "", sessionId),
+    queryFn: () => api.getChatSlashCommands({ agentId: agentId!, sessionId }),
+    enabled: !!wsId && !!agentId && (options.enabled ?? true),
+    staleTime: 5 * 60_000,
+  });
+}
 
 /**
  * Fallback re-poll cadence for chat pending tasks (MUL-472 a / A6).

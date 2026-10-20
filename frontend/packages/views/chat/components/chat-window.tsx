@@ -99,6 +99,7 @@ import { SubagentPanelLayout } from "./subagent-panel";
 import { ChatSidePanelToggle, useChatPanelRecord } from "./side-panel-toggle";
 import { useChatBackgroundTasks } from "./use-background-tasks";
 import { useChatModel } from "./use-chat-model";
+import { useSlashCommandMenu } from "./use-slash-command-menu";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -425,13 +426,21 @@ export function ChatWindow({
   const availability =
     presenceDetail === "loading" ? undefined : presenceDetail.availability;
 
-  // The composer's model chip names the chat's own agent's model: a started
+  // The composer's model chip and `/` menu name the chat's own agent: a started
   // chat's agent, never the composer's fallback pick for it.
+  const chatAgent = activeSessionId ? agents.find((a) => a.id === currentSession?.agent_id) ?? null : activeAgent;
   const chatModel = useChatModel({
     wsId,
-    agent: activeSessionId ? agents.find((a) => a.id === currentSession?.agent_id) ?? null : activeAgent,
+    agent: chatAgent,
     sessionId: displayedSessionId,
     pendingTask,
+    enabled: chatVisible,
+  });
+  const slashCommands = useSlashCommandMenu({
+    wsId,
+    agent: chatAgent,
+    agentPending: sessionAgentPending,
+    sessionId: displayedSessionId,
     enabled: chatVisible,
   });
 
@@ -1082,6 +1091,8 @@ export function ChatWindow({
         }
         model={chatModel}
         contextItems={contextItems}
+        slashCommands={slashCommands.menu}
+        onSlashCommandsOpen={slashCommands.onOpen}
       />
     </>
   );

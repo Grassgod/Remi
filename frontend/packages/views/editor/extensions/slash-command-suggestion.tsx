@@ -2,164 +2,279 @@
 
 import {
   forwardRef,
-  useCallback,
   useEffect,
   useImperativeHandle,
+  useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
+  type ReactNode,
 } from "react";
-import type { QueryClient } from "@tanstack/react-query";
 import type { SuggestionOptions } from "@tiptap/suggestion";
 import { PluginKey } from "@tiptap/pm/state";
-import { useAuthStore } from "@multiremi/core/auth";
-import { useChatStore } from "@multiremi/core/chat";
-import { getCurrentWsId } from "@multiremi/core/platform";
-import { canAssignAgentToIssue } from "@multiremi/core/permissions";
+import {
+  defaultSlashSelection,
+  rankSlashMenu,
+  type RankedSlashMenuItem,
+  type SlashMenuItem,
+  type SlashMenuModel,
+} from "@multiremi/core/chat/slash-menu";
 import { isImeComposing } from "@multiremi/core/utils";
-import { workspaceKeys } from "@multiremi/core/workspace/queries";
-import type { Agent, MemberWithUser } from "@multiremi/core/types";
 import { useT } from "../../i18n";
 import { createSuggestionPopupRender } from "./suggestion-popup";
 
-const MAX_ITEMS = 20;
-
-export interface SlashCommandItem {
-  id: string;
-  label: string;
-  description: string;
+/**
+ * Where the `/` menu reads the agent's commands and skills. The composer owns
+ * it and calls `set` as the catalogue loads, so a menu that is already open
+ * fills in without the user typing another character.
+ */
+export interface SlashMenuSource {
+  get: () => SlashMenuModel | null;
+  subscribe: (listener: () => void) => () => void;
+  /** Called each time the menu opens, so the composer can start reading the catalogue then. */
+  opened?: () => void;
 }
 
-interface SlashCommandListProps {
-  items: SlashCommandItem[];
+export interface WritableSlashMenuSource extends SlashMenuSource {
+  set: (model: SlashMenuModel | null) => void;
+}
+
+export function createSlashMenuSource(
+  initial: SlashMenuModel | null = null,
+  opened?: () => void,
+): WritableSlashMenuSource {
+  let current = initial;
+  const listeners = new Set<() => void>();
+  return {
+    get: () => current,
+    opened,
+    set: (model) => {
+      if (model === current) return;
+      current = model;
+      for (const listener of listeners) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
+export interface SlashCommandListProps {
+  source: SlashMenuSource;
   query: string;
-  command: (item: SlashCommandItem) => void;
+  command: (item: SlashMenuItem) => void;
 }
 
 export interface SlashCommandListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
 }
 
-export const SlashCommandList = forwardRef<
-  SlashCommandListRef,
-  SlashCommandListProps
->(function SlashCommandList({ items, query, command }, ref) {
-  const { t } = useT("editor");
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
-
-  useEffect(() => {
-    setSelectedIndex(0);
-  }, [items]);
-
-  useEffect(() => {
-    itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
-  }, [selectedIndex]);
-
-  const selectItem = useCallback(
-    (index: number) => {
-      const item = items[index];
-      if (!item) return;
-      command(item);
-    },
-    [items, command],
-  );
-
-  useImperativeHandle(ref, () => ({
-    onKeyDown: ({ event }) => {
-      if (isImeComposing(event)) return false;
-      if (event.key === "ArrowUp") {
-        if (items.length === 0) return false;
-        setSelectedIndex((i) => (i + items.length - 1) % items.length);
-        return true;
-      }
-      if (event.key === "ArrowDown") {
-        if (items.length === 0) return false;
-        setSelectedIndex((i) => (i + 1) % items.length);
-        return true;
-      }
-      if (event.key === "Enter") {
-        if (items.length === 0) return false;
-        selectItem(selectedIndex);
-        return true;
-      }
-      return false;
-    },
-  }));
-
-  if (items.length === 0) {
-    return (
-      <div className="rounded-md border bg-popover p-2 text-xs text-muted-foreground shadow-md">
-        {t(($) =>
-          query.trim()
-            ? $.slash_command.no_results
-            : $.slash_command.no_skills_configured,
-        )}
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-md border bg-popover py-1 shadow-md w-72 max-h-[300px] overflow-y-auto">
-      {items.map((item, index) => (
-        <button
-          key={item.id}
-          ref={(el) => {
-            itemRefs.current[index] = el;
-          }}
-          className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left text-xs transition-colors ${
-            selectedIndex === index ? "bg-accent" : "hover:bg-accent/50"
-          }`}
-          onClick={() => selectItem(index)}
-        >
-          <span className="font-medium">/{item.label}</span>
-          {item.description && (
-            <span className="truncate text-muted-foreground">
-              {item.description}
-            </span>
-          )}
-        </button>
-      ))}
-    </div>
-  );
-});
-
-function buildItems(qc: QueryClient, query: string): SlashCommandItem[] {
-  const wsId = getCurrentWsId();
-  if (!wsId) return [];
-
-  const agents: Agent[] = qc.getQueryData(workspaceKeys.agents(wsId)) ?? [];
-  const members: MemberWithUser[] =
-    qc.getQueryData(workspaceKeys.members(wsId)) ?? [];
-  // Tiptap calls suggestion items outside React render, so direct store reads
-  // are intentional here.
-  const { selectedAgentId } = useChatStore.getState();
-  const userId = useAuthStore.getState().user?.id ?? null;
-  const memberRole = members.find((m) => m.user_id === userId)?.role ?? null;
-
-  const availableAgents = agents.filter(
-    (a) =>
-      !a.archived_at &&
-      canAssignAgentToIssue(a, { userId, role: memberRole }).allowed,
-  );
-  const activeAgent =
-    availableAgents.find((a) => a.id === selectedAgentId) ??
-    availableAgents[0] ??
-    null;
-
-  const q = query.toLowerCase();
-  return (activeAgent?.skills ?? [])
-    .filter(
-      (s) =>
-        !q ||
-        s.name.toLowerCase().includes(q) ||
-        (s.description ?? "").toLowerCase().includes(q),
-    )
-    .slice(0, MAX_ITEMS)
-    .map((s) => ({ id: s.id, label: s.name, description: s.description ?? "" }));
+function hasModifier(event: KeyboardEvent): boolean {
+  return event.metaKey || event.ctrlKey || event.altKey;
 }
 
-export function createSlashCommandSuggestion(qc: QueryClient): Omit<
-  SuggestionOptions<SlashCommandItem>,
+export const SlashCommandList = forwardRef<SlashCommandListRef, SlashCommandListProps>(
+  function SlashCommandList({ source, query, command }, ref) {
+    const { t } = useT("editor");
+    const model = useSyncExternalStore(source.subscribe, source.get, source.get);
+    const ranked = useMemo(
+      // Not cut short: a catalogue is bounded (SLASH_COMMAND_LIMITS) and the list scrolls.
+      () => rankSlashMenu(model?.items ?? [], query),
+      [model, query],
+    );
+    const rankedKey = ranked.map((entry) => entry.item.id).join("\n");
+    const [selectedIndex, setSelectedIndex] = useState(() => defaultSlashSelection(ranked));
+    const itemRefs = useRef<(HTMLButtonElement | null)[]>([]);
+
+    useEffect(() => {
+      source.opened?.();
+    }, [source]);
+
+    // A new query or a newly loaded catalogue starts over from the default
+    // pick; a weak match is never picked, so Enter keeps its own meaning.
+    useEffect(() => {
+      setSelectedIndex(defaultSlashSelection(ranked));
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [query, rankedKey]);
+
+    useEffect(() => {
+      if (selectedIndex >= 0) itemRefs.current[selectedIndex]?.scrollIntoView({ block: "nearest" });
+    }, [selectedIndex]);
+
+    useImperativeHandle(ref, () => ({
+      onKeyDown: ({ event }) => {
+        if (isImeComposing(event) || hasModifier(event)) return false;
+        const count = ranked.length;
+        if (event.key === "ArrowDown") {
+          if (count === 0) return false;
+          setSelectedIndex((index) => (index < 0 ? 0 : (index + 1) % count));
+          return true;
+        }
+        if (event.key === "ArrowUp") {
+          if (count === 0) return false;
+          setSelectedIndex((index) => (index <= 0 ? count - 1 : index - 1));
+          return true;
+        }
+        if (event.key === "Enter") {
+          const entry = ranked[selectedIndex];
+          if (!entry) return false;
+          command(entry.item);
+          return true;
+        }
+        if (event.key === "Tab") {
+          if (event.shiftKey) return false;
+          const entry = ranked[selectedIndex] ?? ranked[0];
+          if (!entry) return false;
+          command(entry.item);
+          return true;
+        }
+        return false;
+      },
+    }));
+
+    const agentRows: { entry: RankedSlashMenuItem; index: number }[] = [];
+    const skillRows: { entry: RankedSlashMenuItem; index: number }[] = [];
+    ranked.forEach((entry, index) => {
+      (entry.item.group === "agent" ? agentRows : skillRows).push({ entry, index });
+    });
+    const typed = query.trim() !== "";
+    const hasSkills = (model?.items ?? []).some((item) => item.group === "skill");
+
+    const renderRow = ({ entry, index }: { entry: RankedSlashMenuItem; index: number }) => (
+      <SlashCommandRow
+        key={entry.item.id}
+        item={entry.item}
+        selected={index === selectedIndex}
+        onSelect={() => command(entry.item)}
+        buttonRef={(el) => {
+          itemRefs.current[index] = el;
+        }}
+      />
+    );
+
+    // 「Agent 命令」: the catalogue's state decides what stands in for rows,
+    // so loading or an error never reads as "this agent has no commands".
+    let agentNote: ReactNode = null;
+    if (model?.status === "loading") {
+      agentNote = <SlashNote>{t(($) => $.slash_command.loading)}</SlashNote>;
+    } else if (model?.status === "error") {
+      agentNote = <SlashNote tone="warning">{t(($) => $.slash_command.load_failed)}</SlashNote>;
+    } else if (model?.catalogue === "none") {
+      agentNote = <SlashNote>{t(($) => $.slash_command.agent_commands_after_reply)}</SlashNote>;
+    } else if (model?.catalogue === "preview" && agentRows.length > 0) {
+      agentNote = <SlashNote>{t(($) => $.slash_command.preview_note)}</SlashNote>;
+    }
+    const showAgentGroup = model !== null && (agentRows.length > 0 || agentNote !== null);
+    const skillNote = !typed && !hasSkills && model !== null
+      ? <SlashNote>{t(($) => $.slash_command.no_skills_configured)}</SlashNote>
+      : null;
+    const showSkillGroup = skillRows.length > 0 || skillNote !== null;
+
+    if (!showAgentGroup && !showSkillGroup) {
+      return (
+        <div className="rounded-md border bg-popover p-2 text-xs text-muted-foreground shadow-md" role="status">
+          {t(($) => (typed ? $.slash_command.no_results : $.slash_command.empty))}
+        </div>
+      );
+    }
+
+    return (
+      <div
+        className="flex max-h-[420px] w-80 flex-col overflow-y-auto overscroll-contain rounded-md border bg-popover py-1 shadow-md"
+        role="listbox"
+        aria-label={t(($) => $.slash_command.aria_label)}
+      >
+        {showAgentGroup ? (
+          <section data-slash-group="agent">
+            <SlashGroupHeader>{t(($) => $.slash_command.group_agent)}</SlashGroupHeader>
+            {agentNote}
+            {agentRows.map(renderRow)}
+          </section>
+        ) : null}
+        {showSkillGroup ? (
+          <section data-slash-group="skill">
+            <SlashGroupHeader>{t(($) => $.slash_command.group_skills)}</SlashGroupHeader>
+            {skillNote}
+            {skillRows.map(renderRow)}
+          </section>
+        ) : null}
+      </div>
+    );
+  },
+);
+
+function SlashGroupHeader({ children }: { children: ReactNode }) {
+  return (
+    <div className="px-3 pb-1 pt-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">
+      {children}
+    </div>
+  );
+}
+
+function SlashNote({ children, tone = "muted" }: { children: ReactNode; tone?: "muted" | "warning" }) {
+  return (
+    <div
+      className={`px-3 pb-1.5 text-[11px] leading-snug ${tone === "warning" ? "text-warning" : "text-muted-foreground"}`}
+      role={tone === "warning" ? "alert" : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SlashCommandRow({
+  item,
+  selected,
+  onSelect,
+  buttonRef,
+}: {
+  item: SlashMenuItem;
+  selected: boolean;
+  onSelect: () => void;
+  buttonRef: (el: HTMLButtonElement | null) => void;
+}) {
+  const { t } = useT("editor");
+  // A platform skill keeps its own name ("Deploy Prod"); what is sent follows it.
+  const named = item.group === "skill" && item.label !== item.invocation.replace(/^[/$]/, "");
+  const tag = item.group === "agent"
+    ? item.kind === "skill" ? t(($) => $.slash_command.kind_skill)
+      : item.kind === "mcp_prompt" ? t(($) => $.slash_command.kind_mcp) : null
+    : null;
+  return (
+    <button
+      type="button"
+      ref={buttonRef}
+      role="option"
+      aria-selected={selected}
+      data-slash-item={item.id}
+      className={`flex w-full flex-col gap-0.5 px-3 py-1.5 text-left text-xs transition-colors ${
+        selected ? "bg-accent" : "hover:bg-accent/50"
+      }`}
+      // Keep focus (and the open suggestion) in the editor until the click lands.
+      onMouseDown={(event) => event.preventDefault()}
+      onClick={onSelect}
+    >
+      <span className="flex min-w-0 items-baseline gap-1.5">
+        <span className="shrink-0 font-medium">{named ? item.label : item.invocation}</span>
+        {named ? <span className="shrink-0 text-muted-foreground">{item.invocation}</span> : null}
+        {item.hint ? <span className="min-w-0 truncate text-muted-foreground/70">{item.hint}</span> : null}
+        {tag ? (
+          <span className="ml-auto shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">{tag}</span>
+        ) : null}
+      </span>
+      {item.description ? <span className="truncate text-muted-foreground">{item.description}</span> : null}
+    </button>
+  );
+}
+
+/**
+ * The `/` menu: opens only when the `/` is the first character of the
+ * message, and picking a row puts the item's chip there, followed by a space.
+ * The chip is sent as its raw invocation (see slash-command-extension.ts).
+ */
+export function createSlashCommandSuggestion(source: SlashMenuSource): Omit<
+  SuggestionOptions<SlashMenuItem>,
   "editor"
 > {
   const pluginKey = new PluginKey("slashCommandSuggestion");
@@ -167,13 +282,11 @@ export function createSlashCommandSuggestion(qc: QueryClient): Omit<
   return {
     char: "/",
     pluginKey,
-    items: ({ query }) => buildItems(qc, query),
+    allow: ({ state, range }) => range.from === 1 && state.doc.firstChild?.type.name === "paragraph",
+    items: ({ query }) => rankSlashMenu(source.get()?.items ?? [], query).map((entry) => entry.item),
     command: ({ editor, range, props }) => {
       const nodeAfter = editor.view.state.selection.$to.nodeAfter;
-      const overrideSpace = nodeAfter?.text?.startsWith(" ");
-      if (overrideSpace) {
-        range.to += 1;
-      }
+      if (nodeAfter?.text?.startsWith(" ")) range.to += 1;
 
       editor
         .chain()
@@ -184,6 +297,8 @@ export function createSlashCommandSuggestion(qc: QueryClient): Omit<
             attrs: {
               id: props.id,
               label: props.label,
+              invocation: props.invocation,
+              hint: props.hint,
               mentionSuggestionChar: "/",
             },
           },
@@ -193,11 +308,11 @@ export function createSlashCommandSuggestion(qc: QueryClient): Omit<
 
       window.getSelection()?.collapseToEnd();
     },
-    render: createSuggestionPopupRender<SlashCommandItem, SlashCommandItem, SlashCommandListRef, SlashCommandListProps>({
+    render: createSuggestionPopupRender<SlashMenuItem, SlashMenuItem, SlashCommandListRef, SlashCommandListProps>({
       pluginKey,
       component: SlashCommandList,
       getProps: (props) => ({
-        items: props.items,
+        source,
         query: props.query,
         command: props.command,
       }),

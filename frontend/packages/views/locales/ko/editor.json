@@ -79,7 +79,17 @@
     "rendering": "다이어그램 렌더링 중..."
   },
   "slash_command": {
+    "aria_label": "명령과 스킬",
+    "group_agent": "에이전트 명령",
+    "group_skills": "스킬",
+    "loading": "이 에이전트의 명령을 불러오는 중…",
+    "load_failed": "이 에이전트의 명령을 불러오지 못했습니다. 스킬은 계속 사용할 수 있습니다.",
+    "agent_commands_after_reply": "에이전트 자체 명령은 첫 응답 이후에 표시됩니다.",
+    "preview_note": "이 에이전트와의 지난 채팅 기준이며, 이번 채팅과 다를 수 있습니다.",
+    "empty": "명령이나 스킬이 없습니다",
     "no_skills_configured": "구성된 스킬 없음",
-    "no_results": "일치하는 스킬 없음"
+    "no_results": "일치하는 명령이나 스킬 없음",
+    "kind_skill": "스킬",
+    "kind_mcp": "MCP"
   }
 }

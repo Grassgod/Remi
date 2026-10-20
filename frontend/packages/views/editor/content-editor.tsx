@@ -43,6 +43,7 @@ import type { UploadResult } from "@multiremi/core/hooks/use-file-upload";
 import { useWorkspaceSlug } from "@multiremi/core/paths";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Attachment } from "@multiremi/core/types";
+import type { SlashMenuModel } from "@multiremi/core/chat/slash-menu";
 import {
   parseMarkdownChunked,
   MARKDOWN_CHUNK_THRESHOLD,
@@ -50,6 +51,7 @@ import {
 } from "./utils/parse-markdown-chunked";
 import type { MentionItem } from "./extensions/mention-suggestion";
 import { createEditorExtensions } from "./extensions";
+import { createSlashMenuSource, type WritableSlashMenuSource } from "./extensions/slash-command-suggestion";
 import type { SubmitOptions } from "./extensions/submit-shortcut";
 import { uploadAndInsertFile } from "./extensions/file-upload";
 import { preprocessMarkdown } from "./utils/preprocess";
@@ -112,8 +114,14 @@ interface ContentEditorProps {
   /** Chat can surface current/recent issue/project suggestions. Other editors use default mention behavior. */
   mentionMode?: "default" | "context";
   mentionContextItems?: MentionItem[];
-  /** Enable the chat-only `/` skill picker. Defaults false. */
-  enableSlashCommands?: boolean;
+  /**
+   * The Chat composer's `/` menu (ADR 0025): the agent's commands and skills,
+   * or null while there is no agent. Leave out for no menu; whether there is
+   * one is fixed when the editor mounts, and an open menu follows the prop.
+   */
+  slashCommands?: SlashMenuModel | null;
+  /** Called each time the `/` menu opens: the moment to start reading the catalogue. */
+  onSlashMenuOpen?: () => void;
   /**
    * Attachments referenced by this content. The download buttons on file
    * cards and images inside the editor look up an attachment by `url` and
@@ -163,11 +171,26 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
       disableMentions = false,
       mentionMode = "default",
       mentionContextItems,
-      enableSlashCommands = false,
+      slashCommands,
+      onSlashMenuOpen,
       attachments,
     },
     ref,
   ) {
+    const onSlashMenuOpenRef = useRef(onSlashMenuOpen);
+    onSlashMenuOpenRef.current = onSlashMenuOpen;
+    // Whether there is a `/` menu is fixed at mount (it shapes the extension
+    // list); what is in it flows through the source as the catalogue loads.
+    const slashMenuSourceRef = useRef<WritableSlashMenuSource | null | undefined>(undefined);
+    if (slashMenuSourceRef.current === undefined) {
+      slashMenuSourceRef.current = slashCommands !== undefined
+        ? createSlashMenuSource(slashCommands, () => onSlashMenuOpenRef.current?.())
+        : null;
+    }
+    const slashMenuSource = slashMenuSourceRef.current;
+    useEffect(() => {
+      slashMenuSource?.set(slashCommands ?? null);
+    }, [slashMenuSource, slashCommands]);
     const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
     const onUpdateRef = useRef(onUpdate);
     const onSubmitRef = useRef(onSubmit);
@@ -239,7 +262,7 @@ const ContentEditor = forwardRef<ContentEditorRef, ContentEditorProps>(
         disableMentions,
         mentionMode,
         getMentionContextItems: () => mentionContextItemsRef.current,
-        enableSlashCommands,
+        ...(slashMenuSource ? { slashMenu: slashMenuSource } : {}),
       }),
       onUpdate: ({ editor: ed }) => {
         if (!onUpdateRef.current) return;

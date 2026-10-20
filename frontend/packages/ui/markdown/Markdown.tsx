@@ -120,7 +120,7 @@ export const sanitizeSchema: typeof defaultSchema = {
  */
 function urlTransform(url: string): string {
   if (url.startsWith('mention://')) return url
-  if (url.startsWith('slash://skill/')) return url
+  if (url.startsWith('slash://skill/') || url.startsWith('slash://command/')) return url
   return defaultUrlTransform(url)
 }
 
@@ -242,7 +242,7 @@ export function createComponents(
         )
       }
 
-      if (href?.startsWith('slash://skill/')) {
+      if (href?.startsWith('slash://skill/') || href?.startsWith('slash://command/')) {
         return (
           <span className="slash-command text-primary font-semibold mx-0.5">
             {children}

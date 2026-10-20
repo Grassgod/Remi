@@ -380,6 +380,14 @@
   margin: 0 0.125rem;
 }
 
+/* A command's argument hint: decoration after the caret, never sent. */
+.rich-text-editor .slash-command-hint {
+  color: var(--muted-foreground);
+  opacity: 0.7;
+  pointer-events: none;
+  user-select: none;
+}
+
 /* Strong / emphasis */
 .rich-text-editor strong {
   font-weight: 600;

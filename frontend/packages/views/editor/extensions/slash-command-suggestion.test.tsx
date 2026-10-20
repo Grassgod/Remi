@@ -1,15 +1,24 @@
-import { render } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import { createRef, type ReactNode } from "react";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { Editor } from "@tiptap/core";
+import { EditorContent } from "@tiptap/react";
+import StarterKit from "@tiptap/starter-kit";
+import { Markdown } from "@tiptap/markdown";
 import { I18nProvider } from "@multiremi/core/i18n/react";
-import { workspaceKeys } from "@multiremi/core/workspace/queries";
-import type { Agent, MemberWithUser } from "@multiremi/core/types";
-import type { QueryClient } from "@tanstack/react-query";
+import { buildSlashMenu, type SlashMenuModel } from "@multiremi/core/chat/slash-menu";
+import type { ChatSlashCommandsResponse, SlashCommandEntry } from "@multiremi/contracts/slash-commands";
 import enEditor from "../../locales/en/editor.json";
+import { SlashCommandExtension } from "./slash-command-extension";
+import {
+  SlashCommandList,
+  createSlashCommandSuggestion,
+  createSlashMenuSource,
+  type SlashCommandListRef,
+  type SlashMenuSource,
+} from "./slash-command-suggestion";
 
-const TEST_RESOURCES = {
-  en: { editor: enEditor },
-};
+const TEST_RESOURCES = { en: { editor: enEditor } };
 
 function I18nWrapper({ children }: { children: ReactNode }) {
   return (
@@ -21,309 +30,278 @@ function I18nWrapper({ children }: { children: ReactNode }) {
 
 beforeAll(() => {
   Element.prototype.scrollIntoView = vi.fn();
+  const rect = () => new DOMRect(0, 0, 0, 0);
+  const rectList = () => ({ length: 0, item: () => null, [Symbol.iterator]: function* () {} }) as DOMRectList;
+  Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: rect });
+  Object.defineProperty(Range.prototype, "getClientRects", { configurable: true, value: rectList });
+  Object.defineProperty(HTMLElement.prototype, "getClientRects", { configurable: true, value: rectList });
+  Object.defineProperty(Text.prototype, "getClientRects", { configurable: true, value: rectList });
 });
 
-vi.mock("@multiremi/core/platform", () => ({
-  getCurrentWsId: () => "ws-1",
-}));
+const command = (name: string, fields: Partial<SlashCommandEntry> = {}): SlashCommandEntry => ({
+  name, description: "", hint: null, kind: "command", ...fields,
+});
 
-const authState = { user: { id: "u1" } as { id: string } | null };
-vi.mock("@multiremi/core/auth", () => ({
-  useAuthStore: { getState: () => authState },
-}));
-
-const chatState = { selectedAgentId: "agent-1" as string | null };
-vi.mock("@multiremi/core/chat", () => ({
-  useChatStore: { getState: () => chatState },
-}));
-
-import {
-  SlashCommandList,
-  type SlashCommandListRef,
-  createSlashCommandSuggestion,
-  type SlashCommandItem,
-} from "./slash-command-suggestion";
-
-function agent(overrides: Partial<Agent>): Agent {
-  return {
-    id: "agent-1",
-    workspace_id: "ws-1",
-    runtime_id: "runtime-1",
-    name: "Agent",
-    description: "",
-    instructions: "",
-    avatar_url: null,
-    runtime_mode: "local",
-    runtime_config: {},
-    custom_args: [],
-    visibility: "workspace",
-    status: "idle",
-    max_concurrent_tasks: 1,
-    model: "",
-    owner_id: null,
-    skills: [],
-    created_at: "",
-    updated_at: "",
-    archived_at: null,
-    archived_by: null,
-    ...overrides,
-  };
+function menu({
+  state = "session",
+  provider = "claude",
+  commands = [command("compact", { description: "Compact the context", hint: "[instructions]" }), command("review")],
+  skills = [{ id: "s1", name: "Deploy Prod", description: "Ship it" }],
+  status = "ready",
+}: {
+  state?: ChatSlashCommandsResponse["state"];
+  provider?: string;
+  commands?: SlashCommandEntry[];
+  skills?: { id: string; name: string; description?: string }[];
+  status?: SlashMenuModel["status"];
+} = {}): SlashMenuModel {
+  return buildSlashMenu({
+    provider,
+    status,
+    response: status === "ready" ? { state, provider, reported_at: null, commands } : null,
+    skills,
+  });
 }
 
-function fakeQc(data: {
-  members?: Array<Pick<MemberWithUser, "user_id" | "name" | "role">>;
-  agents?: Agent[];
-}): QueryClient {
-  const map = new Map<string, unknown>();
-  map.set(JSON.stringify(workspaceKeys.members("ws-1")), data.members ?? []);
-  map.set(JSON.stringify(workspaceKeys.agents("ws-1")), data.agents ?? []);
-  return {
-    getQueryData: (key: readonly unknown[]) => map.get(JSON.stringify(key)),
-  } as unknown as QueryClient;
+function renderList(source: SlashMenuSource, query = "", run = vi.fn()) {
+  const ref = createRef<SlashCommandListRef>();
+  const view = render(
+    <I18nWrapper>
+      <SlashCommandList ref={ref} source={source} query={query} command={run} />
+    </I18nWrapper>,
+  );
+  return { ref, run, view };
 }
 
-function items(qc: QueryClient, query = ""): SlashCommandItem[] {
-  const config = createSlashCommandSuggestion(qc);
-  return config.items!({ query, editor: {} as never }) as SlashCommandItem[];
-}
+const key = (k: string, init: KeyboardEventInit = {}) => ({ event: new KeyboardEvent("keydown", { key: k, ...init }) });
 
-describe("slash command suggestion items", () => {
-  it("returns all active agent skills when query is empty", () => {
-    chatState.selectedAgentId = "agent-1";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        agent({
-          id: "agent-1",
-          skills: [
-            { id: "s1", name: "deploy", description: "Ship changes" },
-            { id: "s2", name: "review", description: "Review code" },
-          ],
-        }),
-      ],
-    });
-
-    expect(items(qc).map((i) => i.label)).toEqual(["deploy", "review"]);
+describe("SlashCommandList", () => {
+  it("shows the agent's commands and the platform skills in two groups", () => {
+    renderList(createSlashMenuSource(menu()));
+    const agent = screen.getByText("Agent commands").closest("section")!;
+    const skills = screen.getByText("Skills").closest("section")!;
+    expect(within(agent).getByText("/compact")).toBeInTheDocument();
+    expect(within(agent).getByText("[instructions]")).toBeInTheDocument();
+    expect(within(agent).getByText("/review")).toBeInTheDocument();
+    // A platform skill keeps its name and inserts the provider's invocation: its slug, `/` on Claude.
+    expect(within(skills).getByText("Deploy Prod")).toBeInTheDocument();
+    expect(within(skills).getByText("/deploy-prod")).toBeInTheDocument();
+    expect(within(skills).getByText("Ship it")).toBeInTheDocument();
   });
 
-  it("filters skills by name case-insensitively", () => {
-    chatState.selectedAgentId = "agent-1";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        agent({
-          id: "agent-1",
-          skills: [
-            { id: "s1", name: "Deploy", description: "" },
-            { id: "s2", name: "Review", description: "" },
-          ],
-        }),
-      ],
-    });
-
-    expect(items(qc, "dep").map((i) => i.id)).toEqual(["s1"]);
+  it("marks an agent command's source when the bridge says it", () => {
+    renderList(createSlashMenuSource(menu({
+      commands: [command("frontend-design", { kind: "skill" }), command("github:pr", { kind: "mcp_prompt" }), command("init")],
+    })));
+    expect(screen.getByRole("option", { name: /frontend-design/ })).toHaveTextContent("Skill");
+    expect(screen.getByRole("option", { name: /github:pr/ })).toHaveTextContent("MCP");
+    expect(screen.getByRole("option", { name: /init/ })).toHaveTextContent(/^\/init$/);
   });
 
-  it("filters skills by description", () => {
-    chatState.selectedAgentId = "agent-1";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        agent({
-          id: "agent-1",
-          skills: [
-            { id: "s1", name: "deploy", description: "Ship changes" },
-            { id: "s2", name: "review", description: "Read a pull request" },
-          ],
-        }),
-      ],
-    });
-
-    expect(items(qc, "pull").map((i) => i.id)).toEqual(["s2"]);
+  it("writes Codex skills with `$`", () => {
+    renderList(createSlashMenuSource(menu({ provider: "codex", commands: [] })));
+    expect(screen.getByText("$deploy-prod")).toBeInTheDocument();
   });
 
-  it("tolerates skills with missing descriptions from cached API data", () => {
-    chatState.selectedAgentId = "agent-1";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        agent({
-          id: "agent-1",
-          skills: [
-            { id: "s1", name: "deploy" } as Agent["skills"][number],
-          ],
-        }),
-      ],
-    });
+  it("notes a preview catalogue, and that agent commands come after the first reply", () => {
+    const source = createSlashMenuSource(menu({ state: "preview" }));
+    renderList(source);
+    expect(screen.getByText(/From your last chat with this agent/)).toBeInTheDocument();
 
-    expect(() => items(qc, "dep")).not.toThrow();
-    expect(items(qc, "dep")).toEqual([
-      { id: "s1", label: "deploy", description: "" },
-    ]);
+    act(() => source.set(menu({ state: "none", commands: [] })));
+    expect(screen.getByText(/show up after its first reply/)).toBeInTheDocument();
+    // Platform skills still show.
+    expect(screen.getByText("/deploy-prod")).toBeInTheDocument();
   });
 
-  it("returns empty when the active agent has no skills", () => {
-    chatState.selectedAgentId = "agent-1";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [agent({ id: "agent-1", skills: [] })],
-    });
+  it("does not read loading or a failed read as an empty catalogue", () => {
+    const source = createSlashMenuSource(menu({ status: "loading" }));
+    renderList(source);
+    expect(screen.getByText(/Loading this agent's commands/)).toBeInTheDocument();
+    expect(screen.queryByText("No commands or skills")).not.toBeInTheDocument();
 
-    expect(items(qc)).toEqual([]);
+    act(() => source.set(menu({ status: "error" })));
+    expect(screen.getByRole("alert")).toHaveTextContent(/Couldn't load this agent's commands/);
+    expect(screen.getByText("/deploy-prod")).toBeInTheDocument();
   });
 
-  it("caps results at 20", () => {
-    chatState.selectedAgentId = "agent-1";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        agent({
-          id: "agent-1",
-          skills: Array.from({ length: 25 }, (_, i) => ({
-            id: `s${i}`,
-            name: `skill-${i}`,
-            description: "",
-          })),
-        }),
-      ],
-    });
-
-    expect(items(qc)).toHaveLength(20);
+  it("fills in a menu that is already open when the catalogue arrives", () => {
+    const source = createSlashMenuSource(menu({ status: "loading" }));
+    renderList(source, "comp");
+    expect(screen.queryByText("/compact")).not.toBeInTheDocument();
+    act(() => source.set(menu()));
+    expect(screen.getByText("/compact")).toBeInTheDocument();
   });
 
-  it("falls back to the first available agent when selectedAgentId is stale", () => {
-    chatState.selectedAgentId = "missing";
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [
-        agent({
-          id: "agent-1",
-          skills: [{ id: "s1", name: "deploy", description: "" }],
-        }),
-      ],
-    });
-
-    expect(items(qc).map((i) => i.id)).toEqual(["s1"]);
+  it("tells the menu it opened", () => {
+    const opened = vi.fn();
+    renderList(createSlashMenuSource(menu(), opened));
+    expect(opened).toHaveBeenCalledTimes(1);
   });
 
-  it("returns empty when no agents exist", () => {
-    const qc = fakeQc({
-      members: [{ user_id: "u1", name: "Alice", role: "member" }],
-      agents: [],
-    });
-
-    expect(items(qc)).toEqual([]);
+  it("says so when nothing matches", () => {
+    renderList(createSlashMenuSource(menu()), "zzz");
+    expect(screen.getByText("No matching commands or skills")).toBeInTheDocument();
   });
 
-  it("excludes skills from private agents the user cannot access", () => {
-    chatState.selectedAgentId = "private-agent";
-    const qc = fakeQc({
-      members: [
-        { user_id: "u1", name: "Alice", role: "member" },
-        { user_id: "u2", name: "Bob", role: "member" },
-      ],
-      agents: [
-        agent({
-          id: "private-agent",
-          visibility: "private",
-          owner_id: "u2",
-          skills: [{ id: "private-skill", name: "secret", description: "" }],
-        }),
-      ],
-    });
+  it("picks an exact or prefix match for Enter", () => {
+    const { ref, run } = renderList(createSlashMenuSource(menu()), "comp");
+    expect(screen.getByRole("option", { selected: true })).toHaveTextContent("/compact");
+    expect(ref.current!.onKeyDown(key("Enter"))).toBe(true);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ invocation: "/compact", hint: "[instructions]" }));
+  });
 
-    expect(items(qc)).toEqual([]);
+  it("does not pick a weak match, so Enter keeps its own meaning", () => {
+    // "act" is only contained in "compact": no row is picked.
+    const { ref, run } = renderList(createSlashMenuSource(menu()), "act");
+    expect(screen.getByText("/compact")).toBeInTheDocument();
+    expect(screen.queryByRole("option", { selected: true })).not.toBeInTheDocument();
+    expect(ref.current!.onKeyDown(key("Enter"))).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    // An arrow key picks it on purpose.
+    act(() => {
+      expect(ref.current!.onKeyDown(key("ArrowDown"))).toBe(true);
+    });
+    expect(ref.current!.onKeyDown(key("Enter"))).toBe(true);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ invocation: "/compact" }));
+  });
+
+  it("leaves nothing picked before the user types after the slash", () => {
+    const { ref } = renderList(createSlashMenuSource(menu()));
+    expect(ref.current!.onKeyDown(key("Enter"))).toBe(false);
+  });
+
+  it("never takes Mod-Enter, Ctrl-Enter or an IME Enter", () => {
+    const { ref, run } = renderList(createSlashMenuSource(menu()), "compact");
+    expect(ref.current!.onKeyDown(key("Enter", { metaKey: true }))).toBe(false);
+    expect(ref.current!.onKeyDown(key("Enter", { ctrlKey: true }))).toBe(false);
+    expect(ref.current!.onKeyDown(key("Enter", { isComposing: true }))).toBe(false);
+    expect(ref.current!.onKeyDown(key("Enter", { keyCode: 229 }))).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("completes the first row with Tab", () => {
+    const { ref, run } = renderList(createSlashMenuSource(menu()), "r");
+    expect(ref.current!.onKeyDown(key("Tab"))).toBe(true);
+    expect(run).toHaveBeenCalledWith(expect.objectContaining({ invocation: "/review" }));
+  });
+
+  it("lets arrow keys and Enter fall through when there is nothing to pick", () => {
+    const { ref } = renderList(createSlashMenuSource(null), "");
+    expect(ref.current!.onKeyDown(key("ArrowDown"))).toBe(false);
+    expect(ref.current!.onKeyDown(key("ArrowUp"))).toBe(false);
+    expect(ref.current!.onKeyDown(key("Enter"))).toBe(false);
   });
 });
 
-describe("SlashCommandList keyboard handling", () => {
-  it("lets Enter and arrow keys fall through when there are no selectable items", () => {
-    const ref = createRef<SlashCommandListRef>();
+// ---------------------------------------------------------------------------
+// In a real editor
+// ---------------------------------------------------------------------------
 
-    render(
-      <I18nWrapper>
-        <SlashCommandList ref={ref} items={[]} query="" command={vi.fn()} />
-      </I18nWrapper>,
-    );
+let editor: Editor | null = null;
 
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "Enter" }),
-      }),
-    ).toBe(false);
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "Enter", metaKey: true }),
-      }),
-    ).toBe(false);
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "ArrowUp" }),
-      }),
-    ).toBe(false);
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "ArrowDown" }),
-      }),
-    ).toBe(false);
-  });
-
-  it("handles Enter and arrow keys when selectable items exist", () => {
-    const ref = createRef<SlashCommandListRef>();
-    const command = vi.fn();
-    const selectableItems: SlashCommandItem[] = [
-      { id: "s1", label: "deploy", description: "Ship changes" },
-      { id: "s2", label: "review", description: "Review code" },
-    ];
-
-    render(
-      <I18nWrapper>
-        <SlashCommandList
-          ref={ref}
-          items={selectableItems}
-          query=""
-          command={command}
-        />
-      </I18nWrapper>,
-    );
-
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "ArrowUp" }),
-      }),
-    ).toBe(true);
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "ArrowDown" }),
-      }),
-    ).toBe(true);
-    expect(
-      ref.current?.onKeyDown({
-        event: new KeyboardEvent("keydown", { key: "Enter" }),
-      }),
-    ).toBe(true);
-    expect(command).toHaveBeenCalledWith(selectableItems[0]);
-  });
+afterEach(() => {
+  act(() => editor?.destroy());
+  editor = null;
+  document.body.innerHTML = "";
 });
 
-describe("SlashCommandList empty states", () => {
-  it("shows a configured-skills empty state before search text is entered", () => {
-    const { getByText } = render(
-      <I18nWrapper>
-        <SlashCommandList items={[]} query="" command={vi.fn()} />
-      </I18nWrapper>,
-    );
+function makeEditor(model: SlashMenuModel | null = menu()) {
+  const source = createSlashMenuSource(model);
+  editor = new Editor({
+    extensions: [
+      StarterKit,
+      Markdown,
+      SlashCommandExtension.configure({
+        HTMLAttributes: { class: "slash-command" },
+        suggestion: createSlashCommandSuggestion(source),
+      }),
+    ],
+    content: "",
+  });
+  render(
+    <I18nWrapper>
+      <EditorContent editor={editor} />
+    </I18nWrapper>,
+  );
+  return { editor, source };
+}
 
-    expect(getByText("No skills configured")).toBeInTheDocument();
+async function type(ed: Editor, text: string) {
+  await act(async () => {
+    ed.commands.focus("end");
+    ed.commands.insertContent(text);
+  });
+}
+
+function pressKey(ed: Editor, k: string, init: KeyboardEventInit = {}) {
+  let handled = false;
+  act(() => {
+    const event = new KeyboardEvent("keydown", { key: k, ...init });
+    handled = ed.view.someProp("handleKeyDown", (f) => f(ed.view, event)) ?? false;
+  });
+  return handled;
+}
+
+describe("the / menu in the editor", () => {
+  it("opens only when / starts the message", async () => {
+    const { editor: ed } = makeEditor();
+    await type(ed, "hello /");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+
+    await act(async () => {
+      ed.commands.clearContent();
+    });
+    await type(ed, "/");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
   });
 
-  it("shows a no-results empty state when search text has no matches", () => {
-    const { getByText } = render(
-      <I18nWrapper>
-        <SlashCommandList items={[]} query="deploy" command={vi.fn()} />
-      </I18nWrapper>,
-    );
+  it("puts a chip that is sent as the raw command, and shows its hint without sending it", async () => {
+    const { editor: ed } = makeEditor();
+    await type(ed, "/comp");
+    await waitFor(() => expect(screen.getByRole("option", { selected: true })).toHaveTextContent("/compact"));
+    expect(pressKey(ed, "Enter")).toBe(true);
 
-    expect(getByText("No matching skills")).toBeInTheDocument();
+    expect(ed.view.dom.querySelector(".slash-command")).toHaveTextContent("/compact");
+    expect(ed.view.dom.querySelector(".slash-command-hint")).toHaveTextContent("[instructions]");
+    expect(ed.getMarkdown()).toBe("/compact ");
+
+    await type(ed, "keep the plan");
+    expect(ed.view.dom.querySelector(".slash-command-hint")).toBeNull();
+    expect(ed.getMarkdown()).toBe("/compact keep the plan");
+  });
+
+  it("sends a Codex skill as `$name`", async () => {
+    const { editor: ed } = makeEditor(menu({ provider: "codex", commands: [] }));
+    await type(ed, "/deploy");
+    await waitFor(() => expect(screen.getByRole("option", { selected: true })).toHaveTextContent("$deploy-prod"));
+    pressKey(ed, "Enter");
+    expect(ed.getMarkdown()).toBe("$deploy-prod ");
+  });
+
+  it("does not escape the invocation", async () => {
+    const { editor: ed } = makeEditor(menu({ commands: [command("my_command*x")] }));
+    await type(ed, "/my_");
+    await waitFor(() => expect(screen.getByRole("option", { selected: true })).toHaveTextContent("/my_command*x"));
+    pressKey(ed, "Tab");
+    await type(ed, "a_b");
+    expect(ed.getMarkdown()).toBe("/my_command*x a_b");
+  });
+
+  it("leaves Mod-Enter to the editor's own submit", async () => {
+    const { editor: ed } = makeEditor();
+    await type(ed, "/compact");
+    await waitFor(() => expect(screen.getByRole("listbox")).toBeInTheDocument());
+    expect(pressKey(ed, "Enter", { metaKey: true })).toBe(false);
+    expect(ed.getMarkdown()).toBe("/compact");
+  });
+
+  it("still reads old skill links", async () => {
+    const { editor: ed } = makeEditor();
+    await act(async () => {
+      ed.commands.setContent("[/deploy](slash://skill/s1) now", { contentType: "markdown" });
+    });
+    expect(ed.view.dom.querySelector(".slash-command")).toHaveTextContent("/deploy");
+    expect(ed.getMarkdown()).toBe("[/deploy](slash://skill/s1) now");
   });
 });

@@ -81,7 +81,7 @@ export const PARITY_CORPUS: Array<{ name: string; markdown: string }> = [
   },
   {
     name: 'mentions and slash links',
-    markdown: '[@Bob](mention://member/u_1) [@Agent](mention://agent/a_1) [#12](mention://issue/iss_1) [P](mention://project/p_1) [@all](mention://all/all) [odd](mention://unknown/x) [/deploy](slash://skill/abc) [bad](slash://other/abc)',
+    markdown: '[@Bob](mention://member/u_1) [@Agent](mention://agent/a_1) [#12](mention://issue/iss_1) [P](mention://project/p_1) [@all](mention://all/all) [odd](mention://unknown/x) [/deploy](slash://skill/abc) [/compact](slash://command/compact) [bad](slash://other/abc)',
   },
   { name: 'legacy mention shortcodes', markdown: 'Ping [@ id="u_42" label="Alice"] and [@ id="" label="Nobody"].' },
   {

@@ -107,7 +107,7 @@ const sanitizeSchema = {
 
 function urlTransform(url: string): string {
   if (url.startsWith("mention://")) return url;
-  if (url.startsWith("slash://skill/")) return url;
+  if (url.startsWith("slash://skill/") || url.startsWith("slash://command/")) return url;
   return defaultUrlTransform(url);
 }
 
@@ -175,7 +175,7 @@ function ReadonlyLink({
 }) {
   const slug = useWorkspaceSlug();
 
-  if (href?.startsWith("slash://skill/")) {
+  if (href?.startsWith("slash://skill/") || href?.startsWith("slash://command/")) {
     return <span className="slash-command">{children}</span>;
   }
 

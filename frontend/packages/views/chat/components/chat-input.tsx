@@ -21,6 +21,11 @@ import {
 } from "@multiremi/core/chat";
 import { toSafeErrorDetails } from "@multiremi/core/api";
 import { QUEUE_MAX_LIVE_ITEMS, queueErrorCode } from "@multiremi/core/chat/queue";
+import {
+  blockedSlashCommand,
+  startsWithSlashCommand,
+  type SlashMenuModel,
+} from "@multiremi/core/chat/slash-menu";
 import { createLogger } from "@multiremi/core/logger";
 import {
   getCurrentWsId,
@@ -56,6 +61,22 @@ function errorKind(error: unknown, fallback: "send" | "save"): "send" | "save" |
 export function chatSendMode(isRunning: boolean, preference: ChatFollowUpMode, invert: boolean): ChatSendMode {
   if (!isRunning) return "send";
   return invert ? otherMode(preference) : preference;
+}
+
+/**
+ * The mode a message is sent with. A message that starts with a command is
+ * queued while a run is active, whatever the preference or the shortcut: a
+ * bridge runs a command only at the start of a turn, so steered into a running
+ * one it would arrive as text (ADR 0025 decision 6).
+ */
+export function chatMessageSendMode(
+  content: string,
+  isRunning: boolean,
+  preference: ChatFollowUpMode,
+  invert: boolean,
+): ChatSendMode {
+  if (isRunning && startsWithSlashCommand(content)) return "queue";
+  return chatSendMode(isRunning, preference, invert);
 }
 
 /** What the composer's one primary button does. */
@@ -149,6 +170,13 @@ interface ChatInputProps {
   rightAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
   contextItems?: MentionItem[];
+  /**
+   * The `/` menu of the chat's own agent (ADR 0025), null while there is no
+   * agent. Leave out for a composer without the menu.
+   */
+  slashCommands?: SlashMenuModel | null;
+  /** Called each time the `/` menu opens. */
+  onSlashCommandsOpen?: () => void;
 }
 
 export function ChatInput({
@@ -167,6 +195,8 @@ export function ChatInput({
   model,
   rightAdornment,
   contextItems,
+  slashCommands,
+  onSlashCommandsOpen,
 }: ChatInputProps) {
   const { t } = useT("chat");
   const editorRef = useRef<ContentEditorRef>(null);
@@ -369,7 +399,7 @@ export function ChatInput({
       }
       return;
     }
-    const mode = chatSendMode(!!isRunning, followUpMode, options?.invert ?? false);
+    const mode = chatMessageSendMode(content, !!isRunning, followUpMode, options?.invert ?? false);
     logger.info("input.send", {
       contentLength: content.length,
       draftKey: keyAtSend,
@@ -440,12 +470,17 @@ export function ChatInput({
   const invertShortcut = formatShortcut(modKey, shiftKey, enterKey);
   const modeLabel = (mode: ChatFollowUpMode) =>
     mode === "steer" ? t(($) => $.input.steer) : t(($) => $.input.queue);
+  // A command waits for the run to end (chatMessageSendMode); the button says so.
+  const commandDraft = !isEmpty && startsWithSlashCommand(inputDraft);
+  const blockedCommand = slashCommands?.provider
+    ? blockedSlashCommand(slashCommands.provider, inputDraft)
+    : null;
   const action = chatComposerAction({
     editing: !!queueEdit,
     isRunning: !!isRunning,
     isEmpty,
     isSending,
-    preference: followUpMode,
+    preference: commandDraft ? "queue" : followUpMode,
   });
   const stopText = stopLabel ?? t(($) => $.input.stop_tooltip);
   const submitDisabled =
@@ -500,9 +535,11 @@ export function ChatInput({
   const submitLabel = action === "steer" || action === "queue"
     ? modeLabel(action)
     : t(($) => $.input.send_tooltip);
-  const submitTitle = action === "steer" || action === "queue"
-    ? `${submitLabel} · ${submitShortcut}\n${modeLabel(otherMode(action))} · ${invertShortcut}`
-    : `${submitLabel} · ${submitShortcut}`;
+  const submitTitle = action === "queue" && commandDraft
+    ? `${submitLabel} · ${submitShortcut}\n${t(($) => $.input.command_queues)}`
+    : action === "steer" || action === "queue"
+      ? `${submitLabel} · ${submitShortcut}\n${modeLabel(otherMode(action))} · ${invertShortcut}`
+      : `${submitLabel} · ${submitShortcut}`;
 
   return (
     <div
@@ -573,7 +610,8 @@ export function ChatInput({
             debounceMs={100}
             mentionMode={contextItems ? "context" : "default"}
             mentionContextItems={contextItems}
-            enableSlashCommands
+            slashCommands={slashCommands}
+            onSlashMenuOpen={onSlashCommandsOpen}
             // Chat is short-form — the floating formatting toolbar is
             // more distraction than feature here.
             showBubbleMenu={false}
@@ -656,6 +694,11 @@ export function ChatInput({
               : sendError === "save"
                 ? t(($) => $.queue.failed)
                 : t(($) => $.input.send_failed)}
+        </p>
+      )}
+      {blockedCommand && (
+        <p role="status" data-chat-blocked-command="" className="mt-2 text-xs text-warning">
+          {t(($) => $.input.blocked_command, { command: `/${blockedCommand}` })}
         </p>
       )}
       {stopConfirming && (

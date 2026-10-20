@@ -1,6 +1,6 @@
 # ADR 0025：Chat 输入框的「/」菜单——agent 自己的命令和技能
 
-- 状态：已接受（Q1–Q8 由评审人按建议决定（2026-10-20），用户可推翻，见文末「已决定」）。PR1「命令轮安全」已实现（决策 7、8、9 和契约类型的修正）；PR2「列表带回与保存」已实现（决策 2、3、4 和 Claude 重复回复的去重）；网页菜单（决策 1、5、6）尚未实现。本 ADR 不代表功能已部署，也不代表 daemon 已升级。
+- 状态：已接受（Q1–Q8 由评审人按建议决定（2026-10-20），用户可推翻，见文末「已决定」）。PR1「命令轮安全」已实现（决策 7、8、9 和契约类型的修正）；PR2「列表带回与保存」已实现（决策 2、3、4 和 Claude 重复回复的去重）；PR3「网页菜单」已实现（决策 1、5、6）。本 ADR 不代表功能已部署，也不代表 daemon 已升级。
 - 依赖 [ADR 0023](0023-turn-input-and-provider-agents-md.md) 决策 4：私有 Chat 一对一时，本轮输入就是用户输入的原文，所以开头的 `/命令` 能原样到达桥。修订 ADR 0023 决策 5 的一处：Remi 写入的 `SKILL.md` 里 `name` 改用目录名（决策 7）。
 - 依赖 [ADR 0020](0020-chat-follow-up-queue-and-native-steering.md)：运行中发出的命令一律排队，不插话（决策 6）；排队每轮只放行一条，命令通常自成一轮。
 - 编号：main 上最后一份为 0024（2026-10-20 核对 `origin/main` 85383dd0e）。
@@ -90,7 +90,7 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
   - `session` 而列表为空，表示桥确实发来了空列表，与 `none`（还没收到）分开显示。
   - 存着的列表与 agent 现在的 provider 不一致时不返回（agent 从 Claude 改成 Codex 后，旧列表作废）。
 - 决策 8 的隐藏和拦截在这里过滤（`visibleSlashCommands`），所以改名单只要部署服务端；存储里保留桥发来的全部。
-- 网页在 `chat:done` 时让这个查询失效，不需要新的实时事件（PR3）。
+- 网页在 `chat:done` 和 `task:failed` 时让这个查询失效，不需要新的实时事件（PR3，已实现）。
 - CLI 对齐：登记为 `cli_exempt`，类别 `pure_ui`（输入框菜单；用 CLI 发消息的人直接在 `message send` 里写命令）。生成脚本同时补上了此前手写在清单里的后台任务两条路由的分类，脚本重新生成的清单与仓库一致。
 
 ### 5. 新对话和旧 daemon
@@ -99,7 +99,7 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 - `none` 时只显示「技能」组，下面一行灰字「Agent 命令会在第一次回复后出现」。
 - 查询失败时同样只显示「技能」组，灰字说明暂时无法加载。不把失败当成空列表。
 
-### 6. 前端
+### 6. 前端（已实现）
 
 - **用这个对话自己的 agent。** `ChatWindow` 已经算出 `activeAgent`（会话的 agent 优先），把它和会话 id 通过一个取值函数传给编辑器（与 `getMentionContextItems` 同样的做法），菜单不再读 `selectedAgentId`。
 - **只在消息开头触发。** 桥只认开头的命令，所以「/」只在整条消息的第一个字符处打开菜单，别处的「/」是普通文字。
@@ -110,6 +110,15 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 - **被拦截的命令。** 用户手动打出决策 8 拦截的命令时，输入框下方提示「这个命令在 Remi 里不会执行，会作为普通文字发给 agent」，仍允许发送。
 - **对话记录。** 用户消息原样存 `/compact 保留测试输出`；显示时开头的命令画成标签，其余照常。实际发给 agent 的文字照 ADR 0023 决策 7 记在「输入 Prompt」里；桥返回的结果照常进 trace：压缩是过程里的压缩步骤，`/context`、`/skills`、`/review` 的输出是普通回复。
 - 旧消息里的 `[/名字](slash://skill/<id>)` 照旧显示成标签。
+
+实现说明（PR3）：
+
+- 分组、匹配、默认选中和调用文字是纯函数，在 [slash-menu.ts](../../frontend/packages/core/chat/slash-menu.ts)；查询在 [queries.ts](../../frontend/packages/core/chat/queries.ts) 的 `chatSlashCommandsOptions`，实时失效在 [realtime/sync/chat.ts](../../frontend/packages/core/realtime/sync/chat.ts)。
+- `ChatWindow` 算出对话自己的 agent（已有对话只认会话的 agent；会话还没读到时菜单显示读取中，不借用别的 agent），经 [use-slash-command-menu.ts](../../frontend/packages/views/chat/components/use-slash-command-menu.ts) 组成菜单交给输入框。编辑器把它放进一个可订阅的来源（[slash-command-suggestion.tsx](../../frontend/packages/views/editor/extensions/slash-command-suggestion.tsx) 的 `createSlashMenuSource`），已经打开的菜单在列表读到后直接补上，不用再打字。
+- 命令列表在这个对话里第一次打开菜单时才读，切换对话不读；读过的在缓存里直接用。
+- Chat 的 Enter 本来是换行（Mod+Enter 发送），所以「Enter 保持原来的作用」在 Chat 里就是换行。没有选中项时 Tab 插入第一项。
+- 参数提示是标签所在段落末尾的装饰（光标之后），段落里出现别的文字就消失；它不是文档内容，序列化时不存在。平台技能的行显示原名，后面是真正插入的调用文字；「Agent 命令」里桥标为技能或 MCP 提示的条目带一个小标记。
+- 对话记录在渲染前把开头的命令改写成 `slash://command/<名字>` 链接，`Markdown` 和 `ReadonlyContent` 都把它画成标签；存的消息不变。路径（`/tmp/x`）和「/ 名字」不算命令。
 
 ### 7. 平台技能
 
@@ -209,7 +218,7 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 |---|---|---|
 | PR1 命令轮安全（只动 daemon 和 contracts；已实现） | contracts 的 [slash-commands.ts](../../packages/contracts/src/slash-commands.ts)（开头命令解析、按 provider 的拦截与隐藏名单、说明行、技能命令名）；修正 `AvailableCommandsUpdate` 类型；在本轮输入（[ephemeral.ts](../../packages/daemon/src/agent-runtime/prompts/ephemeral.ts)）和插话文字（`buildSteerInput`）上加拦截；`/compact` 轮「有压缩没文字」不算失败、回复用固定句（[daemon.ts](../../packages/server/src/worker/daemon.ts)）；技能 frontmatter 写目录名（[skills/ephemeral.ts](../../packages/daemon/src/agent-runtime/skills/ephemeral.ts)）。可以单独发版，先堵上今天就存在的 `/compact` 失败和 Codex `/logout`。 | S |
 | PR2 列表带回与保存（已实现） | provider 记下最新列表（空闲、启动中和 prompt 中都记，[provider.ts](../../packages/acp/src/provider.ts)）；daemon 规整、对上 `skill_id`（`reportedSlashCommands`），写进 `turn.complete` / `task.fail`；服务端读可选字段（[report-handlers.ts](../../packages/server/src/api/daemon-protocol/report-handlers.ts)）、会话线新列（两条迁移链）、较早的尝试不覆盖（[store/slash-commands.ts](../../packages/server/src/store/slash-commands.ts)）；`GET /api/chat/slash-commands`（`session` / `preview` / `none`、按 provider 过滤、按名单过滤，响应类型在 contracts）；Claude 不调模型的命令的重复回复去重；CLI 豁免、接口快照、协议文档。 | M |
-| PR3 网页菜单 | 用对话自己的 agent；两组、匹配顺序、键盘规则；命令标签与参数占位；只在开头触发；运行中排队；被拦截命令的提示；消息里的命令标签；`chat:done` 刷新；中英文文案。 | M |
+| PR3 网页菜单（已实现） | 用对话自己的 agent；两组、匹配顺序、键盘规则；命令标签与参数占位；只在开头触发；运行中排队；被拦截命令的提示；消息里的命令标签；`chat:done` 刷新；中英文文案。 | M |
 
 PR1 不依赖其他两个。PR2 定下接口形状后 PR3 可以并行。
 
@@ -221,7 +230,7 @@ PR1 不依赖其他两个。PR2 定下接口形状后 PR3 可以并行。
 - **provider 单元测试（PR2，测试桥，[available-commands.test.ts](../../tests/unit/acp/available-commands.test.ts)）。** `session/new` 应答后、会话进池前到达的列表被记下，路径不留；prompt 中的重发替换它，并在下一个 prompt 里保留；空列表算数；子会话的列表不算；Claude 的 `/context` 重复回复只留一份，其他提示词、内容不同的第二条消息和 Codex 不受影响。
 - **daemon 测试（PR2）。** [skills-ephemeral.test.ts](../../tests/unit/daemon/skills-ephemeral.test.ts)：`syncAgentSkills` 返回装下的目录；`reportedSlashCommands` 按名字和技能目录填 `skill_id`，Codex 只认 `$` 名字，没装上的、没有 id 的不填。[multiremi-daemon-smoke.test.ts](../../tests/integration/multiremi-daemon-smoke.test.ts)：真 daemon 把假 provider 的列表随终态报告带到 Chat 的会话线，平台技能带上 `skill_id`；provider 说不知道或没有这个方法时什么都不存，空列表照存。
 - **服务端测试（PR2，SQLite 与 PostgreSQL 都跑，[chat-slash-commands.test.ts](../../tests/unit/multiremi/chat-slash-commands.test.ts)）。** 迁移在新库和升级的库上各加一次列；经真服务端的协议层发 `turn.complete` / `task.fail`：带列表时存到会话线、路径和多余的键不留；不带（旧 daemon）和格式错误时不动已存的、终态照常；空列表照存；较早的尝试不覆盖较新的，同一尝试可以重写；接口的 `session` / `preview` / `none`，拦截与隐藏的不列出；`preview` 只取请求者自己的对话，别的成员既拿不到预览、也读不了创建人的会话（403）；agent 换 Runtime 后没有预览、换 provider 后旧列表作废；不能和私有 agent 聊天的成员 403，参数错误 400，agent 不存在 404。
-- **网页单元测试。** 扩展 [slash-command-suggestion.test.tsx](../../frontend/packages/views/editor/extensions/slash-command-suggestion.test.tsx)：用的是会话的 agent 而不是 `selectedAgentId`；分组与按 `skill_id` 去重（同名的 Codex `/review` 与平台技能 `review` 不合并）；匹配顺序；弱匹配不抢 Enter，Mod+Enter 照常发送；输入法组字；只在开头触发；插入的标签序列化成调用文字、含下划线也不转义；参数提示不进正文；`preview`、`none`、加载失败三种提示。扩展 [chat-input.test.tsx](../../frontend/packages/views/chat/components/chat-input.test.tsx)：运行中以 `/` 开头的消息按排队发送；被拦截命令的提示。
+- **网页单元测试（PR3，已实现）。** 另有 [slash-menu.test.ts](../../frontend/packages/core/chat/slash-menu.test.ts)（分组、按 `skill_id` 合并、匹配顺序、默认选中、调用文字、拦截判断）、[use-slash-command-menu.test.tsx](../../frontend/packages/views/chat/components/use-slash-command-menu.test.tsx)（会话的 agent、第一次打开才读、`preview`、失败、换对话、轮结束刷新）、接口解析和实时失效的测试、对话记录里命令标签的测试。扩展 [slash-command-suggestion.test.tsx](../../frontend/packages/views/editor/extensions/slash-command-suggestion.test.tsx)：用的是会话的 agent 而不是 `selectedAgentId`；分组与按 `skill_id` 去重（同名的 Codex `/review` 与平台技能 `review` 不合并）；匹配顺序；弱匹配不抢 Enter，Mod+Enter 照常发送；输入法组字；只在开头触发；插入的标签序列化成调用文字、含下划线也不转义；参数提示不进正文；`preview`、`none`、加载失败三种提示。扩展 [chat-input.test.tsx](../../frontend/packages/views/chat/components/chat-input.test.tsx)：运行中以 `/` 开头的消息按排队发送；被拦截命令的提示。
 - **集成测试（显式开启，需要本机已装的固定版本 bundle，不需要凭据；尚未做）。** 把这次验证改成测试：假的 Messages / Responses 接口，覆盖发布的列表与终端过滤、`/自定义命令` 和 `/技能` 展开、Codex `$技能` 注入、`/compact` 只有压缩帧、带标签时不执行。放在 `tests/integration/`，默认跳过。
 - **真实 provider 的手工验收。** 需要用户的凭据，不在本阶段执行：`/compact`、`/review`、`/init`、一个平台技能、一个项目自定义命令，各在 Claude 和 Codex 上跑一遍；确认拦截加注后模型的回答合理。
 
