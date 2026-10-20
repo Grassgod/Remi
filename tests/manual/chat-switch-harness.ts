@@ -26,6 +26,9 @@
  *   CHAT_SWITCH_AGENT_ASK_AT_MS  the fake agent asks a question this long into each run
  *                          (awaiting_human) that times out CHAT_SWITCH_AGENT_ANSWER_MS later (default 3000)
  *   CHAT_SWITCH_MEMBER=1   mint the PAT for a plain workspace member, not the local owner
+ *   CHAT_SWITCH_SUBAGENTS=1  the first chat's last three turns report subagents and a background
+ *                          task the way a daemon does (turn-card completion facts), and its
+ *                          background-task registry holds one running and one finished task
  */
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { MultiremiStore } from "../../packages/server/src/store/store.js";
@@ -81,7 +84,27 @@ const reply = (chat: number, turn: number): string => [
   "filler sentence so the row wraps over several lines in the reading column. ".repeat(4),
 ].join("\n");
 
+// CHAT_SWITCH_SUBAGENTS=1: what `turn.complete` reports for a turn that ran
+// subagents (its trace stats, PR 2, and the late completions, PR 5) or started
+// a background task (PR 6). The traces themselves live on a daemon this
+// harness does not run; a browser script answers those reads.
+const SUBAGENTS = process.env.CHAT_SWITCH_SUBAGENTS === "1";
+const bucket = (type: string, count: number, tool: string | null = null) => ({ type, tool, count });
+function completionFacts(turn: number) {
+  const fromEnd = TURNS - turn;
+  if (fromEnd > 2) return {};
+  const histogram = fromEnd === 0 ? [bucket("user_message", 1), bucket("subagent", 3), bucket("command", 4, "Bash"), bucket("agent_message", 2)]
+    : fromEnd === 1 ? [bucket("user_message", 1), bucket("command", 2, "Bash"), bucket("background_task", 2), bucket("agent_message", 1)]
+      : [bucket("user_message", 1), bucket("subagent", 2), bucket("agent_message", 2)];
+  return { sessionId: "sess-switch", completionFields: {
+    trace: { head: 12, event_count: 12, closed: true, tool_call_count: 4, type_histogram: histogram },
+    final_reply_md: null, model: null, context_usage: null, worked_ms: 41_000, process_item_count: 3,
+    late_subagents: fromEnd === 0 ? [{ item_id: "sa:review", name: "审阅文案差异", status: "completed", duration_ms: 41_000 }] : null,
+  } };
+}
+
 const chatIds: string[] = [];
+let backgroundAttempt: string | null = null;
 for (let chat = 1; chat <= CHATS; chat++) {
   const session = store.createChatSession({
     agentId: agent.id, workspaceId: workspace.id, creatorId: me.id, title: `Perf chat ${chat}`,
@@ -93,8 +116,27 @@ for (let chat = 1; chat <= CHATS; chat++) {
     const sent = store.sendChatMessage(session.id, { body: `Question ${turn} in chat ${chat}: can you look at the replica again?` });
     if (store.claimTask(runtime.id)?.id !== sent.task.id) throw new Error("seed task was not claimed");
     store.startTask(sent.task.id);
-    store.completeTask(sent.task.id, { output: reply(chat, turn) } as never);
+    const facts = SUBAGENTS && chat === 1 ? completionFacts(turn) : {};
+    store.completeTask(sent.task.id, { output: reply(chat, turn), ...facts } as never);
+    if (SUBAGENTS && chat === 1 && turn === TURNS - 1) backgroundAttempt = sent.task.id;
   }
+}
+// The lane snapshot a daemon sends for the parked chat: the registry the
+// session list counts and the panel's 后台任务 view reads.
+if (SUBAGENTS && backgroundAttempt) {
+  const started = (minutesAgo: number) => new Date(Date.now() - minutesAgo * 60_000).toISOString();
+  store.upsertLaneBackgroundSnapshot(runtime.id, workspace.id, {
+    runtime_id: runtime.id, session_id: chatIds[0]!, agent_id: agent.id, execution_scope: "",
+    provider_session_id: "sess-switch", revision: 1, state: "parked", parked_until: new Date(Date.now() + 2 * 3600_000).toISOString(),
+    tasks: [
+      { task_id: "bash-dev", task_type: "shell", name: "npm run dev", command: "npm run dev -- --port 3000",
+        origin_attempt_id: backgroundAttempt, origin_item_id: "bg:bash-dev", status: "running", can_stop: true,
+        started_at: started(12), output_tail: "ready in 312 ms\nLocal: http://localhost:3000/\n" },
+      { task_id: "bash-test", task_type: "shell", name: "npm test", command: "npm test",
+        origin_attempt_id: backgroundAttempt, origin_item_id: "bg:bash-test", status: "completed", can_stop: false,
+        started_at: started(11), ended_at: started(10), duration_ms: 65_000, summary: "120 passed", output_tail: "PASS 120\n" },
+    ],
+  } as never);
 }
 
 // Production runs every statement through a synchronous PostgreSQL bridge that

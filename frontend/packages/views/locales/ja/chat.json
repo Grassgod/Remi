@@ -370,7 +370,10 @@
     "from_subagent": "サブエージェント {{name}} から",
     "from_subagent_unnamed": "サブエージェントから",
     "unnamed": "サブエージェント",
-    "view": "サブエージェント · {{count}}"
+    "panel_toggle": "サブエージェントとバックグラウンドタスクを表示",
+    "panel_toggle_running_other": "サブエージェントとバックグラウンドタスクを表示（{{count}} 件実行中）",
+    "chat_empty": "このチャットにはサブエージェントがありません",
+    "turn_untitled": "名前のないターン"
   },
   "bg_tasks": {
     "view": "バックグラウンドタスク · {{count}}",

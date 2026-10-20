@@ -6,13 +6,18 @@ import { createChatStore, registerChatStore, useChatStore, type SubagentPanelTar
 import { renderWithI18n } from "../../test/i18n";
 import { T0, at, command, read, subagent, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
 import { claudeDoneItems, claudeLiveItems, codexItems } from "../lib/__fixtures__/subagents";
+import type { ChatPanelRecord, SubagentTurnRef } from "../lib/side-panel-record";
 import { SubagentPanelLayout } from "./subagent-panel";
 import { CHAT_PANE_CLASS } from "../lib/chat-column";
 
-const { getTaskTrace, mobile } = vi.hoisted(() => ({ getTaskTrace: vi.fn(), mobile: { value: false } }));
+const { getTaskTrace, mobile, motionPrefs } = vi.hoisted(() => ({ getTaskTrace: vi.fn(), mobile: { value: false }, motionPrefs: { reduce: false } }));
 vi.mock("@multiremi/core/api", async (original) => ({ ...await original<typeof import("@multiremi/core/api")>(), api: { getTaskTrace } }));
 vi.mock("@multiremi/core/realtime", () => ({ useTraceStreamSubscription: () => {} }));
 vi.mock("@multiremi/ui/hooks/use-mobile", () => ({ useIsMobile: () => mobile.value }));
+vi.mock("motion/react", async (original) => ({
+  ...await original<typeof import("motion/react")>(),
+  useReducedMotion: () => motionPrefs.reduce,
+}));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <span>{children}</span> }));
 
 const values = new Map<string, string>();
@@ -34,10 +39,10 @@ function open(target: Partial<SubagentPanelTarget> = {}) {
   });
 }
 
-function renderLayout({ sessionId = "chat_1", presentation = "page" as "page" | "window" } = {}) {
+function renderLayout({ sessionId = "chat_1", presentation = "page" as "page" | "window", record = undefined as ChatPanelRecord | undefined } = {}) {
   const ui = (session: string, visible = true) => (
     <QueryClientProvider client={client}>
-      <SubagentPanelLayout sessionId={session} presentation={presentation} visible={visible}>
+      <SubagentPanelLayout sessionId={session} presentation={presentation} visible={visible} record={record}>
         <div data-testid="chat-conversation">conversation</div>
       </SubagentPanelLayout>
     </QueryClientProvider>
@@ -59,6 +64,9 @@ describe("subagent panel", () => {
     useChatStore.getState().closeSubagentPanel();
     getTaskTrace.mockReset();
     mobile.value = false;
+    // These cases are about content: the panel opens and closes at once
+    // (the motion itself is in subagent-panel-motion.test.tsx).
+    motionPrefs.reduce = true;
     vi.useFakeTimers({ shouldAdvanceTime: true });
     vi.setSystemTime(new Date(at(20)));
   });
@@ -111,7 +119,7 @@ describe("subagent panel", () => {
     act(() => { useChatStore.getState().closeSubagentPanel(); });
     seed([]);
     open();
-    expect(document.querySelector('[data-subagent-overview="empty"]')).toHaveTextContent("这一轮没有子代理");
+    expect(document.querySelector("[data-subagent-turn-empty]")).toHaveTextContent("这一轮没有子代理");
   });
 
   it("opens a detail as a mini conversation: task bubble, steps fold and reply, and goes back", () => {
@@ -283,7 +291,7 @@ describe("subagent panel", () => {
     open();
     expect(document.querySelector('[data-subagent-panel-mode="split"]')).not.toBeNull();
     expect(screen.getByRole("separator", { name: "调整子代理面板大小" })).toBeInTheDocument();
-    expect(document.querySelector('[data-panel][id="subagents"]')).not.toBeNull();
+    expect(document.querySelector("[data-subagent-panel-drawer]")).not.toBeNull();
     // The Chat column follows the narrowed conversation pane, not the page.
     expect(screen.getByTestId("chat-conversation").parentElement).toHaveClass(CHAT_PANE_CLASS);
     expect(panel()!.closest(`[class~="${CHAT_PANE_CLASS}"]`)).toBeNull();
@@ -293,7 +301,7 @@ describe("subagent panel", () => {
     const view = renderLayout();
     const pane = screen.getByTestId("chat-conversation").parentElement!;
     expect(pane).toHaveClass(CHAT_PANE_CLASS);
-    expect(pane.closest('[data-panel][id="conversation"]')).not.toBeNull();
+    expect(pane).toHaveAttribute("data-chat-conversation-pane");
     view.unmount();
     renderLayout({ presentation: "window" });
     expect(screen.getByTestId("chat-conversation")).toBeInTheDocument();
@@ -346,5 +354,87 @@ describe("subagent panel", () => {
     expect(document.querySelector("[data-subagent-type]")).toBeNull();
     expect(document.querySelector("[data-subagent-meta]")).toBeNull();
     expect(document.querySelector("[data-subagent-panel-header]")).toHaveTextContent("Count files · Count the files");
+  });
+});
+
+describe("subagent panel: the chat-wide overview", () => {
+  beforeEach(() => {
+    client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    act(() => { useChatStore.getState().closeSubagentPanel(); });
+    getTaskTrace.mockReset();
+    mobile.value = false;
+    motionPrefs.reduce = true;
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    vi.setSystemTime(new Date(at(20)));
+  });
+  afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
+
+  const turn = (attemptId: string, prompt: string | null, extra: Partial<SubagentTurnRef> = {}): SubagentTurnRef =>
+    ({ attemptId, turnId: attemptId.replace("att", "turn"), live: false, startedAt: Date.parse(at(-60)), prompt, ...extra });
+  const group = (attemptId: string) => document.querySelector<HTMLElement>(`[data-subagent-turn="${attemptId}"]`)!;
+  const header = (attemptId: string) => group(attemptId).querySelector<HTMLButtonElement>("[data-subagent-turn-header]")!;
+
+  it("groups every turn's subagents, newest first, and reads an older turn's trace only once it is opened", async () => {
+    seed(claudeLiveItems());
+    getTaskTrace.mockImplementation(async (id: string) => turnPage(traceTurn({ id, status: "completed" }),
+      id === "att_0" ? claudeDoneItems() : codexItems()));
+    const record: ChatPanelRecord = {
+      turns: [turn("att_1", "找出前端读取 trace 的地方", { live: true }), turn("att_0", "审阅一下飞书步骤文案的改动"), turn("att_old", null)],
+      tasks: false,
+    };
+    renderLayout({ record });
+    open();
+    const groups = [...document.querySelectorAll<HTMLElement>("[data-subagent-turn]")].map((element) => element.dataset.subagentTurn);
+    expect(groups).toEqual(["att_1", "att_0", "att_old"]);
+    // The newest (and running) turn is open with its running agents first; the older ones wait.
+    expect(header("att_1")).toHaveAttribute("aria-expanded", "true");
+    expect(header("att_1")).toHaveTextContent("找出前端读取 trace 的地方");
+    expect(header("att_1").querySelector("[data-subagent-turn-running]")).toHaveTextContent("2 个运行中");
+    expect(group("att_1").querySelector('[data-subagent-section="running"] h3')).toHaveTextContent("运行中 · 2");
+    expect(header("att_0")).toHaveAttribute("aria-expanded", "false");
+    expect(group("att_0").querySelector("[data-subagent-overview-row]")).toBeNull();
+    expect(getTaskTrace).not.toHaveBeenCalled();
+    fireEvent.click(header("att_0"));
+    await waitFor(() => expect(group("att_0").querySelector('[data-subagent-overview-row="sa:review"]')).not.toBeNull());
+    expect(getTaskTrace).toHaveBeenCalledWith("att_0", { itemCursor: 0, turnId: "turn_0" });
+    expect(getTaskTrace).not.toHaveBeenCalledWith("att_old", expect.anything());
+    // A turn whose card named no prompt takes its trace's first message once read.
+    expect(header("att_old")).not.toHaveTextContent("统计各包文件数");
+    fireEvent.click(header("att_old"));
+    await waitFor(() => expect(header("att_old")).toHaveTextContent("统计各包文件数和 TODO"));
+    // A subagent of an older turn opens its detail on that turn; back returns to the overview.
+    fireEvent.click(group("att_0").querySelector<HTMLButtonElement>('[data-subagent-overview-row="sa:review"]')!);
+    expect(useChatStore.getState().subagentPanel).toMatchObject({ attemptId: "att_0", turnId: "turn_0", live: false, path: ["sa:review"] });
+    expect(document.querySelector('[data-subagent-detail="sa:review"]')).not.toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "返回子代理列表" }));
+    expect(panel()).toHaveAttribute("data-subagent-panel", "overview");
+    expect(header("att_0")).toHaveAttribute("aria-expanded", "true");
+    expect(header("att_old")).toHaveAttribute("aria-expanded", "true");
+    // The reader can close the newest group too.
+    fireEvent.click(header("att_1"));
+    expect(header("att_1")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("opens the turn an entry point names even when the record does not hold it, and says when the chat has none", () => {
+    seed(claudeDoneItems(), "completed");
+    getTaskTrace.mockReturnValue(new Promise(() => {}));
+    const view = renderLayout({ record: { turns: [turn("att_9", "最新的一轮")], tasks: false } });
+    open({ live: false });
+    expect([...document.querySelectorAll<HTMLElement>("[data-subagent-turn]")].map((element) => element.dataset.subagentTurn))
+      .toEqual(["att_1", "att_9"]);
+    expect(header("att_1")).toHaveAttribute("aria-expanded", "true");
+    expect(header("att_1")).toHaveTextContent("审阅一下飞书步骤文案的改动");
+    // The newest turn of the record is open too, loading.
+    expect(header("att_9")).toHaveAttribute("aria-expanded", "true");
+    expect(within(group("att_9")).getByRole("status")).toHaveTextContent("正在加载…");
+    act(() => { useChatStore.getState().closeSubagentPanel(); });
+    open({ attemptId: null, live: false });
+    expect([...document.querySelectorAll<HTMLElement>("[data-subagent-turn]")].map((element) => element.dataset.subagentTurn))
+      .toEqual(["att_9"]);
+    act(() => { useChatStore.getState().closeSubagentPanel(); });
+    view.unmount();
+    renderLayout();
+    open({ attemptId: null, live: false });
+    expect(document.querySelector('[data-subagent-overview="empty"]')).toHaveTextContent("这个会话没有子代理");
   });
 });

@@ -370,7 +370,10 @@
     "from_subagent": "来自子代理 {{name}}",
     "from_subagent_unnamed": "来自子代理",
     "unnamed": "子代理",
-    "view": "子代理 · {{count}}"
+    "panel_toggle": "查看子代理与后台任务",
+    "panel_toggle_running_other": "查看子代理与后台任务（{{count}} 个运行中）",
+    "chat_empty": "这个会话没有子代理",
+    "turn_untitled": "未命名的一轮"
   },
   "bg_tasks": {
     "view": "后台任务 · {{count}}",

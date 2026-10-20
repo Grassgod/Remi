@@ -681,6 +681,33 @@ CHAT_PROBE_TOKEN=<token> CHAT_PROBE_HOST_MAP=chathandoff.test CHAT_PROBE_WEB=htt
 
 所有运行改动前后 `dup` 与 `drop` 都是 0。改动前实时视图在结算事件（`chat:done` 或 `task:cancelled`）后的下一帧消失，回复行在 230–660ms 后才到；改动后实时视图保留到回复行出现的那一帧。排队场景里第一轮的行到达时，第二轮的实时视图仍在 DOM 中，但有一帧被新行挤到视口下方，贴底滚动下一帧追上；改动前同一时刻也有一帧看不到第二轮的实时视图，与交接无关。
 
+## Chat 侧面板开合
+
+**本地模型，不是生产数据。** [chat-switch-harness.ts](../../tests/manual/chat-switch-harness.ts) 加 `CHAT_SWITCH_SUBAGENTS=1` 时，第一个 Chat 最后三轮的轮卡带 daemon 上报的完成事实（`type_histogram` 里的子代理与后台任务、`late_subagents`），会话的后台任务登记有一个运行中、一个已结束的任务。[chat-side-panel-measure.ts](../../tests/manual/chat-side-panel-measure.ts) 在 headless Chromium 1440×900 中点会话头的「查看子代理与后台任务」开合面板，逐帧记录并排时面板外框的宽度、浮窗里覆盖层的偏移、会话离底距离、聊天栏宽度、贴底状态和「回到底部」按钮，另记 long task 与 long animation frame；harness 不写 trace，脚本自己应答面板的 trace 读取（一轮跑过三个子代理）。离底距离在该帧的 `requestAnimationFrame` 排入的任务里读，即那一帧渲染之后。
+
+```bash
+CHAT_SWITCH_API_PORT=16521 CHAT_SWITCH_CHATS=3 CHAT_SWITCH_TURNS=20 CHAT_SWITCH_SQL_MS=1 CHAT_SWITCH_SUBAGENTS=1 \
+  bun run tests/manual/chat-switch-harness.ts
+# frontend/apps/web 中以 REMOTE_API_URL=http://127.0.0.1:16521 构建，再 next start -p 3421
+CHAT_PANEL_TOKEN=<token> CHAT_PANEL_CHAT=<第一个 chat> CHAT_PANEL_ROUNDS=5 bun run tests/manual/chat-side-panel-measure.ts
+```
+
+2026-10-20，Apple M3 Pro、macOS 26.2、Bun 1.3.14、Next.js 生产构建，共享机器（1 分钟负载 5.9–6.9）。headless Chromium 以约 120Hz 出帧。会话页宽：应用导航与 300px 会话列表之外约 880px，面板 400px 时会话面板约 480px。每格是各轮的范围，帧间隔单位 ms：
+
+| 场景 | CPU | 轮 | 稳定用时 | 帧间隔 p50 / p95 | > 25ms 的帧 | long task / LoAF | 离底（过程中最大 / 结束） | 「回到底部」出现 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 并排打开 | 1× | 5 | 366ms | 8.3 / 8.4–9.3 | 0 | 0 / 0 | 22–34px / 0 | 0 帧 |
+| 并排关闭 | 1× | 5 | 516–517ms | 8.3 / 8.6–9.2 | 0 | 0 / 0 | 0 / 0 | 0 帧 |
+| 并排打开 | 4× | 3 | 367–377ms | 16.5–24.5 / 25.0–33.8 | 1–3 | 0 / 0 | 0–46px / 0 | 0 帧 |
+| 并排关闭 | 4× | 3 | 516–517ms | 8.4 / 24.8–25.0 | 1–2 | 0 / 0 | 46–68px / 0 | 0 帧 |
+| 减少动态效果，开 / 关 | 1× | 5 | 7–17ms | 8.3 / 8.5–9.4 | 0 | 0 / 0 | 0 / 0 | 0 帧 |
+| 浮窗覆盖，开 / 关 | 1× | 5 | 196–217ms | 8.3–8.4 / 8.8–9.4 | 0 | 0 / 0 | 0 / 0 | 0 帧 |
+| 浮窗覆盖，开 / 关 | 4× | 3 | 201–217ms | 8.2–8.4 / 9.0–24.9 | 0 | 0 / 1 次 55ms | 0 / 0 | 0 帧 |
+
+稳定用时是从点击到面板宽度（覆盖层位置）不再变化；弹簧在约 370ms 时已到宽度的 99.8%，关闭在 0.5s 时到 0 并卸载。并排开合时会话列随会话面板逐帧变宽或变窄（打开 768→476px 经过 34–35 个宽度，关闭 17–18 个），这是逐帧重排而不是一次跳变：1× 时帧间隔与覆盖层相同，4× 降速时打开的帧间隔升到 16–34ms，覆盖层不重排、保持 ~9ms，没有 long task。会话始终贴底，贴底状态没有离开 `pinned`，「回到底部」按钮一帧也没出现；过程中读到的离底距离是帧后读数，结束时为 0。
+
+没有 `usePinnedThroughWidthChange` 的构建（3 轮，离底在 `requestAnimationFrame` 里读）：并排关闭有 2/3 轮贴底状态变为 `released`，其中 1 轮结束时离底 23px；减少动态效果时第一次关闭就解除贴底并停在离底 336px，之后各轮都是 `released`、离底 225–336px。只用 ResizeObserver 的第一版保护（3 轮，帧后读）：减少动态效果的关闭仍每轮有一帧 `released`，2 轮里「回到底部」按钮各闪 1 帧；加上会话面板上捕获阶段的 scroll 监听后为上表。原因是会话面板变宽时浏览器收紧 `scrollTop`，或列表在两帧之间挂载、重量行，紧接着的 scroll 事件读到超过 24px 的离底距离，列表把它当成读者滚离。拖动面板边缘改宽度时不启用这层保护，没有测量。
+
 ## CI 测试成本
 
 后端文件耗时与分片归属由 [ci-backend.ts](../../scripts/ci-backend.ts)报告，发现范围、初始权重来源、报告 artifact 和更新命令见 [CI 覆盖](../../TESTING.md#ci-覆盖)。历史标题间隔用于调度估算，包含 runner 开销；每文件时间总和不等于整条工作流墙钟时间或计费时间。比较同一范围与环境时，分别记录分片关键路径、所有 job 的总 runner 时间、安装/服务启动与构建开销。
