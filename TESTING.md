@@ -32,7 +32,7 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 [公开参考价格 PG/CLI 回归](tests/unit/scripts/usage-reference-prices.test.ts)沿用 CI 的 `MULTIREMI_TEST_POSTGRES_URL`；可用 `MULTIREMI_TEST_REFERENCE_DATABASE_URL` 单独覆盖。所选测试连接必须具有创建测试库的权限，两条用例各创建随机命名的独立数据库，所有并发 writer 与 CLI 只连接该库，完成后仅删除本次成功创建的数据库。不要指向生产；连接或清理失败会使测试失败，不会跳过或强制删除公共表。
 
-[路由矩阵夹具](tests/helpers/routing-matrix-database.ts)仅用于同步 placement cells：每个 dialect 初始化一次独立数据库与 Store，各 cell 开始前提交恢复原生临时表保存的基线，保留真实 transaction/afterCommit 行为。它拒绝 schema 变化、request cache、订阅、后台工作、sequence/trigger 和不支持的外键种子依赖。迁移、冷启动、竞态或生命周期测试必须继续使用新夹具；不能把矩阵复用推广为全套共享数据库。显式 PG URL 仅接受本机测试服务，创建随机专属数据库并清理；reset 失败不能算成功。SQLite/PG 场景保留同一组风险维度与断言。
+[路由矩阵夹具](tests/helpers/routing-matrix-database.ts)仅用于同步 placement cells：每个 dialect 初始化一次独立数据库与 Store，各 cell 开始前提交恢复原生临时表保存的基线，保留真实 transaction/afterCommit 行为。它拒绝 schema 变化、request cache、订阅、后台工作、sequence/trigger 和不支持的外键种子依赖。迁移、冷启动、竞态或生命周期测试必须继续使用新夹具；不能把矩阵复用推广为全套共享数据库。显式 PG URL 仅接受本机测试服务，创建随机专属数据库并清理；reset 失败不能算成功。SQLite 跑全部 304 格；PG 复跑同一 claim/probe SQL 以覆盖方言差异，只跑带绝对断言的格加确定性的两两全覆盖（当前 99 格），每格风险维度与断言不变。
 
 [SQLite snapshot 工厂](tests/helpers/sqlite-store-snapshot.ts)只供显式接入的普通业务测试：目前18个文件使用 `createSnapshotStore` / `createLocalSnapshotStore`，每例仍有独立SQLite连接和新Store，正常迁移入口走已有 unified schema 的检查路径；`createStore` / `createLocalStore` 默认仍fresh。snapshot共享迁移种子的时间戳和元数据，环境、时钟、ID生成、空schema、迁移或startup副作用敏感用例不用它。兼容检查失败或迁移报告缺失会回退fresh，不能跳过生产迁移入口。`snapshotStatsForFile` 在消费文件的beforeAll采起点、afterAll输出 `scope: "file-window"` 增量，仅包含该窗口的冷bootstrap、clone、fresh fallback、Store初始化和初始化时间，不是全仓累计值。
 

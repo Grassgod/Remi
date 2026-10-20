@@ -903,6 +903,51 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
     const PINS: Pin[] = ["none", "agent-bound-M-legacy", "agent-bound-M-legacy-unpinned", "task-pinned-M-legacy"];
     const DEVICES: Devices[] = ["unbound", "bound-M", "bound-M-legacy", "bound-M-and-M-legacy"];
 
+    // A Chat task has no Project, so the device columns collapse to the
+    // "unbound" case and run once per dedicated flag; explicit U workspaces too.
+    const collapsesDevices = (shape: Shape) => shape === "chat" || shape === "runtime-workspace-on-U";
+    const VALID_CELLS = SHAPES.flatMap((shape) => PINS.flatMap((pin) => DEVICES
+      .filter((devices) => !collapsesDevices(shape) || devices === "unbound")
+      .flatMap((devices) => [false, true].map((dedicated) => ({ shape, pin, devices, dedicated })))));
+    type Cell = (typeof VALID_CELLS)[number];
+    const cellKey = (cell: Cell) => `${cell.shape}|${cell.pin}|${cell.devices}|${cell.dedicated}`;
+    /** Cells that carry an absolute expectation (or the (c) owner exception) below. Keep in sync. */
+    const pinsSemantics = ({ shape, pin, devices, dedicated }: Cell) =>
+      (shape === "issue-workspace-on-M" && (devices === "bound-M-legacy" || (devices === "bound-M" && pin === "none")))
+      || (shape === "issue-no-workspace" && pin === "none"
+        && (devices === "bound-M" || devices === "bound-M-legacy" || (devices === "unbound" && dedicated)))
+      || ((shape === "runtime-workspace-on-M" || shape === "runtime-workspace-on-M-legacy" || shape === "runtime-workspace-on-U")
+        && pin === "none")
+      || shape === "runtime-workspace-archived-on-M";
+    /**
+     * SQLite runs every cell. PostgreSQL re-runs the same claim/probe SQL under
+     * its dialect, where a translation fault lives in a fragment and the values
+     * it sees, not in a 4-way combination: it runs every cell with an absolute
+     * expectation plus a deterministic greedy all-pairs cover, so every pair of
+     * shape/pin/devices/dedicated values still meets on PostgreSQL. The other
+     * cells only re-check probe/claim agreement already proven on SQLite.
+     */
+    const POSTGRES_CELLS = (() => {
+      const pairs = (cell: Cell) => {
+        const factors = [`s=${cell.shape}`, `p=${cell.pin}`, `d=${cell.devices}`, `x=${cell.dedicated}`];
+        return factors.flatMap((left, index) => factors.slice(index + 1).map((right) => `${left}&${right}`));
+      };
+      const chosen = VALID_CELLS.filter(pinsSemantics);
+      const uncovered = new Set(VALID_CELLS.flatMap(pairs));
+      for (const cell of chosen) for (const pair of pairs(cell)) uncovered.delete(pair);
+      while (uncovered.size > 0) {
+        let best = VALID_CELLS[0]!;
+        let gain = -1;
+        for (const cell of VALID_CELLS) {
+          const covered = pairs(cell).filter((pair) => uncovered.has(pair)).length;
+          if (covered > gain) { best = cell; gain = covered; }
+        }
+        chosen.push(best);
+        for (const pair of pairs(best)) uncovered.delete(pair);
+      }
+      return new Set(chosen.map(cellKey));
+    })();
+
     interface Fixture {
       store: ReturnType<typeof createLocalStore>;
       codexId: string; claudeId: string; legacyId: string;
@@ -1103,10 +1148,9 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
       for (const shape of SHAPES) {
         for (const pin of PINS) {
           for (const devices of DEVICES) {
-            // A Chat task has no Project, so the device columns collapse to the
-            // "unbound" case and run once per dedicated flag.
-            if ((shape === "chat" || shape === "runtime-workspace-on-U") && devices !== "unbound") continue;
+            if (collapsesDevices(shape) && devices !== "unbound") continue;
             for (const dedicated of [false, true]) {
+              if (dialect === "postgres" && !POSTGRES_CELLS.has(cellKey({ shape, pin, devices, dedicated }))) continue;
               cells++;
               const fixture = cell(shape, pin, devices, dedicated);
               const fail = (detail: string) => failures.push(`[${fixture.label}] ${detail}`);
@@ -1239,11 +1283,12 @@ describe("Multiremi store — task claim, routing, and workspace scoping", () =>
         }
       }
       // Chat and explicit U workspaces use only the unbound device column.
-      expect(cells).toBe(11 * 4 * 4 * 2 - 2 * 4 * 3 * 2);
+      expect(VALID_CELLS).toHaveLength(11 * 4 * 4 * 2 - 2 * 4 * 3 * 2);
+      expect(cells).toBe(dialect === "postgres" ? POSTGRES_CELLS.size : VALID_CELLS.length);
       expect(failures).toEqual([]);
       console.info(`MUL-449 ${dialect} matrix: ${cells} combinations; per-Runtime rollback probes, real claims and wait-text checks passed`);
     },
-    { timeout: dialect === "postgres" ? 900_000 : 120_000 });
+    { timeout: dialect === "postgres" ? 300_000 : 120_000 });
 
   });
   }
