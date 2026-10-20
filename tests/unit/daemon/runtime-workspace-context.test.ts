@@ -202,7 +202,8 @@ describe("Runtime workspace local execution", () => {
     mkdirSync(join(root, ".system", "builtin"), { recursive: true });
     mkdirSync(join(root, "own-skill"), { recursive: true });
     // The frontmatter ends on its own line; Codex skips a SKILL.md whose closing `---` runs into the body.
-    expect(readFileSync(join(root, "review", "SKILL.md"), "utf8")).toBe('---\nname: "Review"\ndescription: "Review skill"\n---\n# Review');
+    // ADR 0025: its `name` is the directory name, the one `/review` invokes.
+    expect(readFileSync(join(root, "review", "SKILL.md"), "utf8")).toBe('---\nname: "review"\ndescription: "Review skill"\n---\n# Review');
     expect(readFileSync(join(root, "review", "ref.md"), "utf8")).toBe("r");
     syncAgentSkills(root, { ...task, agent: { ...task.agent!, skills: [skill("Review")] } } as AgentTask);
     expect(existsSync(join(root, "deploy"))).toBe(false);

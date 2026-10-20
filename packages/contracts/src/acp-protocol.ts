@@ -630,9 +630,25 @@ export interface SessionInfoUpdate {
   _meta?: Record<string, unknown>;
 }
 
+/**
+ * One entry of `available_commands_update`. claude-agent-acp 0.93 builds them
+ * in `getAvailableSlashCommands` (dist/acp-agent.js 9718-9752), codex-acp 2.2.2
+ * in `buildAvailableCommands` (dist/index.js 38765-38862; skills are named
+ * `$<skill>`). `_meta.jetbrains.air` carries a skill's `kind` and `skillPath`
+ * for an AIR client such as Remi (ADR 0025).
+ */
+export interface AvailableCommand {
+  name: string;
+  description: string;
+  /** A free-text hint for the arguments; null or absent when the command takes none. */
+  input?: { hint: string } | null;
+  _meta?: Record<string, unknown>;
+}
+
+/** The full command list of a session; each update replaces the one before. */
 export interface AvailableCommandsUpdate {
   sessionUpdate: "available_commands_update";
-  commands: Array<{ name: string; description?: string }>;
+  availableCommands: AvailableCommand[];
 }
 
 // ── Session control ─────────────────────────────────────────────

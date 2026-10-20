@@ -7,6 +7,7 @@
  *   its execution rules). The provider loads it itself; the daemon rewrites it
  *   before every provider start.
  * - `prompt`: what is new this turn (`buildTurnInput`), the only text sent.
+ *   A command blocked on a hosted runtime gets a note in front (ADR 0025).
  * There is no bootstrap/delta prompt any more; a fresh provider session reads
  * the unread range like any other turn.
  */
@@ -16,6 +17,7 @@ import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { CHAT_ARTIFACT_DELIVERY_CONTRACT, ISSUE_ARTIFACT_DELIVERY_CONTRACT } from "@multiremi/contracts/artifact-delivery.js";
 import { CODE_DELIVERY_CONTRACT, mergedWorkspacePrompt, REMI_CLI_COMMUNICATION } from "@multiremi/contracts/remi-rules.js";
 import { parseUnreadRange } from "@multiremi/contracts/session-input.js";
+import { guardBlockedSlashCommand } from "@multiremi/contracts/slash-commands.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { hasReadOnlyCodeSnapshot, isSideConversation, SIDE_CONVERSATION_INSTRUCTIONS } from "./side-conversation.js";
 import { buildTurnInput, isPrivateChatTask } from "./turn-input.js";
@@ -80,12 +82,13 @@ export function buildTaskPromptArtifact(task: AgentTask, opts: BuildTaskPromptOp
   // Ignore unrelated Issue payload fields when the topic identity is absent.
   const privateChat = isPrivateChatTask(task);
   if (privateChat) task = withoutIssueContext(task);
-  const prompt = buildTurnInput(task, {
+  // ADR 0025: a command blocked on a hosted runtime gets a note in front, so the bridge never runs it.
+  const prompt = guardBlockedSlashCommand(task.agent?.provider, buildTurnInput(task, {
     attachments: [...arrayField(task, "chatMessageAttachments", "chat_message_attachments"),
       ...arrayField(task, "triggerCommentAttachments", "trigger_comment_attachments")],
     // What this turn's preparation found; it changes between turns, so it is input, not a session note.
     repoWarnings: !privateChat || task.project ? opts.repoWarnings ?? [] : [],
-  });
+  }));
   return {
     mode: taskPromptMode(task),
     prompt,

@@ -29,6 +29,7 @@
     "./issue-activity": "./src/issue-activity.ts",
     "./question": "./src/question.ts",
     "./queued-message": "./src/queued-message.ts",
+    "./slash-commands": "./src/slash-commands.ts",
     "./trace-file": "./src/trace-file.ts"
   },
   "dependencies": {}

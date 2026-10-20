@@ -9,6 +9,7 @@
 
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { hasNonAsciiText, skillCommandName } from "@multiremi/contracts/slash-commands.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 export function writeTaskContext(workDir: string, task: AgentTask): void {
@@ -180,13 +181,22 @@ function writeSkill(dir: string, skill: NonNullable<AgentTask["agent"]>["skills"
   }
 }
 
+/**
+ * The generated `SKILL.md`. Its `name` is the directory name (ADR 0025): the
+ * providers invoke a skill by the `name` in its frontmatter, and a display name
+ * such as "Git Commit" cannot follow a `/`. A display name the directory name
+ * cannot spell (non-ASCII letters) opens the description, so the model still
+ * sees it. A body with its own frontmatter is the author's and stays as it is.
+ */
 function renderSkillMarkdown(skill: NonNullable<AgentTask["agent"]>["skills"][number]): string {
   const content = skill.content ?? "";
   if (content.trimStart().startsWith("---")) return content;
+  const label = String(skill.name ?? "").trim();
+  const description = [hasNonAsciiText(label) ? label : "", skill.description?.trim() ?? ""].filter(Boolean).join(" — ");
   const frontmatter = [
     "---",
-    `name: ${yamlQuote(skill.name)}`,
-    skill.description ? `description: ${yamlQuote(skill.description)}` : "",
+    `name: ${yamlQuote(safeSkillDirName(skill.name))}`,
+    description ? `description: ${yamlQuote(description)}` : "",
     "---",
   ].filter((line) => line !== "").join("\n");
   // The closing `---` must end its line: Codex skips a SKILL.md whose frontmatter runs into the body.
@@ -197,9 +207,9 @@ function yamlQuote(value: string): string {
   return JSON.stringify(String(value ?? ""));
 }
 
+/** A skill's directory, and the command name that invokes it (`skillCommandName`). */
 function safeSkillDirName(value: string): string {
-  // No leading dot: never `.` or `..`, and never a hidden directory the provider skips.
-  return String(value || "skill").trim().toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[-.]+|-+$/g, "") || "skill";
+  return skillCommandName(value);
 }
 
 export function normalizeSkillFilePath(value: string): string {

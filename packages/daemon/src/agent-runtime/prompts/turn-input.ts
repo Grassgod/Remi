@@ -12,6 +12,7 @@
 import { readFileSync, statSync } from "node:fs";
 import type { MediaAttachment } from "@multiremi/contracts/acp-protocol.js";
 import { parseUnreadRange, splitProjectedInput, TRIGGER_MESSAGE_INLINE_CHARS, type UnreadRangeRecord } from "@multiremi/contracts/session-input.js";
+import { guardBlockedSlashCommand } from "@multiremi/contracts/slash-commands.js";
 import type { MultiremiTaskSteerMessage } from "@multiremi/contracts/types.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
@@ -316,9 +317,15 @@ export function steerInputText(content: string): string {
 /**
  * A steer batch: the new messages, labelled as the turn input labels them, and
  * the unread sentence when the batch's range is not complete. Wrap-up keeps its
- * control notice; it is Remi speaking, not the user.
+ * control notice; it is Remi speaking, not the user. A batch that falls back to
+ * a new prompt is parsed for commands like any turn input, so a command blocked
+ * for `provider` gets the same note in front (ADR 0025).
  */
-export function buildSteerInput(messages: readonly PreparedSteer[], options: { agentId?: string | null; alwaysLabel?: boolean } = {}): string {
+export function buildSteerInput(messages: readonly PreparedSteer[], options: { agentId?: string | null; alwaysLabel?: boolean; provider?: string | null } = {}): string {
+  return guardBlockedSlashCommand(options.provider, steerInputParts(messages, options));
+}
+
+function steerInputParts(messages: readonly PreparedSteer[], options: { agentId?: string | null; alwaysLabel?: boolean }): string {
   const steers = messages.filter(message => message.kind !== "force_answer");
   const force = messages.filter(message => message.kind === "force_answer");
   const speakerOf = (message: PreparedSteer) => ({ type: speakerType(message.authorType), id: message.authorId });

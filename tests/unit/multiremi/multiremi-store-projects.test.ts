@@ -174,7 +174,8 @@ describe("Multiremi store — projects, resources, and prompt context", () => {
       writeAgentSkillContext(dir, task);
       const skillDir = join(dir, ".claude", "skills", "review-helper");
 
-      expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toContain("name: \"Review Helper\"");
+      // ADR 0025: the `name` is the directory name, which `/review-helper` invokes.
+      expect(readFileSync(join(skillDir, "SKILL.md"), "utf8")).toContain("name: \"review-helper\"");
       expect(readFileSync(join(skillDir, "templates", "check.md"), "utf8")).toBe("Check list");
       expect(existsSync(join(dir, ".claude", "skills", "..", "escape.md"))).toBeFalse();
     } finally {
