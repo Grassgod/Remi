@@ -73,6 +73,7 @@ vi.mock("./chat-input", () => ({ ChatInput: () => null }));
 vi.mock("../../runtimes/components/runtime-workspace-picker", () => ({ WorkLocationPicker: () => null }));
 vi.mock("../../common/task-transcript/use-task-trace", () => ({
   useTurnTrace: () => ({ turn: null, items: [], closed: false, loaded: false, error: false, retry: () => {}, read: null, head: 0 }),
+  useCachedTurnTraces: (ids: readonly string[]) => ids.map(() => ({ turn: null, items: [] })),
 }));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <span>{children}</span> }));
 vi.mock("../../issues/components/comment-card", () => ({ AttachmentList: () => null }));

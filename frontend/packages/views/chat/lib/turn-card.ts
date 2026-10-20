@@ -12,6 +12,40 @@ export function isNonterminalTurn(metadata?: Record<string, unknown>): boolean {
 
 type TurnRow = { kind: string; task_id?: string | null; metadata?: Record<string, unknown> };
 
+/** A log row as the outcome check reads it. */
+export type TurnLogRow = TurnRow & { id: string; message_kind?: string | null; deleted_at?: string | null };
+
+/** The turn a live view shows: its attempt (the pending `task_id`) and its turn, when known. */
+export interface LiveTurnRef {
+  taskId: string;
+  turnId: string | null;
+}
+
+/**
+ * Whether the log shows a turn's own outcome, so its live view can give way in
+ * the same frame. The outcome is the attempt's terminal card (`task_id`, as
+ * `contextRingSource` reads it) with the reply row its `final_entry_id` names:
+ * a failed or cancelled card shows its notice itself and a card that names no
+ * reply is the reply, but a card whose reply row is not loaded shows nothing.
+ *
+ * `replyByTurn` also accepts the turn's reply row when no card of the turn is
+ * in the window (the reply row carries the turn id). Only for a turn that has
+ * ended: a retry reuses the failed attempt's reply row, which is in the log
+ * while the new attempt runs.
+ */
+export function turnOutcomeShown(rows: readonly TurnLogRow[], turn: LiveTurnRef, replyByTurn = false): boolean {
+  const cards = rows.filter((row) => row.kind === "turn" && !row.deleted_at
+    && (row.task_id === turn.taskId || (!!turn.turnId && row.metadata?.turn_id === turn.turnId)));
+  const card = cards.find((row) => row.task_id === turn.taskId && !isNonterminalTurn(row.metadata));
+  if (card) {
+    const reply = card.metadata?.final_entry_id;
+    return card.metadata?.status === "failed" || card.metadata?.status === "cancelled" || typeof reply !== "string"
+      || rows.some((row) => row.id === reply && row.kind === "message" && !row.deleted_at);
+  }
+  return replyByTurn && !cards.length && !!turn.turnId && rows.some((row) => row.kind === "message" && !row.deleted_at
+    && row.task_id === turn.turnId && (row.message_kind === "reply" || row.message_kind === "final"));
+}
+
 /** The last live usage the ring showed, and the attempt it came from. */
 export interface HeldRingUsage {
   taskId: string;

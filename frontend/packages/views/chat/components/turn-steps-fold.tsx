@@ -111,8 +111,15 @@ function RevealListener({ attemptId, onReveal }: { attemptId: string; onReveal: 
  * While background subagents run the header adds 「· N 个后台子代理运行中」
  * (not forced open), and subagents that end after the reply started get a
  * completion row under it. A legacy (v1) trace shows nothing.
+ *
+ * `frozen`: the turn has ended and the view only waits for its rows (see
+ * `useLiveTurnHandoff`); it keeps what it shows and its clock stops.
  */
-export function LiveTurnSteps({ trace, sessionId = null }: { trace: Pick<TurnTraceView, "turn" | "items">; sessionId?: string | null }) {
+export function LiveTurnSteps({ trace, sessionId = null, frozen = false }: {
+  trace: Pick<TurnTraceView, "turn" | "items">;
+  sessionId?: string | null;
+  frozen?: boolean;
+}) {
   const { turn, items } = trace;
   // Launch rows read their task's phase from the session registry when it is loaded (PR 6).
   const tasks = useCachedBackgroundTasks(sessionId);
@@ -123,7 +130,7 @@ export function LiveTurnSteps({ trace, sessionId = null }: { trace: Pick<TurnTra
   const finalStarted = steps.finals.length > 0;
   const running = !!turn && turn.status === "running" && !finalStarted;
   const start = turn ? Date.parse(turn.started_at) : NaN;
-  const now = useTickingNow(running, Number.isFinite(start) ? start : null);
+  const now = useTickingNow(running && !frozen, Number.isFinite(start) ? start : null);
   const label = useStickyLabel(running ? liveLabel(steps) : null);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const headerText = useFoldHeaderText();
@@ -139,7 +146,7 @@ export function LiveTurnSteps({ trace, sessionId = null }: { trace: Pick<TurnTra
   const header = headerText(liveFoldHeader(turn, steps.finals, now));
   return (
     <SubagentTraceContext.Provider value={source}>
-      <div data-chat-live-turn className="space-y-3">
+      <div data-chat-live-turn={frozen ? "held" : ""} className="space-y-3">
         {hasSubagents && <RevealListener attemptId={turn.id} onReveal={() => setUserOpen(true)} />}
         {showFold && (
           <StepsFold kind="live" open={open} onOpenChange={setUserOpen}

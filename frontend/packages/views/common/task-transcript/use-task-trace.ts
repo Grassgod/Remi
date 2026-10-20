@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { skipToken, useQueries, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import type { TraceEvent, TraceItem, TraceTurn } from "@multiremi/contracts/trace";
 import {
   applyTurnTraceEvents,
@@ -113,6 +113,21 @@ export async function readTurnTrace(
     if (cursor !== null) onPage?.(state);
   }
   return { state, read: read! };
+}
+
+/**
+ * The cached turn and items of attempts nobody follows live any more, read
+ * without fetching or subscribing: what a finished turn's live view last
+ * showed, while Chat keeps it up for its rows (`useLiveTurnHandoff`).
+ */
+export function useCachedTurnTraces(attemptIds: readonly string[]): Array<Pick<TurnTraceView, "turn" | "items">> {
+  return useQueries({
+    queries: attemptIds.map((attemptId) => ({ queryKey: turnTraceKey(attemptId), queryFn: skipToken })),
+    combine: (results) => results.map((result) => {
+      const state = isCache(result.data) ? result.data.state : EMPTY_TURN_TRACE;
+      return { turn: state.turn, items: state.items };
+    }),
+  });
 }
 
 export function useTurnTrace(attemptId: string | null | undefined, options: UseTurnTraceOptions = {}): TurnTraceView {
