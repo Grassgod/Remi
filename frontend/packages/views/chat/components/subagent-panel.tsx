@@ -27,6 +27,7 @@ import {
 } from "../lib/subagents";
 import { backgroundLaunchResolver, findBackgroundTask } from "../lib/background-tasks";
 import { buildChildSteps, liveBlockKey, liveLabel, type FoldHeader } from "../lib/turn-steps";
+import { CHAT_PANE_CLASS } from "../lib/chat-column";
 import {
   BackgroundTaskDetail,
   BackgroundTaskDetailFooter,
@@ -133,7 +134,8 @@ export function SubagentPanelLayout({ sessionId, presentation, visible = true, c
     <div ref={groupRef} className="flex min-h-0 min-w-0 flex-1">
       <ResizablePanelGroup id={LAYOUT_ID} orientation="horizontal" className="min-h-0 flex-1"
         defaultLayout={defaultLayout} onLayoutChanged={onLayoutChanged}>
-        <ResizablePanel id="conversation" minSize={CONVERSATION_MIN_PX} className="relative flex min-h-0 flex-col">
+        {/* The pane the Chat column's width follows: the list and the composer are both inside. */}
+        <ResizablePanel id="conversation" minSize={CONVERSATION_MIN_PX} className={cn(CHAT_PANE_CLASS, "relative flex min-h-0 flex-col")}>
           {children}
           {overlay}
         </ResizablePanel>

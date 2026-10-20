@@ -7,6 +7,7 @@ import { renderWithI18n } from "../../test/i18n";
 import { T0, at, command, read, subagent, traceTurn, turnPage, turnTraceCache } from "../../test/trace-fixtures";
 import { claudeDoneItems, claudeLiveItems, codexItems } from "../lib/__fixtures__/subagents";
 import { SubagentPanelLayout } from "./subagent-panel";
+import { CHAT_PANE_CLASS } from "../lib/chat-column";
 
 const { getTaskTrace, mobile } = vi.hoisted(() => ({ getTaskTrace: vi.fn(), mobile: { value: false } }));
 vi.mock("@multiremi/core/api", async (original) => ({ ...await original<typeof import("@multiremi/core/api")>(), api: { getTaskTrace } }));
@@ -283,6 +284,20 @@ describe("subagent panel", () => {
     expect(document.querySelector('[data-subagent-panel-mode="split"]')).not.toBeNull();
     expect(screen.getByRole("separator", { name: "调整子代理面板大小" })).toBeInTheDocument();
     expect(document.querySelector('[data-panel][id="subagents"]')).not.toBeNull();
+    // The Chat column follows the narrowed conversation pane, not the page.
+    expect(screen.getByTestId("chat-conversation").parentElement).toHaveClass(CHAT_PANE_CLASS);
+    expect(panel()!.closest(`[class~="${CHAT_PANE_CLASS}"]`)).toBeNull();
+  });
+
+  it("makes the page's conversation pane the Chat column's container, and the floating window none", () => {
+    const view = renderLayout();
+    const pane = screen.getByTestId("chat-conversation").parentElement!;
+    expect(pane).toHaveClass(CHAT_PANE_CLASS);
+    expect(pane.closest('[data-panel][id="conversation"]')).not.toBeNull();
+    view.unmount();
+    renderLayout({ presentation: "window" });
+    expect(screen.getByTestId("chat-conversation")).toBeInTheDocument();
+    expect(document.querySelector(`[class~="${CHAT_PANE_CLASS}"]`)).toBeNull();
   });
 
   it("closes when the floating chat window closes, and stays closed when it reopens", () => {
