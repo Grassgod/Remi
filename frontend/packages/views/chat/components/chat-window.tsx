@@ -96,6 +96,7 @@ import { createSafeId } from "@multiremi/core/utils";
 import { useFloatingPanelLayout } from "../../layout/floating-panel-layout";
 import { ChatQueue, type ChatQueueController } from "./chat-queue";
 import { SubagentPanelLayout } from "./subagent-panel";
+import { ChatSidePanelToggle, useChatPanelRecord } from "./side-panel-toggle";
 import { useChatBackgroundTasks } from "./use-background-tasks";
 
 const uiLogger = createLogger("chat.ui");
@@ -318,6 +319,14 @@ export function ChatWindow({
     expectRunning: sessionBackgroundTasks,
   });
   const backgroundTasksRunning = Math.max(sessionBackgroundTasks ?? 0, backgroundTasks.running);
+  // The side panel's header toggle and chat-wide overview: what this chat has
+  // on record (subagent turns, background tasks) and what runs now.
+  const { record: panelRecord, running: panelRunning } = useChatPanelRecord({
+    sessionId: displayedSessionId ?? null,
+    entries: logSnapshot.entries,
+    live: ringContext.liveTaskId ? { attemptId: ringContext.liveTaskId, turnId: pendingTask?.turn_id, items: liveRingTrace.items } : null,
+    backgroundTasksRunning,
+  });
 
   // The work location lives in the composer footer beside the agent, not in a
   // row of its own. A new chat chooses it until the first message; a started
@@ -813,6 +822,8 @@ export function ChatWindow({
               <span aria-hidden="true">· </span>{boundLocation.label}
             </span>
           )}
+          <ChatSidePanelToggle sessionId={displayedSessionId ?? null} record={panelRecord} running={panelRunning}
+            presentation="page" className="ml-auto" />
         </div>
       ) : (
         <div className="flex items-center justify-between border-b px-4 py-2.5 gap-2">
@@ -847,6 +858,8 @@ export function ChatWindow({
             />
           </div>
           <div className="flex items-center gap-0.5 shrink-0">
+            <ChatSidePanelToggle sessionId={displayedSessionId ?? null} record={panelRecord} running={panelRunning}
+              presentation="window" />
             <Button
               variant="ghost"
               size="icon-sm"
@@ -1081,7 +1094,7 @@ export function ChatWindow({
         }
       >
         {/* The subagent panel pushes the conversation aside (PR 5 §6.6). */}
-        <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="page">
+        <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="page" record={panelRecord}>
           {conversation}
         </SubagentPanelLayout>
       </ChatPageLayout>
@@ -1122,7 +1135,7 @@ export function ChatWindow({
     >
       <ChatResizeHandles onDragStart={startDrag} />
       {/* In the floating window the subagent panel covers the conversation. */}
-      <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="window" visible={isOpen}>
+      <SubagentPanelLayout sessionId={displayedSessionId ?? null} presentation="window" visible={isOpen} record={panelRecord}>
         {conversation}
       </SubagentPanelLayout>
     </motion.div>

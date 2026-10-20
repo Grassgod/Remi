@@ -373,7 +373,10 @@
     "from_subagent": "하위 에이전트 {{name}}에서",
     "from_subagent_unnamed": "하위 에이전트에서",
     "unnamed": "하위 에이전트",
-    "view": "하위 에이전트 · {{count}}"
+    "panel_toggle": "하위 에이전트 및 백그라운드 작업 보기",
+    "panel_toggle_running_other": "하위 에이전트 및 백그라운드 작업 보기({{count}}개 실행 중)",
+    "chat_empty": "이 채팅에는 하위 에이전트가 없습니다",
+    "turn_untitled": "이름 없는 턴"
   },
   "bg_tasks": {
     "view": "백그라운드 작업 · {{count}}",

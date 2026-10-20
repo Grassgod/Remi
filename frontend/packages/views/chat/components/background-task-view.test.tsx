@@ -130,7 +130,7 @@ describe("后台任务 view (PR 6 §8.2)", () => {
     expect(api.getTaskTrace).not.toHaveBeenCalled();
   });
 
-  it("shows 「子代理 · n | 后台任务 · m」 only while both kinds exist, and switches between them", () => {
+  it("shows 「子代理 | 后台任务 · m」 only while both kinds exist, and switches between them", () => {
     seedTrace([subagent("sa:1", "Explore", { name: "Explore", status: "in_progress", completed_at: null })]);
     renderPanel();
     open({ view: "subagents", attemptId: "att_1", live: true });
@@ -138,12 +138,12 @@ describe("后台任务 view (PR 6 §8.2)", () => {
     expect(panel().querySelector("[data-panel-switch]")).toBeNull();
     seedTasks([RUNNING, CAPPED]);
     const tabs = within(panel().querySelector<HTMLElement>("[data-panel-switch]")!).getAllByRole("tab");
-    expect(tabs.map((tab) => tab.textContent)).toEqual(["子代理 · 1", "后台任务 · 2"]);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["子代理", "后台任务 · 2"]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
     fireEvent.click(tabs[1]!);
     expect(useChatStore.getState().subagentPanel).toMatchObject({ view: "tasks", attemptId: "att_1", task: null });
     expect(panel()).toHaveAttribute("data-subagent-panel", "tasks");
-    fireEvent.click(within(panel()).getByRole("tab", { name: "子代理 · 1" }));
+    fireEvent.click(within(panel()).getByRole("tab", { name: "子代理" }));
     expect(panel()).toHaveAttribute("data-subagent-panel", "overview");
     // Tasks but no subagents: the single title again.
     act(() => { useChatStore.getState().closeSubagentPanel(); });

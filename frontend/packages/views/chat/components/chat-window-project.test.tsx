@@ -10,12 +10,14 @@ import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 import enRuntimes from "../../locales/en/runtimes.json";
 import { CHAT_COLUMN_CLASS, CHAT_PANE_CLASS } from "../lib/chat-column";
+import { chatLogWithSubagents } from "../lib/__fixtures__/side-panel";
 
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
   byId: {} as Record<string, ChatSession>,
   pending: {} as Record<string, unknown>,
   logReady: true,
+  entries: [] as unknown[],
   projectsHeld: false,
   create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
   enqueue: vi.fn(), updateQueued: vi.fn(), cancel: vi.fn(),
@@ -55,6 +57,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     enqueueChatMessage: backend.enqueue,
     updateQueuedChatMessage: backend.updateQueued,
     cancelTaskById: backend.cancel,
+    getTaskTrace: () => new Promise(() => {}),
   } };
 });
 vi.mock("@multiremi/core/logger", async (importOriginal) => {
@@ -80,8 +83,8 @@ vi.mock("@multiremi/core/session-log/use-issue-log", () => ({ useChatLog: (sessi
   // The 444 replica replaces listChatMessagesPage; observe its load gate here.
   if (enabled && sessionId) listChatMessagesPageCalls();
   return ({
-  replica: { sessionId, refreshTailPreservingWindow: backend.refresh, getSnapshot: () => ({ entries: [] }) },
-  snapshot: { entries: [], head: null, ready: backend.logReady }, error: false,
+  replica: { sessionId, refreshTailPreservingWindow: backend.refresh, getSnapshot: () => ({ entries: backend.entries }) },
+  snapshot: { entries: backend.entries, head: null, ready: backend.logReady }, error: false,
   });
 } }));
 vi.mock("@multiremi/core/paths", () => ({ useWorkspacePaths: () => ({
@@ -204,6 +207,7 @@ beforeEach(() => {
   backend.byId = {};
   backend.pending = {};
   backend.logReady = true;
+  backend.entries = [];
   backend.projectsHeld = false;
   backend.create.mockReset().mockImplementation(async (data) => {
     const created = { ...session, project_id: null, ...data };
@@ -542,6 +546,40 @@ describe("minimised chat window preloads nothing (MUL-472 b)", () => {
     await waitFor(() => expect(listChatSessionsCalls).toHaveBeenCalled());
     await waitFor(() => expect(getPendingChatTaskCalls).toHaveBeenCalled());
     await waitFor(() => expect(listChatMessagesPageCalls).toHaveBeenCalled());
+  });
+});
+
+describe("ChatWindow side panel toggle", () => {
+  const name = "View subagents and background tasks";
+
+  it("sits at the right of the page header for a chat with subagents on record and opens the panel there", async () => {
+    backend.sessions = [{ ...session, title: "Release prep" }];
+    backend.entries = chatLogWithSubagents();
+    const { store } = mount(true);
+    const header = await waitFor(() => {
+      const element = document.querySelector<HTMLElement>("[data-chat-page-header]");
+      expect(element).toHaveTextContent("Release prep");
+      return element!;
+    });
+    const toggle = within(header).getByRole("button", { name });
+    expect(header.lastElementChild).toBe(toggle);
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(store.getState().subagentPanel).toMatchObject({ sessionId: "chat-a", view: "subagents", attemptId: "att_3" });
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toHaveAttribute("data-panel-view", "subagents");
+  });
+
+  it("sits in the floating window's header too, and is absent for a chat with nothing on record", async () => {
+    backend.sessions = [session];
+    backend.entries = chatLogWithSubagents();
+    const view = mountFloatingOpen(true);
+    await waitFor(() => expect(screen.getByRole("button", { name })).toHaveAttribute("data-side-panel-toggle", "chat-side-panel-window"));
+    view.unmount();
+    backend.entries = [];
+    mountFloatingOpen(true);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Open Chat page" })).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name })).toBeNull();
   });
 });
 

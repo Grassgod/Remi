@@ -383,7 +383,11 @@
     "from_subagent": "From subagent {{name}}",
     "from_subagent_unnamed": "From a subagent",
     "unnamed": "Subagent",
-    "view": "Subagents · {{count}}"
+    "panel_toggle": "View subagents and background tasks",
+    "panel_toggle_running_one": "View subagents and background tasks ({{count}} running)",
+    "panel_toggle_running_other": "View subagents and background tasks ({{count}} running)",
+    "chat_empty": "No subagents in this chat",
+    "turn_untitled": "Untitled turn"
   },
   "bg_tasks": {
     "view": "Background tasks · {{count}}",

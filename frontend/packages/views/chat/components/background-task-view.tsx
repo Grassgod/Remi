@@ -89,7 +89,7 @@ export function useBackgroundTaskType(taskType: string): string | null {
 }
 
 /** The UI locale for dates and units; a test double of `useT` may have no `i18n`. */
-function localeOf(i18n: { resolvedLanguage?: string; language?: string } | undefined): string {
+export function localeOf(i18n: { resolvedLanguage?: string; language?: string } | undefined): string {
   return i18n?.resolvedLanguage ?? i18n?.language ?? "en";
 }
 
