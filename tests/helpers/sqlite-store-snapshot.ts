@@ -45,15 +45,23 @@ interface SqliteStoreSnapshot {
   reportDir: string;
 }
 
+// One image per environment fingerprint: a shard runs many files in one
+// process, and a file whose env differs from the first image's must not lose
+// the snapshot for every case. Bounded; the oldest image is evicted.
+const MAX_SNAPSHOT_IMAGES = 4;
+
 /**
  * Opt-in ordinary business fixtures only. Each caller gets a new handle and a
  * new Store, with the normal production migration entrance still running. The
  * immutable image shares migration-generated seed timestamps/metadata, so clock,
  * ID-sequence, empty-schema, migration and startup-side-effect tests must use a
  * fresh factory instead. No enclosing rollback, Store mock or migration skip.
+ * Every image was cold-migrated under exactly the environment of the cases that
+ * clone it; a non-native clock/RNG or a missing migration report still means a
+ * cold store for that case.
  */
 export function createSqliteStoreSnapshotFactory() {
-  let snapshot: SqliteStoreSnapshot | undefined;
+  const snapshots = new Map<string, SqliteStoreSnapshot>();
   const stats = {
     fixture: "ordinary-sqlite-snapshot", dialect: "sqlite", coldBootstraps: 0,
     clones: 0, freshFallbacks: 0, storeInitializations: 0, initializationMs: 0,
@@ -77,11 +85,15 @@ export function createSqliteStoreSnapshotFactory() {
   function create(): { db: Database; store: MultiremiStore } {
     const started = performance.now();
     try {
+      if (!normalClockAndRandom()) {
+        stats.freshFallbacks++;
+        return coldStore();
+      }
       const environment = environmentFingerprint();
-      const compatible = normalClockAndRandom() && (!snapshot || snapshot.environment === environment);
+      let snapshot = snapshots.get(environment);
       const reportsPresent = !snapshot || ["before", "after"].every(phase =>
         existsSync(join(snapshot!.reportDir, `${UNIFIED_MODEL_MIGRATION}-${phase}.json`)));
-      if (!compatible || !reportsPresent) {
+      if (!reportsPresent) {
         stats.freshFallbacks++;
         return coldStore();
       }
@@ -96,6 +108,8 @@ export function createSqliteStoreSnapshotFactory() {
           template.db.close();
         }
         snapshot = image;
+        snapshots.set(environment, image);
+        if (snapshots.size > MAX_SNAPSHOT_IMAGES) snapshots.delete(snapshots.keys().next().value!);
       }
       // Copy before passing to the native deserializer; it can never mutate the
       // cached baseline buffer or another caller's SQLite image.
