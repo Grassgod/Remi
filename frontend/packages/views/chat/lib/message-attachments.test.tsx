@@ -14,6 +14,7 @@ vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "w" }));
 vi.mock("../../editor/use-download-attachment", () => ({ useDownloadAttachment: () => download }));
 vi.mock("../../common/task-transcript/use-task-trace", () => ({
   useTurnTrace: () => ({ turn: null, items: [], closed: false, loaded: false, error: false, retry: () => {}, read: null, head: 0 }),
+  useCachedTurnTraces: (ids: readonly string[]) => ids.map(() => ({ turn: null, items: [] })),
 }));
 vi.mock("@multiremi/core/config", () => ({ useConfigStore: (selector: (s: { cdnDomain: string }) => unknown) => selector({ cdnDomain: "" }) }));
 vi.mock("@multiremi/core/paths", async importOriginal => {

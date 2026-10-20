@@ -146,7 +146,8 @@ export function scrollToSubagentRow(itemId: string): () => void {
   let tries = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const attempt = () => {
-    const row = document.querySelector<HTMLElement>(`[data-chat-live-turn] [data-subagent-row="${CSS.escape(itemId)}"]`);
+    // The running turn's fold, not a finished one still held above it.
+    const row = document.querySelector<HTMLElement>(`[data-chat-live-turn=""] [data-subagent-row="${CSS.escape(itemId)}"]`);
     if (row && row.getBoundingClientRect().height > 0) {
       // One jump, not a glide: a single scroll that leaves the bottom releases
       // the list's stick-to-bottom, which a smooth scroll can lose to it.

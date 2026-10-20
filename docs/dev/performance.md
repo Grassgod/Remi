@@ -655,6 +655,32 @@ Markdown 解析缓存（[markdown-tree.ts](../../frontend/packages/ui/markdown/m
 
 这组日志池数字高于上表，是机器负载不同所致，只在同一组内比较。再次访问的主线程工作从约 60ms 降到约 34ms，其中 Markdown 解析从约 23ms 降到 1ms 以下；剩余主要是输入框编辑器切换、揭示时的布局读取、代码块的 `useTranslation` 和 React 工作。
 
+## Chat 回复交接
+
+**本地模型，不是生产数据。** [chat-reply-handoff-probe.ts](../../tests/manual/chat-reply-handoff-probe.ts) 对着带 `CHAT_SWITCH_AGENT_MS` 的 [chat-switch-harness.ts](../../tests/manual/chat-switch-harness.ts)（假 Agent 隔这么久用 Markdown 回复结束每一轮）发消息，逐帧记录这一轮的回复是否在屏幕上：实时视图里的回复（`[data-chat-live-final]`）和发出的消息之后的持久化回复行。假 Agent 不写 trace，探针自己应答页面的实时 trace 读取（一条命令加最终回复，与持久化回复含同一段标记文字），trace socket 仍是真的。每轮报告两者之间都不在屏幕上的帧（`blank`）、同时在的帧（`dup`）和回复行出现后又消失的帧（`drop`）；`CHAT_PROBE_STOP_AT_MS` 改为停止这一轮、看取消提示，`CHAT_PROBE_QUEUE_AT_MS` 加一条排队消息、看两轮。`CHAT_PROBE_HOST_MAP` 把一个非 localhost 主机名解析到本机，页面是非安全上下文（`isSecureContext` 为 false），日志副本与纯 HTTP 的生产部署一样走每个标签页的内存实现。
+
+```bash
+CHAT_SWITCH_API_PORT=16491 CHAT_SWITCH_AGENT_MS=4000 CHAT_SWITCH_SQL_MS=1 bun run tests/manual/chat-switch-harness.ts
+# frontend/apps/web 中以 REMOTE_API_URL=http://127.0.0.1:16491 构建，再 next start -p 3391
+CHAT_PROBE_TOKEN=<token> CHAT_PROBE_HOST_MAP=chathandoff.test CHAT_PROBE_WEB=http://chathandoff.test:3391 \
+  CHAT_PROBE_LATENCY=50 CHAT_PROBE_RUNS=3 bun run tests/manual/chat-reply-handoff-probe.ts
+```
+
+2026-10-20，Apple M3 Pro、macOS 26.2、Bun 1.3.14、Next.js 生产构建、headless Chromium、1440×900，`SQL_MS=1`，共享机器（测时 1 分钟负载 10–23）。改动前为交接之前的 main（aa99f71fa），改动后为本次交接在 21e18ce08 之上的构建；除最后一行外都是非安全来源。`blank` 单位 ms（帧数），每格是各次运行的范围：
+
+| 场景 | 运行 | 改动前 blank | 改动后 blank |
+| --- | --- | --- | --- |
+| 新会话，Agent 4s，延迟 50ms | 3 / 3 | 284–324（32–37 帧） | 0 |
+| 已有会话，Agent 4s，延迟 50ms | 3 / 3 | 343–379（40–45 帧） | 0 |
+| 新会话，Agent 4s，延迟 150ms | 3 / 3 | 471–484（54–56 帧） | 0 |
+| 新会话，Agent 1s，延迟 50ms | 3 / 3 | 238–354（27–40 帧） | 0 |
+| 已有会话，Agent 1s，延迟 50ms | 3 / 3 | 240–529（28–63 帧） | 0 |
+| 排队一条后续，第一轮 / 第二轮 | 2 / 2 | 441–643 / 251–267 | 0 / 0 |
+| 运行 2 秒时停止，取消提示 | 2 / 2 | 214–234（25–28 帧） | 0 |
+| localhost（安全来源），Agent 1s | 2 / 2 | 225–330（26–36 帧） | 0 |
+
+所有运行改动前后 `dup` 与 `drop` 都是 0。改动前实时视图在结算事件（`chat:done` 或 `task:cancelled`）后的下一帧消失，回复行在 230–660ms 后才到；改动后实时视图保留到回复行出现的那一帧。排队场景里第一轮的行到达时，第二轮的实时视图仍在 DOM 中，但有一帧被新行挤到视口下方，贴底滚动下一帧追上；改动前同一时刻也有一帧看不到第二轮的实时视图，与交接无关。
+
 ## CI 测试成本
 
 后端文件耗时与分片归属由 [ci-backend.ts](../../scripts/ci-backend.ts)报告，发现范围、初始权重来源、报告 artifact 和更新命令见 [CI 覆盖](../../TESTING.md#ci-覆盖)。历史标题间隔用于调度估算，包含 runner 开销；每文件时间总和不等于整条工作流墙钟时间或计费时间。比较同一范围与环境时，分别记录分片关键路径、所有 job 的总 runner 时间、安装/服务启动与构建开销。

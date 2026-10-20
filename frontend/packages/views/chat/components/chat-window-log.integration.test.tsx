@@ -14,6 +14,7 @@ import {
   SessionLogEntrySchema, type IssueLogBootstrap, type LogWindowParams, type SessionLogRow, type SessionLogWindow,
 } from "@multiremi/core/api/schemas/session-log";
 import type { ChatSession } from "@multiremi/core/types";
+import { at, message as traceMessage, traceTurn } from "../../test/trace-fixtures";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 import enMessages from "../../locales/en/messages.json";
@@ -67,8 +68,12 @@ vi.mock("./chat-input", () => ({
   ChatInput: (props: NonNullable<typeof composer.props>) => { composer.props = props; return null; },
 }));
 vi.mock("../../runtimes/components/runtime-workspace-picker", () => ({ WorkLocationPicker: () => null }));
+// A live turn reads its trace here: set one per attempt to show its steps and reply.
+const traces = vi.hoisted(() => new Map<string, { turn: unknown; items: unknown[] }>());
 vi.mock("../../common/task-transcript/use-task-trace", () => ({
-  useTurnTrace: () => ({ turn: null, items: [], closed: false, loaded: false, error: false, retry: () => {}, read: null, head: 0 }),
+  useTurnTrace: (id: string | null) => ({ turn: null, items: [], closed: false, loaded: false, error: false, retry: () => {}, read: null, head: 0,
+    ...(id ? traces.get(id) : undefined) }),
+  useCachedTurnTraces: (ids: readonly string[]) => ids.map((id) => traces.get(id) ?? { turn: null, items: [] }),
 }));
 vi.mock("../../common/markdown", () => ({ Markdown: ({ children }: { children: string }) => <span>{children}</span> }));
 vi.mock("../../issues/components/comment-card", () => ({ AttachmentList: () => null }));
@@ -87,7 +92,7 @@ const message = (seq: number, body: string) => SessionLogEntrySchema.parse({
   message_kind: "request", body_md: body, body_html: null, render_version: null,
   metadata: { attachments: [], reactions: [] },
 });
-afterEach(() => { vi.clearAllMocks(); clearChatLogPool(); });
+afterEach(() => { vi.clearAllMocks(); clearChatLogPool(); traces.clear(); });
 
 it("N2 removes a deleted unread body through ChatWindow's real log chain before refresh or reconnect", async () => {
   const kept = message(1, "QA509_EDIT_AFTER");
@@ -176,6 +181,71 @@ it("reads the log tail once when the shown chat's pending turn settles, so its r
     await waitFor(() => expect(main).toHaveTextContent(reply.body_md));
     // The tail, then the seq between the window and the tail.
     expect(backend.read.mock.calls[0]).toEqual([session.id, { before: 30 }]);
+  } finally { view.unmount(); client.clear(); }
+});
+
+it("keeps a finished turn's live reply on screen until the settle read brings its rows, then swaps them in", async () => {
+  const sent = message(1, "QA_HANDOFF_QUESTION");
+  const card = SessionLogEntrySchema.parse({
+    session_id: session.id, seq: 2, id: "turn-1", revision: 3, kind: "turn", task_id: "attempt-1", author_type: "agent",
+    body_md: "QA_HANDOFF_REPLY", body_html: null, render_version: null,
+    metadata: { attachments: [], turn_id: "turn-1", status: "completed", final_entry_id: "reply-3" },
+  });
+  const reply = SessionLogEntrySchema.parse({
+    session_id: session.id, seq: 3, id: "reply-3", revision: 1, kind: "message", sender_type: "agent", sender_id: "agent-a",
+    author_type: "agent", to_type: "member", message_kind: "reply", task_id: "turn-1", body_md: "QA_HANDOFF_REPLY",
+    body_html: null, render_version: null, metadata: { attachments: [], reactions: [] },
+  });
+  traces.set("attempt-1", {
+    turn: traceTurn({ id: "attempt-1", turn_id: "turn-1", final_item_id: "final", final_started_at: at(5) }),
+    items: [traceMessage("final", "QA_LIVE_REPLY", "final", { started_at: at(5) })],
+  });
+  const initial: IssueLogBootstrap = { sessionId: session.id, head: null, window: {
+    entries: [sent], head_seq: 2, log_version: 1, has_more_before: false, has_more_after: false,
+  } };
+  // The turn's frames never come: only the read on settle brings its rows, late.
+  socket.subscribeStream.mockImplementation(() => ({ unsubscribe: vi.fn() }));
+  backend.listMessages.mockImplementation(async () => ({ messages: [], next_cursor: null }));
+  let answer!: () => void;
+  const answered = new Promise<void>((resolve) => { answer = resolve; });
+  backend.read.mockImplementation(async () => {
+    await answered;
+    return { ...initial.window, entries: [sent, card, reply], head_seq: 3, log_version: 4 };
+  });
+  backend.getChatQueue.mockResolvedValue({ items: [], paused: null });
+  registerChatStore(createChatStore({ storage: { getItem: () => null, setItem: () => {}, removeItem: () => {} } }));
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  const pendingKey = ["chat", "pending-task", session.id];
+  client.setQueryData(pendingKey, { task_id: "attempt-1", turn_id: "turn-1", status: "running", supports_queue: true });
+  const view = render(<QueryClientProvider client={client}>
+    <I18nProvider locale="en" resources={{ en: { chat: enChat, issues: enIssues, messages: enMessages } }}>
+      <ReplicaEnvProvider env={memoryEnv}>
+        <ChatWindow presentation="page" initialSessionId={session.id} initialLog={initial} />
+      </ReplicaEnvProvider>
+    </I18nProvider>
+  </QueryClientProvider>);
+  try {
+    const main = view.container.querySelector<HTMLElement>('[data-perf-scroll="session-log"]')!;
+    await waitFor(() => expect(main).toHaveTextContent("QA_LIVE_REPLY"));
+    // What each change to the list leaves on screen: the live reply, the row, or neither.
+    const seen = new Set<string>();
+    const observer = new MutationObserver(() => {
+      seen.add(`${main.textContent!.includes("QA_LIVE_REPLY")}/${main.textContent!.includes("QA_HANDOFF_REPLY")}`);
+    });
+    observer.observe(main, { subtree: true, childList: true, characterData: true, attributes: true });
+    // chat:done settles the pending task; the tail read it starts has not answered.
+    await act(async () => { client.setQueryData(pendingKey, { supports_queue: true }); });
+    await waitFor(() => expect(backend.read).toHaveBeenCalled());
+    expect(main).toHaveTextContent("QA_LIVE_REPLY");
+    expect(main.querySelector('[data-chat-live-turn="held"]')).not.toBeNull();
+    expect(main).not.toHaveTextContent("QA_HANDOFF_REPLY");
+    await act(async () => { answer(); });
+    await waitFor(() => expect(main).toHaveTextContent("QA_HANDOFF_REPLY"));
+    expect(main).not.toHaveTextContent("QA_LIVE_REPLY");
+    expect(main.querySelector("[data-chat-live-turn]")).toBeNull();
+    observer.disconnect();
+    expect([...seen]).not.toContain("false/false");
+    expect([...seen]).not.toContain("true/true");
   } finally { view.unmount(); client.clear(); }
 });
 

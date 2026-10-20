@@ -34,13 +34,14 @@ import type { AgentAvailability } from "@multiremi/core/agents";
 import type { ChatMessage, ChatPendingTask, TaskFailureReason } from "@multiremi/core/types";
 import { failureReasonLabel } from "../../agents/components/tabs/task-failure";
 import { TaskStatusPill } from "./task-status-pill";
-import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
+import { useCachedTurnTraces, useTurnTrace } from "../../common/task-transcript/use-task-trace";
 import { TaskTraceDialog } from "../../common/task-transcript/task-trace-dialog";
 import { formatElapsedMs } from "../../common/format";
 import { extractCopyText } from "../lib/copy-text";
 import { finishedFoldHeader, isAwaitingHuman } from "../lib/turn-steps";
-import { isNonterminalTurn } from "../lib/turn-card";
+import { isNonterminalTurn, turnOutcomeShown, type TurnLogRow } from "../lib/turn-card";
 import { FinishedTurnSteps, LiveTurnSteps } from "./turn-steps-fold";
+import { useLiveTurnHandoff } from "./use-live-turn-handoff";
 import { SubagentCompletionRows } from "./subagent-completion-row";
 import { ChatRunningStrip } from "./subagent-running-strip";
 import { DoorbellRow } from "./doorbell-row";
@@ -261,15 +262,24 @@ export function ChatMessageList({
   const doorbells = useMemo(() => doorbellTaskIds(snapshot.entries as ReadonlyArray<SessionLogEntry & { sender_type?: string | null; metadata?: unknown }>), [snapshot.entries]);
   const entryKey = useCallback((entry: SessionLogEntry) => clientIdOf(entry) ?? entry.id, []);
   const pendingTaskId = pendingTask?.task_id ?? null;
-  const pendingAlreadyPersisted = !!pendingTaskId && replica.getSnapshot(sessionId).entries.some((entry) => {
-    const row = entry as SessionLogEntry & { task_id?: string; metadata?: Record<string, unknown> };
-    return row.kind === "turn" && row.task_id === pendingTaskId
-      && !isNonterminalTurn(row.metadata);
-  });
+  const pendingTurnId = pendingTask?.turn_id ?? null;
+  const logRows = snapshot.entries as readonly TurnLogRow[];
+  // The running turn gives way once the log shows its outcome: a finished card
+  // with its reply row, or a failure notice.
+  const pendingAlreadyPersisted = !!pendingTaskId && turnOutcomeShown(logRows, { taskId: pendingTaskId, turnId: pendingTurnId });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
   // An optimistic pending id has no trace yet; the real id replaces it on dispatch.
   const liveTraceId = pendingTaskId?.startsWith("optimistic-") ? null : pendingTaskId;
   const liveTrace = useTurnTrace(liveTraceId, { enabled: visible && showLiveTimeline, live: true, turnId: pendingTask?.turn_id });
+  // The pending task moves on before the turn's rows land: its live view stays,
+  // frozen on its cached trace, until they do (or the handoff times out).
+  const heldTurns = useLiveTurnHandoff(sessionId, showLiveTimeline && liveTraceId ? { taskId: liveTraceId, turnId: pendingTurnId } : null, logRows);
+  const heldTraces = useCachedTurnTraces(heldTurns.map((turn) => turn.taskId));
+  // One keyed list, so a turn moving from live to held keeps its fold as it is.
+  const liveViews = [
+    ...heldTurns.map((turn, index) => ({ key: turn.taskId, trace: heldTraces[index]!, frozen: true })),
+    ...(showLiveTimeline ? [{ key: liveTraceId ?? "pending", trace: liveTrace, frozen: false }] : []),
+  ];
   // The pill says only what the steps fold cannot: the wait before the trace
   // has a turn (queued, dispatched, offline, the directory lock, preparation),
   // a read that failed or a legacy trace (no fold), and a wait on a person.
@@ -370,7 +380,7 @@ export function ChatMessageList({
       </div>;
     }}
     footer={<div className="space-y-4 pb-4">
-      {showLiveTimeline && <LiveTurnSteps key={liveTraceId ?? "pending"} trace={liveTrace} sessionId={sessionId} />}
+      {liveViews.map((view) => <LiveTurnSteps key={view.key} trace={view.trace} sessionId={sessionId} frozen={view.frozen} />)}
       {showLiveTimeline && liveTrace.error && <div role="alert" className="text-xs text-destructive">{traceT(($) => $.transcript.trace_failed)}</div>}
       {showStatusPill && pendingTask && <TaskStatusPill pendingTask={pendingTask}
         items={liveTrace.items} availability={availability} resolveChat={resolveChat} />}
