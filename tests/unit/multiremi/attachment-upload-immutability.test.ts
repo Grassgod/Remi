@@ -5,6 +5,9 @@ import type { MultiremiAttachment } from "@multiremi/contracts/types.js";
 import { attachmentIdsFromText } from "@multiremi/contracts/attachments.js";
 import { persistUploadedAttachments, uploadedAttachmentPath, uploadRoot } from "@multiremi/api/helpers/uploads.js";
 import { createPr2Harness, type Pr2Harness } from "../../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
+import { useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+
+useMigratedHotspotDatabases();
 
 const collisionUuid = "01234567-89ab-4000-8000-000000000000";
 const collisionId = `att_${collisionUuid.replaceAll("-", "")}`;

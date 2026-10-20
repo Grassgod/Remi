@@ -3,6 +3,9 @@ import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-record
 import { readFileSync } from "node:fs";
 import { AUTH_COOKIE_NAME } from "@multiremi/api/helpers/login.js";
 import { createPr2Harness, capturePr2Responses, capturePr2QueryCounts, reportPr2Usage } from "../../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
+import { useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+
+useMigratedHotspotDatabases();
 
 const fixtureDir = `${import.meta.dir}/../../fixtures/multiremi`;
 
