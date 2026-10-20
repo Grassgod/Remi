@@ -25,6 +25,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { Dialog, DialogContent, DialogTitle } from "@multiremi/ui/components/ui/dialog";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@multiremi/ui/components/ui/collapsible";
 import { Markdown } from "../markdown";
@@ -118,10 +119,10 @@ export function AgentTranscriptDialog({
   const { t } = useT("agents");
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState("");
-  const [copied, setCopied] = useState(false);
-  const [copiedWorkdir, setCopiedWorkdir] = useState(false);
+  const [copied, markCopied] = useCopyFeedback();
+  const [copiedWorkdir, markCopiedWorkdir] = useCopyFeedback();
   const [activeView, setActiveView] = useState<"execution" | "prompt">(initialView);
-  const [promptCopied, setPromptCopied] = useState(false);
+  const [promptCopied, markPromptCopied] = useCopyFeedback();
   const [agentInfo, setAgentInfo] = useState<Agent | null>(null);
   const [runtimeInfo, setRuntimeInfo] = useState<AgentRuntime | null>(null);
   const [selectedTools, setSelectedTools] = useState<Set<string>>(new Set());
@@ -306,10 +307,9 @@ export function AgentTranscriptDialog({
     if (!task.relative_work_dir) return;
     void copyText(task.relative_work_dir).then((ok) => {
       if (!ok) return;
-      setCopiedWorkdir(true);
-      setTimeout(() => setCopiedWorkdir(false), 2000);
+      markCopiedWorkdir();
     });
-  }, [task.relative_work_dir]);
+  }, [task.relative_work_dir, markCopiedWorkdir]);
 
   const handleCopyAll = useCallback(() => {
     // The displayed order, with a subagent's own items indented under it.
@@ -321,20 +321,18 @@ export function AgentTranscriptDialog({
     for (const item of displayItems) add(item, 0);
     void copyText(lines.join("\n")).then((ok) => {
       if (!ok) return;
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     });
-  }, [displayItems, childrenOf]);
+  }, [displayItems, childrenOf, markCopied]);
 
   const handleCopyPrompt = useCallback(() => {
     const prompt = promptQuery.data?.prompt;
     if (!prompt) return;
     void copyText(prompt).then((ok) => {
       if (!ok) return;
-      setPromptCopied(true);
-      setTimeout(() => setPromptCopied(false), 2000);
+      markPromptCopied();
     });
-  }, [promptQuery.data?.prompt]);
+  }, [promptQuery.data?.prompt, markPromptCopied]);
 
   // Toggle tool filter
   const toggleTool = useCallback((tool: string) => {
@@ -371,7 +369,7 @@ export function AgentTranscriptDialog({
   // Header token rollup (server-provided) + the agent's final reply, surfaced
   // above the event list so the outcome isn't buried in a one-line summary.
   const usage = useMemo(() => usageSnapshotFromTask(task), [task]);
-  const [answerCopied, setAnswerCopied] = useState(false);
+  const [answerCopied, markAnswerCopied] = useCopyFeedback();
   // The final reply is the item the daemon marked final; it is never a child's.
   const finalAnswer = useMemo(() => {
     const final = finalItem(items, turn?.final_item_id);
@@ -381,10 +379,9 @@ export function AgentTranscriptDialog({
     if (!finalAnswer) return;
     void copyText(finalAnswer).then((ok) => {
       if (!ok) return;
-      setAnswerCopied(true);
-      setTimeout(() => setAnswerCopied(false), 2000);
+      markAnswerCopied();
     });
-  }, [finalAnswer]);
+  }, [finalAnswer, markAnswerCopied]);
 
   const entries = displayItems;
   const planEntries = useMemo(() => {

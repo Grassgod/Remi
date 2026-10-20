@@ -6,6 +6,7 @@ import type { NodeViewProps } from "@tiptap/react";
 import { Code as CodeIcon, Copy, Check, Eye } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { useT } from "../../i18n";
 import { MermaidDiagram } from "../mermaid-diagram";
 import { CodeBlockIframe } from "../code-block-iframe";
@@ -32,7 +33,7 @@ function useDebouncedValue<T>(value: T, delayMs: number): T {
 
 function CodeBlockView({ node }: NodeViewProps) {
   const { t } = useT("editor");
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback();
   // HTML blocks default to "preview"; the user can flip to "source" to
   // edit the markup directly. Note: the source `<pre>` MUST stay mounted
   // (just hidden) so ProseMirror keeps its NodeView bindings — unmounting
@@ -55,8 +56,7 @@ function CodeBlockView({ node }: NodeViewProps) {
     const text = node.textContent;
     if (!text) return;
     if (await copyText(text)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     }
   };
 

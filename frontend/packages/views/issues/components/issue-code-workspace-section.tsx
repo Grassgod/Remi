@@ -6,6 +6,7 @@ import { Check, ChevronRight, Copy, FolderGit2, GitBranch, Server, TriangleAlert
 import { issueWorkspaceOptions } from "@multiremi/core/issues/queries";
 import type { IssueWorkspace, IssueWorkspaceStatus } from "@multiremi/core/types";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { useT } from "../../i18n";
 import { capitalize, shortDaemonId, splitRuntimeName } from "../../runtimes/components/runtime-machines";
 
@@ -186,7 +187,7 @@ function CopyValue({
   onCopy: (value: string) => Promise<boolean>;
   wrap?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback(1200);
   return (
     <div className={`flex min-w-0 gap-1 ${wrap ? "items-start" : "items-center"}`}>
       <span
@@ -203,8 +204,7 @@ function CopyValue({
         onClick={() => {
           void onCopy(value).then((ok) => {
             if (!ok) return;
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1200);
+            markCopied();
           });
         }}
       >

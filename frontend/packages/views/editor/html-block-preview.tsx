@@ -26,6 +26,7 @@ import {
 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import {
   Dialog,
   DialogContent,
@@ -48,14 +49,13 @@ interface HtmlBlockPreviewProps {
 export function HtmlBlockPreview({ html, className }: HtmlBlockPreviewProps) {
   const { t } = useT("editor");
   const [view, setView] = useState<"preview" | "source">("preview");
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback();
   const [fullscreen, setFullscreen] = useState(false);
 
   const handleCopy = async () => {
     if (!html) return;
     if (await copyText(html)) {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      markCopied();
     }
   };
 

@@ -30,6 +30,7 @@ import {
 } from "@multiremi/ui/components/ui/dialog";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { toast } from "sonner";
 import { useT } from "../../i18n";
 import type {
@@ -430,7 +431,7 @@ function DetailSections({
 
 function CodeBlock({ label, value }: { label: string; value: string }) {
   const { t } = useT("autopilots");
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback(1500);
   // Truncate in-DOM display for very large bodies; the Copy button still
   // yields the full string. 4 KiB is large enough for typical webhook
   // payloads while keeping the dialog responsive.
@@ -440,9 +441,8 @@ function CodeBlock({ label, value }: { label: string; value: string }) {
 
   const handleCopy = async () => {
     if (await copyText(value)) {
-      setCopied(true);
+      markCopied();
       toast.success(t(($) => $.webhook_payload.copied));
-      setTimeout(() => setCopied(false), 1500);
     } else {
       toast.error(t(($) => $.webhook_payload.copy_failed));
     }

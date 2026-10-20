@@ -5,6 +5,7 @@ import { Webhook, ChevronDown, ChevronRight, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { useT } from "../../i18n";
 
 interface WebhookPayloadPreviewProps {
@@ -29,7 +30,7 @@ export function WebhookPayloadPreview({
 }: WebhookPayloadPreviewProps) {
   const { t } = useT("autopilots");
   const [open, setOpen] = useState(defaultOpen);
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback(1500);
 
   const { event, receivedAt, contentType, fullJSON, displayJSON, isTruncated } = useMemo(() => {
     let event: string | null = null;
@@ -68,9 +69,8 @@ export function WebhookPayloadPreview({
   const handleCopy = async (e: React.MouseEvent) => {
     e.stopPropagation();
     if (await copyText(fullJSON)) {
-      setCopied(true);
+      markCopied();
       toast.success(t(($) => $.webhook_payload.copied));
-      setTimeout(() => setCopied(false), 1500);
     } else {
       toast.error(t(($) => $.webhook_payload.copy_failed));
     }

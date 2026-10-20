@@ -34,6 +34,7 @@ import {
 } from "@multiremi/ui/components/ui/alert-dialog";
 import { Skeleton } from "@multiremi/ui/components/ui/skeleton";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { toast } from "sonner";
 import { api } from "@multiremi/core/api";
 import { useT } from "../../i18n";
@@ -47,7 +48,7 @@ export function TokensTab() {
   const [tokenExpiry, setTokenExpiry] = useState("90");
   const [tokenCreating, setTokenCreating] = useState(false);
   const [newToken, setNewToken] = useState<string | null>(null);
-  const [tokenCopied, setTokenCopied] = useState(false);
+  const [tokenCopied, markTokenCopied, resetTokenCopied] = useCopyFeedback();
   const [tokenRevoking, setTokenRevoking] = useState<string | null>(null);
   const [revokeConfirmId, setRevokeConfirmId] = useState<string | null>(null);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -97,8 +98,7 @@ export function TokensTab() {
   const handleCopyToken = async () => {
     if (!newToken) return;
     if (await copyText(newToken)) {
-      setTokenCopied(true);
-      setTimeout(() => setTokenCopied(false), 2000);
+      markTokenCopied();
     }
   };
 
@@ -219,7 +219,7 @@ export function TokensTab() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <Dialog open={!!newToken} onOpenChange={(v) => { if (!v) { setNewToken(null); setTokenCopied(false); } }}>
+      <Dialog open={!!newToken} onOpenChange={(v) => { if (!v) { setNewToken(null); resetTokenCopied(); } }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{t(($) => $.tokens.created_dialog.title)}</DialogTitle>
@@ -243,7 +243,7 @@ export function TokensTab() {
             </Tooltip>
           </div>
           <DialogFooter>
-            <Button onClick={() => { setNewToken(null); setTokenCopied(false); }}>{t(($) => $.tokens.created_dialog.done)}</Button>
+            <Button onClick={() => { setNewToken(null); resetTokenCopied(); }}>{t(($) => $.tokens.created_dialog.done)}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
