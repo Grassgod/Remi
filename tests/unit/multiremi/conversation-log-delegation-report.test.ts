@@ -1,13 +1,12 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import type { MultiremiStore } from "@multiremi/store.js";
+import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
 import { conversationLogKindForSessionEvent } from "@multiremi/store/conversation-log-mirror.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
@@ -17,36 +16,17 @@ import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.j
 // hole where the bridge event sits and a log reader sees the same report.
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-let sequence = 0;
+// Each case is still a new database, connection and Store; only the cold
+// migration is shared (SQLite image / suite-owned PostgreSQL TEMPLATE).
+const stores = {
+  sqlite: migratedStoreBackend("sqlite", { prefix: "m402dr", fixture: "mul402-delegation-report" }),
+  postgres: migratedStoreBackend("postgres", { prefix: "m402dr", fixture: "mul402-delegation-report" }),
+};
 
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
-  if (backend === "sqlite") {
-    const db = openSqliteDatabase(":memory:");
-    try {
-      const store = new MultiremiStore(db);
-      store.ensureLocalWorkspace();
-      await run(store);
-    } finally {
-      db.close();
-    }
-    return;
-  }
-  const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
-  const name = `m402dr_${process.pid}_${++sequence}`;
-  const url = new URL(pgAdminUrl!);
-  url.pathname = `/${name}`;
-  let db: PostgresSyncDatabase | null = null;
-  try {
-    await admin.unsafe(`CREATE DATABASE ${name}`);
-    db = new PostgresSyncDatabase(url.toString());
-    const store = new MultiremiStore(db);
-    store.ensureLocalWorkspace();
-    await run(store);
-  } finally {
-    db?.close();
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end();
-  }
+  const opened = await stores[backend].open();
+  try { await run(opened.store); }
+  finally { await opened.close(); }
 }
 
 function fixture(store: MultiremiStore) {
@@ -120,6 +100,7 @@ function expectNoSeqHole(store: MultiremiStore, sessionId: string): void {
 
 for (const backend of ["sqlite", "postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-402 delegation_report log mirror (${backend})`, () => {
+    stores[backend].install();
     for (const [terminal, withComment] of [["completed", true], ["failed", false], ["cancelled", false]] as const) {
       it(`mirrors one ${terminal} report ${withComment ? "with" : "without"} a result comment at the event's seq`,
         async () => withStore(backend, async (store) => {
@@ -176,6 +157,7 @@ async function startDelegatedChild(store: MultiremiStore, f: ReturnType<typeof f
 }
 for(const backend of ["sqlite","postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`Canonical delegation report replay (${backend})`,()=>{
+    stores[backend].install();
     for(const terminal of ["completed","failed","cancelled"] as const)it(`replays ${terminal} without another report or wake`,async()=>withStore(backend,async store=>{
       const f=fixture(store), child=await startDelegatedChild(store,f);
       if(terminal === "completed")store.completeTask(child.id,{output:"Final details"});
