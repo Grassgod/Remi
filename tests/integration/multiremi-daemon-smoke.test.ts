@@ -13,6 +13,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import type { AcpProviderOptions } from "@acp/index.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
 import type { AgentResponse, SendOptions } from "@shared/contracts/provider-types.js";
+import type { ObservedSlashCommand } from "@multiremi/contracts/slash-commands.js";
 import * as relayHttp from "@shared/relay-http.js";
 import { startMultiremiServer as startFixtureServer, TestMultiremiDaemon } from "../fixtures/daemon-protocol.js";
 import type { MultiremiDaemonOptions } from "@multiremi/daemon.js";
@@ -1167,6 +1168,49 @@ describe("Bun Multiremi daemon smoke", () => {
       "[Remi] The user typed the command /model, which Remi does not run here. It reached you as text and did not run.\n\n/model claude-haiku-4-5",
     ]);
     expect(store.getTask(taskId)).toMatchObject({ status: "completed", result: "Remi does not switch models from a command." });
+  });
+
+  // ADR 0025: the catalogue the agent advertised travels with the terminal report to the Chat's lane.
+  const laneCommands = (store: MultiremiStore, sessionId: string, agentId: string) => {
+    const row = (store as unknown as { db: Database }).db.query(`SELECT available_commands FROM multiremi_session_lanes
+      WHERE session_id = ? AND reader_type = 'agent' AND reader_id = ? AND execution_scope = ''`).get(sessionId, agentId) as
+      { available_commands: string | null } | null;
+    return row?.available_commands ? JSON.parse(row.available_commands) : null;
+  };
+
+  it("carries the advertised commands to the Chat's lane, naming the Remi skills it installed", async () => {
+    const { store, taskId, sessionId, agentId } = await runChatCommandCase({
+      id: "catalogue",
+      body: "hello",
+      skills: [{ name: "Deploy Prod", description: "Deploy the service", content: "Deploy $ARGUMENTS." }],
+      availableCommands: [
+        { name: "compact", description: "Free up context", hint: "<instructions>", kind: "command", skillDir: null },
+        { name: "deploy-prod", description: "Deploy the service (user)", hint: null, kind: "command", skillDir: null },
+        { name: "fix-issue", description: "Fix an issue (project)", hint: "[issue]", kind: "command", skillDir: null },
+      ],
+      updates: [{ sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Hi." }] }],
+    });
+    expect(store.getTask(taskId)).toMatchObject({ status: "completed" });
+    const skillId = store.getAgent(agentId)!.skills[0]!.id;
+    expect(laneCommands(store, sessionId, agentId)).toMatchObject({
+      provider: "claude", attempt_id: taskId,
+      commands: [
+        { name: "compact", description: "Free up context", hint: "<instructions>", kind: "command" },
+        { name: "deploy-prod", description: "Deploy the service (user)", hint: null, kind: "skill", skill_id: skillId },
+        { name: "fix-issue", description: "Fix an issue (project)", hint: "[issue]", kind: "command" },
+      ],
+    });
+  });
+
+  it("stores nothing when the agent advertised nothing or the provider cannot tell, and an empty list when it is empty", async () => {
+    for (const [id, availableCommands] of [["catalogue-unknown", null], ["catalogue-unsupported", undefined]] as const) {
+      const { store, sessionId, agentId } = await runChatCommandCase({ id, body: "hello", availableCommands,
+        updates: [{ sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Hi." }] }] });
+      expect(laneCommands(store, sessionId, agentId)).toBeNull();
+    }
+    const { store, sessionId, agentId } = await runChatCommandCase({ id: "catalogue-empty", body: "hello", availableCommands: [],
+      updates: [{ sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Hi." }] }] });
+    expect(laneCommands(store, sessionId, agentId)).toMatchObject({ provider: "claude", commands: [] });
   });
 
   it("reconciles, materializes and retains a direct task Agent Plugin runtime in its lane generation", async () => {
@@ -3984,9 +4028,15 @@ async function runChatCommandCase(spec: {
   id: string;
   body: string;
   updates: Array<Record<string, unknown>>;
-}): Promise<{ store: MultiremiStore; taskId: string; sessionId: string; prompts: string[]; traceEvents: TraceEvent[] }> {
+  /** ADR 0025: what the provider says the agent advertised; leave out for a provider without the method. */
+  availableCommands?: ObservedSlashCommand[] | null;
+  skills?: Array<{ name: string; description?: string; content: string }>;
+}): Promise<{ store: MultiremiStore; taskId: string; sessionId: string; agentId: string; prompts: string[]; traceEvents: TraceEvent[] }> {
   const { store, workDir: root } = daemonTestBed(`multiremi-daemon-${spec.id}-`);
   const agent = store.createAgent({ name: `Claude ${spec.id}`, provider: "claude" });
+  if (spec.skills?.length) {
+    store.setAgentSkills(agent.id, { skillIds: spec.skills.map((skill) => store.createSkill(skill).id!) });
+  }
   const chat = store.createChatSession({ agentId: agent.id, title: `Command ${spec.id}` });
   const task = store.sendChatMessage(chat.id, { body: spec.body }).task;
   const daemonToken = await store.createAccessToken({ name: `Command ${spec.id} daemon`, type: "daemon", workspaceId: "local" });
@@ -3999,6 +4049,7 @@ async function runChatCommandCase(spec: {
     },
     // The real ACP provider's response text is always empty; the reply comes from the streamed chunks.
     getLastResponse: () => ({ text: "", sessionId: `sess-${spec.id}`, requestId: `req-${spec.id}` }),
+    ...(spec.availableCommands !== undefined ? { availableCommands: () => spec.availableCommands ?? null } : {}),
   });
   let traceEvents: TraceEvent[] = [];
   try {
@@ -4022,7 +4073,7 @@ async function runChatCommandCase(spec: {
   } finally {
     server.stop(true);
   }
-  return { store, taskId: task.id, sessionId: chat.id, prompts, traceEvents };
+  return { store, taskId: task.id, sessionId: chat.id, agentId: agent.id, prompts, traceEvents };
 }
 
 async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Promise<void> {

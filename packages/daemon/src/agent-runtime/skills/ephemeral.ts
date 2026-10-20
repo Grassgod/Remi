@@ -9,8 +9,8 @@
 
 import { join } from "node:path";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { hasNonAsciiText, skillCommandName } from "@multiremi/contracts/slash-commands.js";
-import type { AgentTask } from "@daemon/contracts/types.js";
+import { boundSlashCommands, hasNonAsciiText, skillCommandName, type ObservedSlashCommand, type SlashCommandEntry } from "@multiremi/contracts/slash-commands.js";
+import type { AgentTask, AgentTaskSkill } from "@daemon/contracts/types.js";
 
 export function writeTaskContext(workDir: string, task: AgentTask): void {
   const dir = join(workDir, ".multiremi");
@@ -130,8 +130,9 @@ const SAFE_DIR = /^[a-z0-9_][a-z0-9._-]*$/;
  * (the provider's own, the agent's, a person's) is left alone, even when it
  * has an Agent skill's name, and that skill is not installed over it.
  * The caller picks a root Remi owns: never a folder of the user's own.
+ * Returns the directories Remi installed, the ones its skills run from.
  */
-export function syncAgentSkills(root: string, task: AgentTask): void {
+export function syncAgentSkills(root: string, task: AgentTask): string[] {
   const skills = task.agent?.skills ?? [];
   const previous = writtenSkillDirs(root);
   const wanted = [...new Set(skills.map((skill) => safeSkillDirName(skill.name)))];
@@ -139,7 +140,7 @@ export function syncAgentSkills(root: string, task: AgentTask): void {
   const owned = wanted.filter((dir) => previous.includes(dir) || !existsSync(join(root, dir)));
   if (!owned.length) {
     if (previous.length) rmSync(join(root, SKILL_MANIFEST), { force: true });
-    return;
+    return [];
   }
   mkdirSync(root, { recursive: true });
   for (const skill of skills) {
@@ -151,6 +152,54 @@ export function syncAgentSkills(root: string, task: AgentTask): void {
     writeSkill(dir, skill);
   }
   writeFileSync(join(root, SKILL_MANIFEST), `${JSON.stringify({ skills: owned })}\n`, { mode: 0o644 });
+  return owned;
+}
+
+/**
+ * ADR 0025: the catalogue the daemon reports, from the list the bridge
+ * advertised. A command is tagged with a Remi skill's id when it is that skill
+ * as installed this turn (`installedDirs`, from `syncAgentSkills`): its
+ * `SKILL.md` sits in the skill's directory, or it carries the skill's name
+ * (the directory name, or the `name` of a body that brings its own
+ * frontmatter). Codex names skills `$name`, so there only a `$` name matches,
+ * and the built-in `/review` never becomes a skill called `review`.
+ */
+export function reportedSlashCommands(provider: string | null | undefined, observed: readonly ObservedSlashCommand[],
+  skills: readonly AgentTaskSkill[], installedDirs: readonly string[]): SlashCommandEntry[] {
+  const installed = new Set(installedDirs);
+  const byDir = new Map<string, string>();
+  const byName = new Map<string, string>();
+  for (const skill of skills) {
+    const id = typeof skill.id === "string" ? skill.id.trim() : "";
+    const dir = safeSkillDirName(skill.name);
+    if (!id || !installed.has(dir)) continue;
+    byDir.set(dir, id);
+    byName.set(ownFrontmatterName(skill.content) ?? dir, id);
+  }
+  const skillPrefix = provider === "codex" ? "$" : "";
+  return boundSlashCommands(observed.map((command) => {
+    const named = skillPrefix ? command.name.startsWith(skillPrefix) && byName.get(command.name.slice(1))
+      : !command.name.startsWith("$") && byName.get(command.name);
+    const skillId = (command.skillDir ? byDir.get(command.skillDir) : undefined) ?? (named || undefined);
+    return {
+      name: command.name,
+      description: command.description,
+      hint: command.hint,
+      kind: skillId ? "skill" as const : command.kind,
+      ...(skillId ? { skill_id: skillId } : {}),
+    };
+  }));
+}
+
+/** The `name` of a skill body that brings its own frontmatter (written as is by `renderSkillMarkdown`). */
+function ownFrontmatterName(content: string | undefined): string | null {
+  const text = String(content ?? "").trimStart();
+  if (!text.startsWith("---")) return null;
+  const end = text.indexOf("\n---", 3);
+  const block = end < 0 ? "" : text.slice(3, end);
+  const value = /^name:[ \t]*(.+)$/m.exec(block)?.[1]?.trim() ?? "";
+  const unquoted = /^(["'])(.*)\1$/.exec(value)?.[2] ?? value;
+  return unquoted.trim() || null;
 }
 
 export function writeAgentSkillContext(workDir: string, task: AgentTask): void {

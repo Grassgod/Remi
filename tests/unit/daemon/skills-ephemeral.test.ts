@@ -8,13 +8,13 @@
  * the agent silently runs with no skills at all.
  */
 
-import { test, expect } from "bun:test";
+import { describe, test, expect } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { syncAgentSkills, writeAgentSkillContext, writeTaskContext } from "@daemon/agent-runtime/skills/ephemeral.js";
-import { skillCommandName } from "@multiremi/contracts/slash-commands.js";
+import { reportedSlashCommands, syncAgentSkills, writeAgentSkillContext, writeTaskContext } from "@daemon/agent-runtime/skills/ephemeral.js";
+import { skillCommandName, type ObservedSlashCommand } from "@multiremi/contracts/slash-commands.js";
 import type { AgentTask } from "@daemon/contracts/types.js";
 
 function taskWithSkill(provider: string): AgentTask {
@@ -149,6 +149,67 @@ test("ADR 0025: the next sync rewrites skills installed before, and moves a non-
   expect(existsSync(join(root, "skill"))).toBe(false);
   expect(readFileSync(join(root, deploy, "SKILL.md"), "utf-8")).toBe(`---\nname: "${deploy}"\ndescription: "部署"\n---\ndeploy\n`);
   expect(JSON.parse(readFileSync(join(root, ".remi-skills.json"), "utf-8"))).toEqual({ skills: ["review", deploy] });
+});
+
+test("ADR 0025: syncAgentSkills returns the directories Remi installed, not the ones it left alone", () => {
+  const root = join(workspace(), "skills");
+  mkdirSync(join(root, "review"), { recursive: true });
+  writeFileSync(join(root, "review", "SKILL.md"), "someone else's");
+  expect(syncAgentSkills(root, withSkills([
+    { name: "Review", content: "r" }, { name: "Deploy", content: "d" },
+  ]))).toEqual(["deploy"]);
+  expect(syncAgentSkills(root, withSkills([]))).toEqual([]);
+});
+
+describe("ADR 0025: reportedSlashCommands", () => {
+  const observed = (name: string, extra: Partial<ObservedSlashCommand> = {}): ObservedSlashCommand =>
+    ({ name, description: `${name} help`, hint: null, kind: "command", skillDir: null, ...extra });
+  const skills = [
+    { id: "skl_deploy", name: "Deploy Prod", content: "deploy" },
+    { id: "skl_review", name: "Review", content: "review" },
+    { id: "skl_own", name: "Own", content: "---\nname: \"author-name\"\ndescription: mine\n---\nbody" },
+    { id: "skl_absent", name: "Absent", content: "x" },
+    { name: "No Id", content: "x" },
+  ];
+  const installed = ["deploy-prod", "review", "own", "no-id"];
+
+  test("Claude: a command named like an installed Remi skill is that skill", () => {
+    expect(reportedSlashCommands("claude", [
+      observed("compact", { hint: "<instructions>" }),
+      observed("deploy-prod"),
+      observed("author-name"),
+      observed("absent"),
+      observed("no-id"),
+      observed("$review"),
+    ], skills, installed)).toEqual([
+      { name: "compact", description: "compact help", hint: "<instructions>", kind: "command" },
+      { name: "deploy-prod", description: "deploy-prod help", hint: null, kind: "skill", skill_id: "skl_deploy" },
+      { name: "author-name", description: "author-name help", hint: null, kind: "skill", skill_id: "skl_own" },
+      { name: "absent", description: "absent help", hint: null, kind: "command" },
+      { name: "no-id", description: "no-id help", hint: null, kind: "command" },
+      { name: "$review", description: "$review help", hint: null, kind: "command" },
+    ]);
+  });
+
+  test("Codex: only a `$` name is a skill, so the built-in /review stays a command", () => {
+    expect(reportedSlashCommands("codex", [observed("review"), observed("$review", { kind: "skill" }), observed("$deploy-prod", { kind: "skill" })],
+      skills, installed).map((entry) => [entry.name, entry.kind, entry.skill_id ?? null])).toEqual([
+      ["review", "command", null],
+      ["$review", "skill", "skl_review"],
+      ["$deploy-prod", "skill", "skl_deploy"],
+    ]);
+  });
+
+  test("a SKILL.md directory decides over the name, and a skill Remi did not install is never tagged", () => {
+    expect(reportedSlashCommands("claude", [
+      observed("renamed", { kind: "skill", skillDir: "review" }),
+      observed("absent", { kind: "skill", skillDir: "absent" }),
+    ], skills, installed).map((entry) => [entry.name, entry.kind, entry.skill_id ?? null])).toEqual([
+      ["renamed", "skill", "skl_review"],
+      ["absent", "skill", null],
+    ]);
+    expect(reportedSlashCommands("claude", [observed("deploy-prod")], skills, [])[0]).not.toHaveProperty("skill_id");
+  });
 });
 
 test("task context refresh preserves a Feishu topic binding dossier", () => {
