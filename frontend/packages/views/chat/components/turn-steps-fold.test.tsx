@@ -293,7 +293,7 @@ describe("finished fold (MUL-472)", () => {
   function Fold({ initialOpen = false }: { initialOpen?: boolean }) {
     const [open, setOpen] = useState(initialOpen);
     return <FinishedTurnSteps attemptId="att_1" turnId="turn_1" header={{ kind: "worked_for", ms: 65_000 }} visible open={open}
-      onOpenChange={setOpen} footer={<span data-testid="log">log</span>} />;
+      onOpenChange={setOpen} />;
   }
 
   it("reads the trace only once the reader opens it, and leaves the final reply out", async () => {
@@ -308,7 +308,8 @@ describe("finished fold (MUL-472)", () => {
     await waitFor(() => expect(getTaskTrace).toHaveBeenCalledWith("att_1", { itemCursor: 0, turnId: "turn_1" }));
     expect(await screen.findByText("已读取文件，运行了命令")).toBeInTheDocument();
     expect(screen.queryByText("Final reply")).toBeNull();
-    expect(screen.getByTestId("log")).toBeInTheDocument();
+    // The execution-log button lives in the reply's footer row, not in the fold.
+    expect(screen.queryByText("查看执行记录")).toBeNull();
   });
 
   it("shows the steps the live stream left in the cache even when that read found no trace yet, then reads again", async () => {
