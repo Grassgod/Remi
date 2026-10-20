@@ -139,6 +139,32 @@ export function registerChatRoutes(app: Hono, deps: RouterDeps): void {
     return c.json(store.listSessionBackgroundTasks(loaded.session.id));
   });
   /**
+   * ADR 0025: the agent's command catalogue for the Chat menu,
+   * `ChatSlashCommandsResponse`. With `session_id`, the Chat's own (only its
+   * creator, like reading the Chat; `agent_id` may be left out); without it,
+   * a Chat not created yet with `agent_id` (any member who may chat with the
+   * agent). The blocked and hidden commands are already taken out.
+   */
+  app.get("/api/chat/slash-commands", (c) => {
+    const sessionId = c.req.query("session_id")?.trim() || null;
+    let agentId = c.req.query("agent_id")?.trim() || null;
+    if (sessionId) {
+      const loaded = loadChatSessionForCurrentUser(c, store, sessionId);
+      if (loaded instanceof Response) return loaded;
+      if (agentId && agentId !== loaded.session.agentId) return c.json({ error: "agent_id is not this chat session's agent" }, 400);
+      agentId = loaded.session.agentId;
+    }
+    if (!agentId) return c.json({ error: "agent_id or session_id is required" }, 400);
+    const agent = store.getAgent(agentId);
+    if (!agent) return c.json({ error: "agent not found" }, 404);
+    if (!sessionId) {
+      const denied = denyCurrentUserWorkspaceAccess(c, store, agent.workspaceId);
+      if (denied) return denied;
+      if (!canCurrentUserAccessAgentChecker(c, store)(agent)) return c.json({ error: "you do not have access to this agent" }, 403);
+    }
+    return c.json(store.getChatSlashCommands({ agent, userId: currentRequestUserId(c), sessionId }));
+  });
+  /**
    * PR 6 §6.1: stop one running task (`{task_id}`: the row's `task_id` or
    * `id`) or all of them (`{all: true}`). Only the Chat's creator. 202 with
    * the request time and the rows it marked; 409 `task_not_running` when no

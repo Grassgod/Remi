@@ -127,6 +127,7 @@ import type {
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
+import { recordLaneSlashCommandsWithinTransaction } from "../slash-commands.js";
 
 import {
   dependencyGateEnabled,
@@ -5134,6 +5135,8 @@ ${placementAfter.sql}
         "turn_end", skipAutoReply, resultSnapshot);
       if(input.replyKind&&turn)this.ctx.db.run('UPDATE multiremi_conversation_log SET message_kind=? WHERE id=(SELECT reply_message_id FROM multiremi_turns WHERE id=?)',[input.replyKind,turn.id]);
       this.ctx.conversationLog().recordTurnCardCompletionFieldsWithinTransaction(taskId, input.completionFields ?? null);
+      // ADR 0025: the command catalogue the agent advertised, kept on the attempt's lane.
+      recordLaneSlashCommandsWithinTransaction(this.ctx.db, taskId, input.completionFields?.available_commands);
       return { task: completed, followUps };
     };
     let terminal: ReturnType<typeof completeWithinTransaction>;
@@ -5220,6 +5223,8 @@ ${placementAfter.sql}
       const failed = this.getTask(taskId)!;
       const followUps = this.afterTaskTerminal(failed, "failed", input.error, true, false, childStatusChanges, deferredEvents);
       this.ctx.conversationLog().recordTurnCardCompletionFieldsWithinTransaction(taskId, input.completionFields ?? null);
+      // ADR 0025: the command catalogue the agent advertised, kept on the attempt's lane.
+      recordLaneSlashCommandsWithinTransaction(this.ctx.db, taskId, input.completionFields?.available_commands);
       return { task: failed, followUps };
     };
     const terminal = this.ctx.db.inTransaction ? failWithinTransaction() : this.ctx.db.transaction(failWithinTransaction)();

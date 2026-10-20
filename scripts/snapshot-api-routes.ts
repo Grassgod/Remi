@@ -1895,6 +1895,9 @@ flow("chat", async (rec, refs) => {
   await rec.json("PATCH", `/api/chat/sessions/${compatId}`, { title: "Compat chat renamed" });
   // PR 6: nothing runs in the background here, so the stop is refused.
   await rec.json("POST", `/api/chat/sessions/${compatId}/background-tasks/stop`, { all: true });
+  // ADR 0025: no daemon reported a catalogue, so both answer `none`.
+  await rec.call("GET", `/api/chat/slash-commands?session_id=${compatId}`);
+  await rec.call("GET", `/api/chat/slash-commands?agent_id=${refs.agentId}`);
   await rec.call("DELETE", `/api/chat/sessions/${compatId}`);
 
   const native = await rec.json("POST", "/api/multiremi/chats", { agentId: refs.agentId, title: "Native chat" });

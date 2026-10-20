@@ -22,6 +22,7 @@ import { type SqlDatabase, type SqlDatabaseDialect } from "@multiremi/store/db/p
 import { createLogger } from "@shared/logger.js";
 import { canonicalizeDaemonRoutingWithinTransaction } from "@multiremi/store/daemon-routing.js";
 import { advisoryLock, isPostgresConfigured } from "@multiremi/store/db/postgres.js";
+import { LANE_SLASH_COMMANDS_COLUMN, LANE_SLASH_COMMANDS_MIGRATION } from "@multiremi/store/slash-commands.js";
 import { MIGRATION_ADVISORY_LOCK_KEY } from "@multiremi/store/advisory-locks.js";
 import { backfillConversationLogWithinTransaction, CONVERSATION_LOG_BACKFILL_MIGRATION } from "@multiremi/store/conversation-log-backfill.js";
 import { executionScopeSql, TASK_EXECUTION_SCOPE_MIGRATION, PENDING_TURN_MIGRATION, preparePendingTurnConstraintsWithinTransaction } from "@multiremi/store/pending-turns.js";
@@ -87,7 +88,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     if(tables.has('multiremi_issues'))addColumnIfMissing(db,'multiremi_issues','responsible_member_id TEXT');
     if(tables.has('multiremi_autopilots'))addColumnIfMissing(db,'multiremi_autopilots','responsible_member_id TEXT');
     if(tables.has('multiremi_issue_activity'))addColumnIfMissing(db,'multiremi_issue_activity','workspace_id TEXT');
-    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);addTaskPromptInstructions(db);mergePromptHalves(db);return;}
+    if(tables.has('multiremi_schema_migrations') && db.query('SELECT id FROM multiremi_schema_migrations WHERE id=?').get(UNIFIED_MODEL_MIGRATION)){runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);db.exec(UNIFIED_LANE_SWEEP_INDEX);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);addTaskPromptInstructions(db);mergePromptHalves(db);addLaneSlashCommands(db);return;}
     // Inspect the existing snapshot before bootstrap migrations can touch it.
     const checks=unifiedModelPreflight(db);
     if(checks.some(c=>!c.ok)){
@@ -96,7 +97,7 @@ export function runMigrations(db: SqlDatabase, options: { dialect?: SqlDatabaseD
     }
     runMigrationsForDialect(db,resolveSqlDialect(db,options.dialect));
     runUnifiedModelMigration(db,{reportDir:process.env.MULTIREMI_MIGRATION_REPORT_DIR});
-    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);addTaskPromptInstructions(db);mergePromptHalves(db);
+    separateLaneProviderProgress(db);foldAgentReadState(db);createMemberInboxReadProjection(db);foldDecisionRecords(db);createDecisionReadProjections(db);migrateAttemptInput(db);widenAttemptCounters(db);ensureTurnListIndexes(db);ensureQuestionQueryIndexes(db);ensureUsageAccountingSchema(db);migrateLocalRecords(db);addTurnAttemptTraceSummary(db);migrateChatFollowUpQueue(db);addTurnAttemptSubagents(db);addBackgroundTasks(db);addTaskPromptInstructions(db);mergePromptHalves(db);addLaneSlashCommands(db);
   }));
   // SQLite schema rebuilds toggle foreign_keys outside their transactions.
   // Hold a separate SQLite writer lock across that entire sequence so another
@@ -6054,6 +6055,13 @@ export const TASK_PROMPT_INSTRUCTIONS_MIGRATION = "20261019_task_prompt_instruct
 function addTaskPromptInstructions(db: SqlDatabase): void {
   runMigrationOnce(db, TASK_PROMPT_INSTRUCTIONS_MIGRATION, () => {
     addColumnIfMissing(db, "multiremi_task_prompts", "instructions TEXT");
+  });
+}
+
+/** ADR 0025: the agent lane's latest command catalogue. Additive and nullable on both chains. */
+function addLaneSlashCommands(db: SqlDatabase): void {
+  runMigrationOnce(db, LANE_SLASH_COMMANDS_MIGRATION, () => {
+    addColumnIfMissing(db, "multiremi_session_lanes", LANE_SLASH_COMMANDS_COLUMN);
   });
 }
 

@@ -1,14 +1,14 @@
 {
   "meta": {
     "harness": "scripts/snapshot-api-routes.ts",
-    "routeCount": 787,
+    "routeCount": 788,
     "routeCountByPrefix": {
       "native": 212,
-      "compat": 559,
+      "compat": 560,
       "root": 16
     },
-    "getRoutes": 341,
-    "getRoutesWithBody": 337,
+    "getRoutes": 342,
+    "getRoutesWithBody": 338,
     "statusOnlyRoutes": [
       "GET /api/daemon/ws",
       "GET /api/realtime/ws",
@@ -170,6 +170,7 @@
     "GET /api/chat/sessions/:sessionId",
     "GET /api/chat/sessions/:sessionId/background-tasks",
     "GET /api/chat/sessions/:sessionId/pending-task",
+    "GET /api/chat/slash-commands",
     "GET /api/cli/capabilities",
     "GET /api/cli/context",
     "GET /api/cli/latest-version",
@@ -942,6 +943,7 @@
     "GET /api/chat/sessions/:sessionId",
     "GET /api/chat/sessions/:sessionId/background-tasks",
     "GET /api/chat/sessions/:sessionId/pending-task",
+    "GET /api/chat/slash-commands",
     "GET /api/cli/capabilities",
     "GET /api/cli/context",
     "GET /api/cli/latest-version",
@@ -3286,14 +3288,38 @@
       }
     },
     {
-      "key": "chat#005 DELETE /api/chat/sessions/:sessionId",
+      "key": "chat#005 GET /api/chat/slash-commands",
+      "route": "GET /api/chat/slash-commands",
+      "path": "/api/chat/slash-commands?session_id=chat_q5010won31uy",
+      "status": 200,
+      "body": {
+        "state": "none",
+        "provider": "claude",
+        "reported_at": null,
+        "commands": []
+      }
+    },
+    {
+      "key": "chat#006 GET /api/chat/slash-commands",
+      "route": "GET /api/chat/slash-commands",
+      "path": "/api/chat/slash-commands?agent_id=agt_snapshot",
+      "status": 200,
+      "body": {
+        "state": "none",
+        "provider": "claude",
+        "reported_at": null,
+        "commands": []
+      }
+    },
+    {
+      "key": "chat#007 DELETE /api/chat/sessions/:sessionId",
       "route": "DELETE /api/chat/sessions/:sessionId",
       "path": "/api/chat/sessions/chat_q5010won31uy",
       "status": 204,
       "body": ""
     },
     {
-      "key": "chat#006 POST /api/multiremi/chats",
+      "key": "chat#008 POST /api/multiremi/chats",
       "route": "POST /api/multiremi/chats",
       "path": "/api/multiremi/chats",
       "status": 201,
@@ -3325,7 +3351,7 @@
       }
     },
     {
-      "key": "chat#007 POST /api/multiremi/chats/:id/messages",
+      "key": "chat#009 POST /api/multiremi/chats/:id/messages",
       "route": "POST /api/multiremi/chats/:id/messages",
       "path": "/api/multiremi/chats/cht_snapshot/messages",
       "status": 410,
@@ -3335,7 +3361,7 @@
       }
     },
     {
-      "key": "chat#008 PATCH /api/multiremi/chats/:id",
+      "key": "chat#010 PATCH /api/multiremi/chats/:id",
       "route": "PATCH /api/multiremi/chats/:id",
       "path": "/api/multiremi/chats/cht_snapshot",
       "status": 200,
@@ -6399,6 +6425,15 @@
       "body": {
         "code": "route_retired",
         "replacement": "remi message list <conversation> --unread-by <agent>"
+      }
+    },
+    {
+      "key": "get-sweep GET /api/chat/slash-commands",
+      "route": "GET /api/chat/slash-commands",
+      "path": "/api/chat/slash-commands",
+      "status": 400,
+      "body": {
+        "error": "agent_id or session_id is required"
       }
     },
     {

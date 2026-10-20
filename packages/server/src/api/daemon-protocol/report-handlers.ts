@@ -25,6 +25,7 @@ import type { DaemonParsedFrame } from "./frames.js";
 import type { DaemonTurnBridge } from "./turn-bridge.js";
 import type { DaemonTurnCompletePayload } from "@multiremi/contracts/daemon-protocol.js";
 import { isTraceContextUsage, isTraceLateSubagent, type TraceContextUsage, type TraceLateSubagent } from "@multiremi/contracts/trace.js";
+import { boundSlashCommands } from "@multiremi/contracts/slash-commands.js";
 
 class ReportRejection extends Error {
   constructor(readonly code: string) { super(code); }
@@ -77,7 +78,27 @@ function completionFields(p: Record<string, unknown>, taskId: string): DaemonTas
   return {
     trace: p.trace, final_reply_md: p.final_reply_md, model: p.model,
     ...traceSummaryFields(p, taskId),
+    ...availableCommandsField(p, taskId),
   } as DaemonTaskCompletionFields;
+}
+
+/**
+ * ADR 0025: the optional command catalogue. Older daemons omit it, and absent
+ * or null stores nothing. A malformed value is dropped with a log line (never
+ * its content) and never costs the terminal report; the entries are bounded
+ * again and lose any key the contract does not name. An empty list is kept.
+ */
+function availableCommandsField(p: Record<string, unknown>, taskId: string): Pick<DaemonTaskCompletionFields, "available_commands"> {
+  const value = p.available_commands;
+  if (value === undefined || value === null) return {};
+  const catalogue = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+  const provider = typeof catalogue?.provider === "string" ? catalogue.provider.trim() : "";
+  if (!catalogue || !provider || provider.length > 64 || typeof catalogue.reported_at !== "string"
+    || Number.isNaN(Date.parse(catalogue.reported_at)) || !Array.isArray(catalogue.commands)) {
+    log.error("Terminal report has a malformed round-card field", { taskId, field: "available_commands" });
+    return {};
+  }
+  return { available_commands: { provider, reported_at: catalogue.reported_at, commands: boundSlashCommands(catalogue.commands) } };
 }
 
 /** `late_subagents` holds at most this many entries (PR 5, `lateSubagents` in shared). */
