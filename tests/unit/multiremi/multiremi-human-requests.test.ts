@@ -304,4 +304,4 @@ pendingTurnBackendTests("Human Request unified API", fixture => {
     expect(store.getTaskHumanRequest(request.id)?.status).toBe("responded");
     expect(store.getTaskHumanRequest(request.id)?.respondedBy).toBe(aliceMember.id);
   });
-});
+}, { isolation: "snapshot" });

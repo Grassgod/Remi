@@ -149,4 +149,4 @@ pendingTurnBackendTests('Chat question explicit responsibility', fixture => {
     expect(consumer).toMatchObject({ session_id: h.chat.id, agent_id: h.agent.id });
     expect(h.store.getTask(consumer.current_attempt_id!)?.continuedFromTaskId).toBe(h.task.id);
   });
-});
+}, { isolation: "snapshot" });

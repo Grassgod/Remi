@@ -384,4 +384,4 @@ pendingTurnBackendTests("MUL-492 comment intent replay", (fixture, backend) => {
     expect(f.store.listTasksForIssue(f.issue.id)).toHaveLength(1);
     expect(replayActivities(f)).toHaveLength(1);
   });
-});
+}, { isolation: "snapshot" });

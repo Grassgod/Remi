@@ -164,4 +164,4 @@ pendingTurnBackendTests("configuration wakeups follow the outermost commit", fix
       expect(events).toHaveLength(1);
     } finally { unsubscribe(); }
   });
-});
+}, { isolation: "snapshot" });

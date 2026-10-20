@@ -354,4 +354,4 @@ pendingTurnBackendTests("MUL-508 browser log source visibility", fixture => {
       noCredentials(owner.frames());
     } finally { await f.close(); }
   });
-});
+}, { isolation: "snapshot" });

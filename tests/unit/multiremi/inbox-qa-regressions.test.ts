@@ -41,7 +41,7 @@ pendingTurnBackendTests('MUL-506 independent QA probes', (fixture, backend) => {
         f.store.recordSessionAgentRangeRead(f.session.id, f.a.id, { seq: 1, offset: 0 }, { seq: offer.input_to_seq + 1, offset: 0 }, other.id);
         expect(f.bridge.rpc('turn.input', { turn_id: scoped.turn_id, attempt_id: other.id, input_to_seq: offer.input_to_seq, message_ids: offer.input_messages.map(m => m.id) }, f.scope).ok).toBe(true);
     });
-});
+}, { isolation: "snapshot" });
 pendingTurnBackendTests('MUL-506 scoped decision QA', (fixture, backend) => {
     for (const kind of ['permission', 'question'] as const)
         it(`${kind} answer resumes the original delegated lane without creating a second pending turn`, () => {
@@ -56,7 +56,7 @@ pendingTurnBackendTests('MUL-506 scoped decision QA', (fixture, backend) => {
             expect(f.store.listTurns({ workspace_id: 'local', session_id: s.id }).filter(t => t.status === 'pending')).toHaveLength(0);
             expect(answer.turn_id).toBe(sent.turn_id!);
         });
-});
+}, { isolation: "snapshot" });
 pendingTurnBackendTests('MUL-506 cross issue decision QA', (fixture, backend) => {
     it('an unassigned source Issue hands its Q to the human stage, and the answer resumes its turn', () => {
         const f = fixture(), a = f.store.createAgent({ name: 'QA child worker', provider: 'codex' }), b = f.store.createAgent({ name: 'QA parent owner', provider: 'codex' }), parent = f.store.createIssue({ title: 'QA decision parent', assigneeType: 'agent', assigneeId: b.id }), child = f.store.createIssue({ title: 'QA unassigned source', parentIssueId: parent.id }), s = f.store.getOrCreateDefaultIssueSession(child.id);
@@ -76,7 +76,7 @@ pendingTurnBackendTests('MUL-506 cross issue decision QA', (fixture, backend) =>
         expect(f.store.getTurn(sent.turn_id!)?.status).toBe('running');
         expect(f.store.getIssue(child.id)?.status).toBe('in_progress');
     });
-});
+}, { isolation: "snapshot" });
 pendingTurnBackendTests('MUL-506 cold retry input QA', (fixture, backend) => {
     it('a fresh cold attempt receives the context the previous provider acknowledged', () => {
         const f = fixture(), a = f.store.createAgent({ name: 'QA cold', provider: 'codex' }), issue = f.store.createIssue({ title: 'Cold context', assigneeType: 'agent', assigneeId: a.id }), s = f.store.getOrCreateDefaultIssueSession(issue.id);
@@ -100,7 +100,7 @@ pendingTurnBackendTests('MUL-506 cold retry input QA', (fixture, backend) => {
         expect(bridge.complete({ payload: { turn_id: sent.turn_id!, attempt_id: replacement.id, input_to_seq: coldOffer.input_to_seq, reply: { body_md: 'cold completed', message_kind: 'reply' } }, completionFields: null }, scope).ok).toBe(true);
         expect(f.store.getTurn(sent.turn_id!)?.status).toBe('completed');
     });
-});
+}, { isolation: "snapshot" });
 pendingTurnBackendTests('MUL-506 dependency audit QA', (fixture, backend) => {
     function setup() { const f = fixture(), a = f.store.createAgent({ name: 'QA dependency owner', provider: 'codex' }), prerequisite = f.store.createIssue({ title: 'Unfinished prerequisite', status: 'in_progress' }), issue = f.store.createIssue({ title: 'Waiting work', status: 'backlog', blockedBy: [prerequisite.id], assigneeType: 'agent', assigneeId: a.id }); return { ...f, a, issue, prerequisite }; }
     it('a member force comment keeps one dependency override audit with the user actor', () => {
@@ -123,7 +123,7 @@ pendingTurnBackendTests('MUL-506 dependency audit QA', (fixture, backend) => {
         else
             process.env.MULTIREMI_DEPENDENCY_GATE = prior;
     } });
-});
+}, { isolation: "snapshot" });
 pendingTurnBackendTests('MUL-506 retry report link QA', (fixture, backend) => {
     it('a retried delegate with no reply points to its stable turn', () => {
         const f = fixture();
@@ -156,4 +156,4 @@ pendingTurnBackendTests('MUL-506 retry report link QA', (fixture, backend) => {
         expect(f.store.getTurn(match![1]!)?.status).toBe('completed');
         expect(f.store.getTurn(retry.id)).toBeNull();
     });
-});
+}, { isolation: "snapshot" });

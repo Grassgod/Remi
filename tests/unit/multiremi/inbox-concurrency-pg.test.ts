@@ -30,4 +30,4 @@ pendingTurnBackendTests('MUL-506 PG process concurrency',(fixture,backend)=>{
   it('two repair processes re-ring idempotently',async()=>{const f=setup();const initial=f.store.sendMessage(f.message as any);f.db.run("UPDATE multiremi_turns SET status='completed' WHERE id=?",[initial.turn_id!]);
     const results=await concurrent([1,2].map(()=>({databaseUrl:f.databaseUrl,operation:'ring',turnId:initial.turn_id})));
     expect(results[0]).toBe(results[1]);expect(f.store.listTurns({workspace_id:'local',session_id:f.session.id}).filter(t=>t.status==='pending')).toHaveLength(1);},30_000);
-});
+}, { isolation: "snapshot" });

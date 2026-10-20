@@ -325,4 +325,4 @@ it("run-now leaves a trigger in the auto conversation and an execution turn in t
   const chatId = store.listAutopilotRuns(auto.id)[0]!.chatSessionId!;
   expect((await request(`/api/turns?session_id=${chatId}`)).data.turns).toHaveLength(1);
 });
-});
+}, { isolation: "snapshot" });

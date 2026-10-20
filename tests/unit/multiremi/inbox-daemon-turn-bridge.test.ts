@@ -82,4 +82,4 @@ pendingTurnBackendTests('MUL-506 DaemonTurnBridge',fixture=>{
     expect(f.bridge.rpc('turn.input',{turn_id:replacement.id,attempt_id:f.attempt.id,input_to_seq:f.offer.input_to_seq,message_ids:[]},f.scope).code).toBe('stale_attempt');
   },120_000);
 
-});
+}, { isolation: "snapshot" });

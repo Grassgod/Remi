@@ -111,4 +111,4 @@ pendingTurnBackendTests("MUL-483 organizer mention atomicity", fixture => {
     expect(tasks).toHaveLength(1);
     expect(inboxWakeSeq(f.db, tasks[0]!.id)).toBe(entries[0]!.seq);
   });
-});
+}, { isolation: "snapshot" });

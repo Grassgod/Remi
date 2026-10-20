@@ -454,4 +454,4 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
       expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(sent.message.seq);
     } finally { await h.close(); rmSync(workDir, { recursive: true, force: true }); }
   }, 120_000);
-});
+}, { isolation: "snapshot" });

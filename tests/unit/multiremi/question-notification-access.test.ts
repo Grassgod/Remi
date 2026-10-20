@@ -178,4 +178,4 @@ pendingTurnBackendTests('private native Q notifications', fixture => {
       expect(store.getMessage(notification.id)).not.toBeNull();
     } finally { if (previousKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY; else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousKey; }
   }, 20_000);
-});
+}, { isolation: "snapshot" });

@@ -71,4 +71,4 @@ pendingTurnBackendTests('real Chat responsibility mutation hooks',fixture=>{
     expect(f.store.getQuestion(f.id)?.route_revision).toBe(3);expect(f.store.getQuestion(f.id)?.source_turn_id).toBe(source.source_turn_id);expect(f.store.getMessage(f.id)?.session_id).toBe(f.chat.id);expect(f.store.getMessage(f.id)?.task_id).toBe(source.source_turn_id);
     expect(f.store.getQuestion(f.id)?.original_questions).toEqual(source.original_questions);
   });
-});
+}, { isolation: "snapshot" });

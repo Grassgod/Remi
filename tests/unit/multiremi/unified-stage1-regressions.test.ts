@@ -380,4 +380,4 @@ pendingTurnBackendTests("MUL-508 stage 1 regressions", (fixture) => {
       expect(next.data.items[0].id).not.toBe(inbox.data.items[0].id); expect(next.data.unread_count).toBe(1005);
     } finally { f.db.query = originalQuery; }
   });
-});
+}, { isolation: "snapshot" });

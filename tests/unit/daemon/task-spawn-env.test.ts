@@ -68,4 +68,4 @@ pendingTurnBackendTests("Store offer to actual provider spawn", fixture => {
       }
     }, 120_000);
   }
-});
+}, { isolation: "snapshot" });

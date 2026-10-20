@@ -89,4 +89,4 @@ pendingTurnBackendTests("MUL-509 Chat member read cursors", fixture => {
     store.readMessageInbox("mem_local_local", chat.id);
     expect(store.getChatSession(chat.id)).toMatchObject({ hasUnread: false, unreadCount: 0 });
   });
-});
+}, { isolation: "snapshot" });

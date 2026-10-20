@@ -375,4 +375,4 @@ pendingTurnBackendTests("MUL-486 relay Issue log", (fixture) => {
     expect(f.store.listQueuedMessages(chat.id)).toEqual({ items: [], paused: null });
     expect(f.store.getTask(sent.task!.id)?.status).toBe("queued");
   });
-});
+}, { isolation: "snapshot" });

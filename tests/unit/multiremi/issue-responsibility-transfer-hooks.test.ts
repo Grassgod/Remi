@@ -112,4 +112,4 @@ pendingTurnBackendTests('explicit responsibility mutation hooks',fixture => {
     expect(f.store.getQuestion(f.id)?.route_revision).toBe(1);
     expect(f.db.query('SELECT card_token_hash FROM multiremi_conversation_log WHERE id=?').get(f.id)?.card_token_hash).toBe('old-token');
   });
-});
+}, { isolation: "snapshot" });

@@ -195,4 +195,4 @@ pendingTurnBackendTests('explicit Issue workspace Main rotation', (fixture, back
     expect(bundle.status).toBe(200);
     expect(await bundle.text()).not.toContain('SOURCE_ONLY_PRIVATE');
   });
-});
+}, { isolation: "snapshot" });

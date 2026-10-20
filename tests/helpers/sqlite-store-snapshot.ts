@@ -9,7 +9,8 @@ import { UNIFIED_MODEL_MIGRATION } from "@multiremi/store/unified-model-schema.j
 
 import { nativeTestClock } from "./native-test-clock.js";
 
-function normalClockAndRandom(): boolean {
+/** Shared with the PostgreSQL template factory: both images assume the native clock and RNG. */
+export function normalClockAndRandom(): boolean {
   return Date === nativeTestClock.Date && Date.now === nativeTestClock.now && Math.random === nativeTestClock.random
     && crypto.getRandomValues === nativeTestClock.getRandomValues && crypto.randomUUID === nativeTestClock.randomUUID
     // Check the live clock, not a wall-clock sample captured while this module
@@ -17,7 +18,7 @@ function normalClockAndRandom(): boolean {
     && Math.abs(Date.now() - (performance.timeOrigin + performance.now())) < 250;
 }
 
-function environmentFingerprint(): string {
+export function environmentFingerprint(): string {
   // Hash the entire environment: do not guess which inputs a future migration
   // may read, and never expose credentials or fingerprint contents in output.
   return createHash("sha256").update(JSON.stringify(Object.entries(process.env).sort(([a], [b]) => a.localeCompare(b)))).digest("hex");

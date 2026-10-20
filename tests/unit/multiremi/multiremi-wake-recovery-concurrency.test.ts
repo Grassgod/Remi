@@ -108,4 +108,4 @@ pendingTurnBackendTests("MUL-492 wake recovery concurrency", (fixture, backend) 
     f.store.dispatchPendingSystemEvents(new Date(now + 60_000));
     expect(f.store.listTasksForIssue(issue.id)).toHaveLength(before + 1);
   }, 40_000);
-});
+}, { isolation: "snapshot" });
