@@ -1591,9 +1591,13 @@ export function createTraceTranslator(
           case "async_task_state_update":
             onTaskState(frame);
             break;
+          case "available_commands_update":
+            // ADR 0025: session state, not a turn item. The provider keeps the latest
+            // list per session (a parked process keeps it across attempts) and the
+            // daemon reports it with the attempt's terminal report.
+            break;
           default:
-            // user_message_chunk, available_commands_update, current_mode_update,
-            // state_update, terminal_* and unknown kinds.
+            // user_message_chunk, current_mode_update, state_update, terminal_* and unknown kinds.
             break;
         }
       });

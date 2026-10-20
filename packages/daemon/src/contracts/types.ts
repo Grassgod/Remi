@@ -62,6 +62,8 @@ export interface AgentTaskAgent {
 
 /** Skill materialized into the task workdir. */
 export interface AgentTaskSkill {
+  /** The platform skill's id (`daemonClaimSkillResponse`); absent on skills kept on the agent row itself. */
+  id?: string;
   name: string;
   description?: string;
   content: string;

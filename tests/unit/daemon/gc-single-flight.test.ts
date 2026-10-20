@@ -112,6 +112,7 @@ describe("daemon GC and lifecycle orchestration", () => {
       registerCurrentRuntime: async () => "rt_shutdown",
       ensureOutbox: reports(),
       ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
+      attemptSlashCommands: new Map(),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},
@@ -177,6 +178,7 @@ describe("daemon GC and lifecycle orchestration", () => {
       taskDownlinks: { observeCancellation: () => () => {}, release: () => {} },
       ensureOutbox: reports(),
       ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
+      attemptSlashCommands: new Map(),
       options: { taskTimeoutMs: 0, workspacesRoot: "/tmp/multiremi-lifecycle-test" },
       client: {
         renewTaskDispatchLease: async () => "dispatched",
@@ -245,6 +247,7 @@ describe("daemon GC and lifecycle orchestration", () => {
       taskDownlinks: { observeCancellation: () => () => {}, release: () => {} },
       ensureOutbox: reports(),
       ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
+      attemptSlashCommands: new Map(),
       options: { taskTimeoutMs: 0, workspacesRoot: root },
       client: { renewTaskDispatchLease: async () => "dispatched", getTaskStatus: async () => "running", failTask: async () => {} },
       resolveTaskWorkDir: async () => {
@@ -379,6 +382,7 @@ describe("daemon GC and lifecycle orchestration", () => {
       registerCurrentRuntime: async () => "rt_barrier",
       ensureOutbox: reports(),
       ensureTrace: () => ({ track: () => {}, completion: () => ({}), close: () => {} }),
+      attemptSlashCommands: new Map(),
       refreshWorkspaceRepos: async () => {},
       startRepoCheckoutServer: () => {},
       stopRepoCheckoutServer: () => {},

@@ -140,6 +140,8 @@ import type {
 import type { MultiremiTaskTrace } from "@multiremi/contracts/trace-file.js";
 import type { TraceLateSubagent } from "@multiremi/contracts/trace.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
+import type { ChatSlashCommandsResponse } from "@multiremi/contracts/slash-commands.js";
+import { readChatSlashCommands } from "./slash-commands.js";
 import {
   RuntimesRepo,
   type ArchiveAgentsAndDeleteRuntimeResult,
@@ -5932,6 +5934,17 @@ runMigrations(this.db);
 
   listSessionBackgroundTasks(sessionId: string): SessionBackgroundTasks {
     return this.backgroundTasks.listSessionBackgroundTasks(sessionId);
+  }
+
+  /**
+   * ADR 0025: the command catalogue of a Chat menu. The caller has authorized
+   * the user for the agent, and for `sessionId` when it is set.
+   */
+  getChatSlashCommands(input: { agent: MultiremiAgent; userId: string; sessionId: string | null }): ChatSlashCommandsResponse {
+    return readChatSlashCommands(this.db, {
+      agent: { id: input.agent.id, provider: input.agent.provider || null, runtimeId: input.agent.runtimeId ?? null },
+      userId: input.userId, workspaceId: input.agent.workspaceId, sessionId: input.sessionId,
+    });
   }
 
   countRunningBackgroundTasksBySession(sessionIds: readonly string[]): Map<string, number> {

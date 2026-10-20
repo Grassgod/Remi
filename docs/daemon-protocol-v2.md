@@ -923,6 +923,7 @@ context_usage: { used: number; size: number } | null;
 worked_ms: number | null;                           // final_started_at − started_at
 process_item_count: number | null;                  // 在 Chat 折叠中产生一行的顶层条目数
 late_subagents?: TraceLateSubagent[] | null;        // 最终回复开始后才结束的顶层子代理，至多 5 个（PR 5）
+available_commands?: SlashCommandCatalogue | null;  // agent 最近一次发布的命令目录（ADR 0025）
 ```
 
 - `type_histogram` 按 `(条目类型, tool)` 分桶，`tool` 只在带工具名的条目上非空。
@@ -942,6 +943,16 @@ late_subagents?: TraceLateSubagent[] | null;        // 最终回复开始后才�
   与 `late_subagents`（JSON 文本，迁移 `20261017_turn_attempt_subagents`），
   投影到轮卡元数据与尝试列表。Chat 页面读卡片上的这三项显示已结束轮的折叠与上下文环，读 `late_subagents`
   显示在后台结束的子代理行，都不读 trace（MUL-472）。
+- `available_commands`（ADR 0025）不来自 fold，而来自 provider：桥在 `session/new` / `load` / `resume`
+  之后和 prompt 中发的 `available_commands_update`，provider 按会话保留最新一份（只留名字、说明、参数提示、
+  `kind` 和技能目录名，不留 `_meta` 与路径），daemon 在这一尝试的每个 prompt 后读一次，给它这一轮装下的
+  Remi 技能填 `skill_id`，按 `SLASH_COMMAND_LIMITS`（200 条、说明 300 字符、提示 200 字符、整项 32 KiB）
+  截好后随终态报告发出。形状是 `{provider, reported_at, commands: [{name, description, hint, kind, skill_id?}]}`，
+  见 [slash-commands.ts](../packages/contracts/src/slash-commands.ts)。可选字段，不加能力位：旧 daemon 不发，
+  旧服务端忽略；agent 没发过列表时 daemon 也不发。服务端缺失或 null 时什么都不写；畸形时打日志丢掉，
+  终态照常生效；截断后写进这一尝试的 agent 会话线 `multiremi_session_lanes.available_commands`
+  （JSON 文本，迁移 `20261020_lane_available_commands`），空列表照存；较早的尝试不覆盖较新尝试写下的目录。
+  Chat 菜单经 `GET /api/chat/slash-commands` 读取。
 - `turn.complete` 的回复在 `reply: {body_md, message_kind}` 中，载荷另带 `turn_id`、`attempt_id`、`input_to_seq`；不再上报旧 `output`。
 - `head` 与 `event_count` 分开：新写的 trace 两者相等，**历史 trace 可能是稀疏的**，
   `head ≠ event_count`（A11）。

@@ -26,6 +26,7 @@ import { createAgentResponse, STEER_REASONS } from "@shared/contracts/provider-t
 import { TRACE_STEER_OUTCOMES } from "@shared/contracts/trace.js";
 import { readContextUsage, type ContextUsage } from "@shared/agent-execution.js";
 import { UsageCollector } from "./usage-collector.js";
+import { observeAvailableCommands, type ObservedSlashCommand } from "@shared/contracts/slash-commands.js";
 import { beginCodexRolloutUsage, codexHomeFor, collectCodexRolloutUsage, type CodexRolloutCursor } from "./codex-rollout-usage.js";
 import type { TaskUsageUnit } from "@shared/contracts/usage-accounting.js";
 import { AcpClient } from "./client.js";
@@ -222,6 +223,8 @@ const CLEANUP_INTERVAL_MS = 60 * 1000;
 const PROMPT_CANCEL_SETTLE_MS = 5_000;
 /** The server's own text after a `session/cancel` (server 1.4.0), not the model's. */
 const CANCELLED_BY_CLIENT_TEXT = "The request was cancelled by the client.";
+/** claude-agent-acp 0.93 `LOCAL_ONLY_COMMANDS` (dist/acp-agent.js 709-710): Claude Code answers them without the model. */
+const CLAUDE_LOCAL_ONLY_COMMANDS = new Set(["/context", "/heapdump", "/extra-usage"]);
 /** How long a prompt waits for its last gateway-shim observations before settling usage. */
 const GATEWAY_SETTLE_MS = 2_000;
 /** After cutting the calls still open at prompt end, how long their (aborted) observations may take. */
@@ -361,6 +364,13 @@ interface PoolEntry {
   promptInFlight: object | null;
   /** When the agent last sent a `session/update` for this session. */
   lastUpdateAt: number;
+  /**
+   * ADR 0025: the root session's latest `available_commands_update`, observed
+   * (no `_meta`, no paths). Both bridges send one right after `session/new`,
+   * `load` or `resume`, while no prompt listens; claude-agent-acp sends another
+   * inside the first prompt once Claude Code names its terminal-only commands.
+   */
+  availableCommands?: ObservedSlashCommand[];
   /** Top-level tool calls of the current prompt that have not completed or failed. */
   openToolCalls: Set<string>;
   /** Wakes steers waiting for the turn, tool calls, a person, or the prompt's end. */
@@ -706,6 +716,8 @@ export class AcpProvider implements Provider {
   private _adapter: AgentAdapter;
   private _pool = new Map<string, PoolEntry>();
   private _startingClients = new Set<AcpClient>();
+  /** ADR 0025: the command list a starting client advertised before its session was pooled. */
+  private readonly _startingCommands = new Map<AcpClient, { sessionId: string; commands: ObservedSlashCommand[] }>();
   private _activeStreaming = new Set<string>();
   private _cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private _permissionHandler: PermissionHandler | null = null;
@@ -905,6 +917,13 @@ export class AcpProvider implements Provider {
       eventQueue.push(evt);
       resolveWaiting?.();
     };
+    // A Claude command that runs without the model (`LOCAL_ONLY_COMMANDS`, dist/acp-agent.js 709-710,
+    // matched as the bridge does: the first space-separated word of the prompt).
+    const localOnlyCommand = this._adapter.agentType === "claude"
+      && CLAUDE_LOCAL_ONLY_COMMANDS.has(message.split(" ", 1)[0] ?? "");
+    /** This prompt's root messages, in order, while `localOnlyCommand` (ADR 0025). */
+    const rootMessages: Array<{ id: string; text: string }> = [];
+    const droppedMessageIds = new Set<string>();
 
     // Publish the acknowledged session model, including default/resumed sessions.
     // Construction-time model options alone do not prove what the bridge selected.
@@ -1020,10 +1039,25 @@ export class AcpProvider implements Provider {
         update = this._stampUsage(entry, update, requestedModel(), requestedModelSource(), true);
       }
       if (update.sessionUpdate === "agent_message_chunk" && !stampedParent(update)) {
+        const text = extractChunkText((update as Record<string, any>).content);
+        const rawMessageId = (update as { messageId?: unknown }).messageId;
+        const messageId = typeof rawMessageId === "string" ? rawMessageId : null;
+        if (localOnlyCommand && messageId) {
+          // claude-agent-acp 0.93 forwards a local-only command's output twice: as
+          // `local_command_output`, then as the turn's result (dist/acp-agent.js
+          // 4242-4260, 5381-5395), under two message ids. The second copy is dropped.
+          const previous = rootMessages.at(-1);
+          if (previous && previous.id !== messageId && previous.text === text && text.trim()) {
+            droppedMessageIds.add(messageId);
+            return;
+          }
+          if (droppedMessageIds.has(messageId)) return;
+          if (previous?.id === messageId) previous.text += text;
+          else rootMessages.push({ id: messageId, text });
+        }
         // Remi advertises `session.compaction` and `session.notices`, so neither
         // bridge reports compaction or notices as message text any more. A
         // subagent's prose (stamped with its Agent call) is never the reply.
-        const text = extractChunkText((update as Record<string, any>).content);
         entry.promptState.text += text;
         if (text.trim() && failureState.compaction) {
           failureState.compaction = null;
@@ -1704,6 +1738,12 @@ export class AcpProvider implements Provider {
       child = sessionId;
     }
     const update = notification.update as unknown as Record<string, unknown> | undefined;
+    // ADR 0025: every handler (a prompt, an idle wait, a listen) routes here, so
+    // the list is kept whenever it arrives; the frame itself goes on as before.
+    if (child === null && update?.sessionUpdate === "available_commands_update") {
+      const observed = observeAvailableCommands(update.availableCommands);
+      if (observed) entry.availableCommands = observed;
+    }
     const announced = typeof update?.subagentSessionId === "string" ? update.subagentSessionId : "";
     if (update?.sessionUpdate === "subagent_spawned" && announced && announced !== entry.acpSessionId) {
       entry.children ??= new Map();
@@ -2120,6 +2160,14 @@ export class AcpProvider implements Provider {
       }
       return;
     }
+    // ADR 0025: a starting client is not pooled yet while Remi still sets its mode and model, and
+    // both bridges advertise their commands right after `session/new` answered. Keep that list
+    // until the session is pooled (`_ensureSession` adopts it for the session it opened).
+    const update = notification.update as unknown as Record<string, unknown> | undefined;
+    if (this._startingClients.has(client) && update?.sessionUpdate === "available_commands_update") {
+      const commands = observeAvailableCommands(update.availableCommands);
+      if (commands) this._startingCommands.set(client, { sessionId: notification.sessionId, commands });
+    }
   }
 
   async healthCheck(): Promise<boolean> {
@@ -2427,6 +2475,9 @@ export class AcpProvider implements Provider {
         throw error;
       }
 
+      const startupCommands = this._startingCommands.get(client);
+      if (startupCommands?.sessionId === entry.acpSessionId) entry.availableCommands ??= startupCommands.commands;
+      this._startingCommands.delete(client);
       this._pool.set(chatId, entry);
       this._sessionToChatId.set(entry.acpSessionId, chatId);
       this._startCleanupTimer();
@@ -2434,6 +2485,7 @@ export class AcpProvider implements Provider {
       return entry;
     } catch (error) {
       this._startingClients.delete(client);
+      this._startingCommands.delete(client);
       await client.stop();
       closeGateway(gateway);
       throw error;
@@ -2640,6 +2692,15 @@ export class AcpProvider implements Provider {
   /** The permission modes this chat's agent advertised, for `/switch`. */
   advertisedModes(chatId: string): SessionModeState | undefined {
     return this._pool.get(chatId)?.modes;
+  }
+
+  /**
+   * ADR 0025: the latest command list this chat's agent advertised, or null
+   * when it advertised none. The process keeps it across prompts, so a parked
+   * process that is reused still has it.
+   */
+  availableCommands(chatId: string): ObservedSlashCommand[] | null {
+    return this._pool.get(chatId)?.availableCommands ?? null;
   }
 
   private async _handlePermission(params: RequestPermissionParams): Promise<PermissionOutcome> {
