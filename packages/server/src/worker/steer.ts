@@ -137,7 +137,7 @@ export function steerMessageText(content: string): string {
  * labels them, with the unread sentence when their range is not complete, or
  * the wrap-up notice for force-answer.
  */
-export function buildSteerInjectionPrompt(messages: PreparedTaskSteerMessage[], options: { agentId?: string | null; alwaysLabel?: boolean } = {}): string {
+export function buildSteerInjectionPrompt(messages: PreparedTaskSteerMessage[], options: { agentId?: string | null; alwaysLabel?: boolean; provider?: string | null } = {}): string {
   return buildSteerInput(messages, options);
 }
 

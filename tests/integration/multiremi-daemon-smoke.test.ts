@@ -1112,6 +1112,63 @@ describe("Bun Multiremi daemon smoke", () => {
     expect(foldedTrace(traceEvents).turn).toMatchObject({ agent_name: "Claude ordinary-empty", provider: "claude", status: "completed" });
   });
 
+  // ADR 0025: both bridges answer `/compact` with compaction updates only.
+  it("completes a Chat `/compact` turn that only compacts, with the fixed reply", async () => {
+    const { store, taskId, sessionId, prompts, traceEvents } = await runChatCommandCase({
+      id: "compact-command",
+      body: "/compact\n\nkeep the test output",
+      updates: compactionUpdates("completed"),
+    });
+    expect(prompts).toEqual(["/compact\n\nkeep the test output"]);
+    expect(store.getTask(taskId)).toMatchObject({ status: "completed", result: "Context compacted." });
+    expect(store.listChatMessages(sessionId).map((entry) => [entry.role, entry.body])).toEqual([
+      ["user", "/compact\n\nkeep the test output"],
+      ["assistant", "Context compacted."],
+    ]);
+    const state = foldedTrace(traceEvents);
+    expect(state.items.map(itemShape)).toEqual([
+      [`in:${taskId}`, "user_message", "completed"],
+      ["cmp:cmp_tail", "compaction", "completed"],
+    ]);
+    expect(state.turn).toMatchObject({ status: "completed" });
+  });
+
+  it("keeps the agent's own words when a `/compact` turn also replies", async () => {
+    const { store, taskId } = await runChatCommandCase({
+      id: "compact-command-text",
+      body: "/compact",
+      updates: [...compactionUpdates("completed"), { sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Compacted; 12k tokens left." }] }],
+    });
+    expect(store.getTask(taskId)).toMatchObject({ status: "completed", result: "Compacted; 12k tokens left." });
+  });
+
+  it("still fails a Chat turn that only compacts when its input was not the `/compact` command", async () => {
+    for (const body of ["Please continue", "[Alice] /compact", "/compactor", "/context"]) {
+      const { store, taskId } = await runChatCommandCase({
+        id: `compact-not-command-${body.replace(/[^a-z]/gi, "")}`,
+        body,
+        updates: compactionUpdates("completed"),
+      });
+      expect(store.getTask(taskId)).toMatchObject({
+        status: "failed",
+        error: "Agent returned empty output after compaction.",
+        failureReason: "agent_error.empty_or_unparseable_output",
+      });
+    }
+  });
+
+  it("sends a blocked command to the provider behind the note line, never at the start", async () => {
+    const { store, taskId, prompts } = await runChatCommandCase({
+      id: "blocked-command",
+      body: "/model claude-haiku-4-5",
+      updates: [{ sessionUpdate: "agent_message_chunk", content: [{ type: "text", text: "Remi does not switch models from a command." }] }],
+    });
+    expect(prompts).toEqual([
+      "[Remi] The user typed the command /model, which Remi does not run here. It reached you as text and did not run.\n\n/model claude-haiku-4-5",
+    ]);
+    expect(store.getTask(taskId)).toMatchObject({ status: "completed", result: "Remi does not switch models from a command." });
+  });
+
   it("reconciles, materializes and retains a direct task Agent Plugin runtime in its lane generation", async () => {
     const { store, workDir: root } = daemonTestBed("multiremi-daemon-plugin-");
     const userRepo = join(root, "user-repo");
@@ -3920,6 +3977,52 @@ async function runCompactionFinalizeCase(spec: {
   }
 
   return { store, taskId: task.id, issueId: issue.id, traceEvents };
+}
+
+/** One private Chat turn of a Claude agent through the real daemon; the provider records the text it was sent. */
+async function runChatCommandCase(spec: {
+  id: string;
+  body: string;
+  updates: Array<Record<string, unknown>>;
+}): Promise<{ store: MultiremiStore; taskId: string; sessionId: string; prompts: string[]; traceEvents: TraceEvent[] }> {
+  const { store, workDir: root } = daemonTestBed(`multiremi-daemon-${spec.id}-`);
+  const agent = store.createAgent({ name: `Claude ${spec.id}`, provider: "claude" });
+  const chat = store.createChatSession({ agentId: agent.id, title: `Command ${spec.id}` });
+  const task = store.sendChatMessage(chat.id, { body: spec.body }).task;
+  const daemonToken = await store.createAccessToken({ name: `Command ${spec.id} daemon`, type: "daemon", workspaceId: "local" });
+  const server = startMultiremiServer({ store, scheduler: null, authToken: `root-${spec.id}-secret`, hostname: "127.0.0.1", port: 0 });
+  const prompts: string[] = [];
+  const providerFactory: MultiremiDaemonProviderFactory = () => ({
+    async *sendStream(message) {
+      prompts.push(message);
+      for (const update of spec.updates) yield update as any;
+    },
+    // The real ACP provider's response text is always empty; the reply comes from the streamed chunks.
+    getLastResponse: () => ({ text: "", sessionId: `sess-${spec.id}`, requestId: `req-${spec.id}` }),
+  });
+  let traceEvents: TraceEvent[] = [];
+  try {
+    const daemon = new MultiremiDaemon({
+      sshMeshManager: disabledSshMeshRuntime(),
+      serverUrl: `http://127.0.0.1:${server.port}`,
+      token: daemonToken.token,
+      daemonId: `daemon-${spec.id}`,
+      runtimeName: `command-${spec.id}-runtime`,
+      provider: "claude",
+      workspaceId: "local",
+      once: true,
+      daemonPort: 0,
+      gcEnabled: false,
+      workspacesRoot: join(root, "workspaces"),
+      repoCacheRoot: join(root, ".repo-cache"),
+      providerFactory,
+    });
+    await daemon.start();
+    traceEvents = daemon.traceStore().read(task.id).events.filter(isTraceEvent);
+  } finally {
+    server.stop(true);
+  }
+  return { store, taskId: task.id, sessionId: chat.id, prompts, traceEvents };
 }
 
 async function runProviderHomeSymlinkProof(kind: "quick" | "chat" | "issue"): Promise<void> {

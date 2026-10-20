@@ -17,6 +17,7 @@ import { acquireDaemonTrace, releaseDaemonTrace, daemonTraceStore, type DaemonTr
 import type { DaemonTraceListener } from "./trace-subscriptions.js";
 import type { TraceStore } from "@multiremi/worker/trace-store.js";
 import type { TraceSteerResult } from "@multiremi/contracts/trace.js";
+import { COMPACT_COMMAND_REPLY, isCompactCommand } from "@multiremi/contracts/slash-commands.js";
 import { createLogger } from "@shared/logger.js";
 import {
   AcpProvider,
@@ -4959,7 +4960,7 @@ export class MultiremiDaemon {
       let prompt = promptArtifact.prompt;
       // ADR 0023: a steer is the new messages, labelled as the turn input labels them.
       const steerPrompt = (messages: Parameters<typeof buildSteerInjectionPrompt>[0]) =>
-        buildSteerInjectionPrompt(messages, { agentId: agent.id, alwaysLabel: !privateChat });
+        buildSteerInjectionPrompt(messages, { agentId: agent.id, alwaysLabel: !privateChat, provider: agent.provider });
 
       // Every steer batch flows through here exactly once: injected into the
       // running prompt (`native`), sent as the next prompt (`reprompt`), or —
@@ -5162,6 +5163,8 @@ export class MultiremiDaemon {
 
       // ADR 0023: the turn's images go with its first prompt as image blocks; their lines stay in the text.
       const firstPromptImages = turnImages(task.chatMessageAttachments);
+      // ADR 0025: a `/compact` turn that only compacts has no reply text; it is still a success.
+      const compactCommandInput = !skipFirstPrompt && isCompactCommand(prompt);
       while (true) {
         turnIndex++;
         config.media = turnIndex === 1 && firstPromptImages.length ? firstPromptImages : undefined;
@@ -5243,6 +5246,8 @@ export class MultiremiDaemon {
         // steer, a wrap-up or the cancel came first; the bridge already holds a
         // prompt while such a subagent still runs.
         let autonomousRounds = 0;
+        // Rounds in which the bridge actually did something (an empty wait is not one).
+        let activeAutonomousRounds = 0;
         // A wrap-up in effect (a force_answer was injected) bounds the wait by its grace deadline.
         const wrapUpOver = () => forceAnswerDeadline != null && Date.now() >= forceAnswerDeadline;
         while (this.options.autonomousRounds && provider.listenAutonomous && !turnError && !turnAbort.signal.aborted
@@ -5279,6 +5284,7 @@ export class MultiremiDaemon {
           if (last?.model) this.recordTrace(task.id, () => trace.model(last!.model!));
           finalSessionId = last?.sessionId ?? finalSessionId;
           checkpointUsage(ledger.observe(responseToUsageUnits(agent.provider, last, config.model, `turn:${turnIndex}:auto:${autonomousRounds}`)));
+          if (roundActivity) activeAutonomousRounds++;
           if (listenFailed) break;
           if (!roundActivity) {
             // R1: the owed notification was consumed inside the prompt after all (unless a steer, a cancel or a wrap-up stopped the wait).
@@ -5332,7 +5338,13 @@ export class MultiremiDaemon {
         // can still be injected as another turn instead of failing the run.
         // The final reply is decided once per completion attempt (spec §2.4).
         const settled = this.recordTrace(task.id, () => trace.settle()) ?? { itemId: null, text: null };
-        if (trace.sawCompaction && !settled.text?.trim() && !(last?.text ?? "").trim()) {
+        const noReplyText = !settled.text?.trim() && !(last?.text ?? "").trim();
+        // ADR 0025: both bridges answer `/compact` with compaction updates only. Only a turn whose
+        // input was that command, that compacted, and that nothing else joined (no steer, no
+        // re-prompt, no autonomous round) may end without reply text; any other run still fails.
+        const compactCommandTurn = compactCommandInput && trace.sawCompaction && turnIndex === 1
+          && recordedSteerIds.size === 0 && activeAutonomousRounds === 0;
+        if (trace.sawCompaction && noReplyText && !compactCommandTurn) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return {
             output: "Agent returned empty output after compaction.",
@@ -5343,7 +5355,7 @@ export class MultiremiDaemon {
             failureReason: TaskFailureReason.AgentEmptyOrUnparseableOutput,
           };
         }
-        const candidate = finalReplyBody(settled, trace.items, last?.text);
+        const candidate = compactCommandTurn && noReplyText ? COMPACT_COMMAND_REPLY : finalReplyBody(settled, trace.items, last?.text);
         if (classifyPoisonedOutput(candidate)) {
           await this.client.pinTaskSession(task.id, finalSessionId, workDir);
           return { output: candidate, sessionId: finalSessionId, workDir, usageSnapshot: ledger.finish(), completed: false };

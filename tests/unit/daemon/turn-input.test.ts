@@ -4,6 +4,7 @@ import { buildAgentInstructions, buildTaskPrompt, buildTaskPromptArtifact } from
 import type { AgentTask } from "@daemon/contracts/types.js";
 import { buildSteerInjectionPrompt, steerMessageText } from "@multiremi/worker/steer.js";
 import { replayInputHint, unreadRangeHint } from "@multiremi/contracts/session-input.js";
+import { BLOCKED_SLASH_COMMANDS, blockedSlashCommandNote, type SlashCommandProvider } from "@multiremi/contracts/slash-commands.js";
 import type { UnifiedMessage } from "@multiremi/contracts/unified-model.js";
 
 const AGENT = "agt_self";
@@ -258,5 +259,65 @@ describe("steer input (ADR 0023)", () => {
     const force = buildSteerInjectionPrompt([steer("", { id: "wrap", kind: "force_answer", authorType: "system", authorId: null })]);
     expect(force).toStartWith("[Deliver now] The user asked for the result immediately.");
     expect(force).toEndWith("Close out directly: summarize what was done, state your conclusion, and finish.");
+  });
+});
+
+describe("slash commands in the turn input (ADR 0025)", () => {
+  const PROVIDERS: SlashCommandProvider[] = ["claude", "codex", "antigravity"];
+  /** codex-acp's reading of the first text block (dist/index.js 38864-38877), the most lenient of the bridges. */
+  const bridgeReadsCommand = (text: string) => /^\/\s*\S/.test(text.trim());
+  const withProvider = (provider: string) =>
+    ({ agent: { id: AGENT, name: "Self", provider, model: null, instructions: "Answer briefly.", skills: [] } }) as unknown as Partial<AgentTask>;
+  const privateTurn = (body: string, provider: string) => {
+    const typed = message(1, body);
+    return chatTurn(offered(range("chat_1", 0, 2, 1, true), [typed]), [range("chat_1", 0, 2, 1, true), triggering(typed)],
+      withProvider(provider));
+  };
+  const steer = (content: string, overrides: Record<string, unknown> = {}) => ({ id: "msg_5", taskId: "tsk_turn", kind: "steer" as const, content,
+    authorType: "user" as const, authorId: "mem_alice", createdAt: "2026-10-17T00:00:00.000Z", consumedAt: null, ...overrides });
+
+  it("sends an allowed command exactly as typed, first in the prompt", () => {
+    for (const [provider, body] of [["claude", "/compact"], ["codex", "/review focus on tests"], ["claude", "/fix-issue 123"],
+      ["claude", "/status"], ["codex", "/plan"]] as const) {
+      const prompt = buildTaskPromptArtifact(privateTurn(body, provider)).prompt;
+      expect(prompt).toBe(body);
+      expect(bridgeReadsCommand(prompt)).toBe(true);
+    }
+    expect(buildTaskPrompt(privateTurn("$deploy-prod api", "codex"))).toBe("$deploy-prod api");
+    expect(buildTaskPrompt(privateTurn("/$deploy-prod api", "codex"))).toBe("/$deploy-prod api");
+  });
+
+  for (const provider of PROVIDERS) {
+    it(`puts the note in front of every command blocked for ${provider}, in the turn and in a steer`, () => {
+      for (const name of BLOCKED_SLASH_COMMANDS[provider]) {
+        for (const body of [`/${name}`, `/${name.toUpperCase()} now`, `\n  /${name}`, `/ ${name}`]) {
+          const artifact = buildTaskPromptArtifact(privateTurn(body, provider));
+          expect(artifact.prompt.startsWith(`${blockedSlashCommandNote(name)}\n\n`)).toBe(true);
+          expect(artifact.prompt.endsWith(body.trim())).toBe(true);
+          expect(bridgeReadsCommand(artifact.prompt)).toBe(false);
+          // The recorded hash is the one of the text actually sent.
+          expect(artifact.sha256).toBe(createHash("sha256").update(artifact.prompt).digest("hex"));
+          const steered = buildSteerInjectionPrompt([steer(body)], { provider });
+          expect(steered.startsWith(`${blockedSlashCommandNote(name)}\n\n`)).toBe(true);
+          expect(bridgeReadsCommand(steered)).toBe(false);
+        }
+      }
+    });
+  }
+
+  it("blocks per provider: Codex /status is blocked, Claude /status is not", () => {
+    expect(buildTaskPrompt(privateTurn("/status", "codex"))).toStartWith("[Remi] The user typed the command /status");
+    expect(buildTaskPrompt(privateTurn("/status", "claude"))).toBe("/status");
+    expect(buildSteerInjectionPrompt([steer("/model opus")], { provider: "claude" })).toStartWith("[Remi] The user typed the command /model");
+    expect(buildSteerInjectionPrompt([steer("/model opus")], { provider: "codex" })).toBe("/model opus");
+  });
+
+  it("leaves a labelled command alone: it is not at the start, so no bridge runs it", () => {
+    const comment = message(1, "/logout", { session_id: "ises_1", id: "msg_1" });
+    const prompt = buildTaskPrompt(issueTurn(offered(range("ises_1", 0, 2, 1, true), [comment]),
+      [range("ises_1", 0, 2, 1, true), triggering(comment)], withProvider("codex")));
+    expect(prompt).toStartWith("[Alice] /logout");
+    expect(bridgeReadsCommand(prompt)).toBe(false);
+    expect(buildSteerInjectionPrompt([steer("/logout")], { provider: "codex", alwaysLabel: true })).toBe("[Member mem_alice] /logout");
   });
 });
