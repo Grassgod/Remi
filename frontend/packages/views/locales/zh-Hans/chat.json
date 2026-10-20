@@ -19,7 +19,9 @@
     "queue": "排队",
     "editing_queued": "正在编辑排队消息",
     "save": "保存",
-    "cancel_edit": "取消"
+    "cancel_edit": "取消",
+    "blocked_command": "Remi 不在 Chat 里执行 {{command}}，Agent 只会把它当作普通文字收到。",
+    "command_queues": "命令会在本轮结束后执行"
   },
   "model": {
     "label": "模型",

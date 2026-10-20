@@ -63,8 +63,18 @@
     "group_search": "搜索结果"
   },
   "slash_command": {
+    "aria_label": "命令与技能",
+    "group_agent": "Agent 命令",
+    "group_skills": "技能",
+    "loading": "正在读取这个 Agent 的命令…",
+    "load_failed": "没能读取这个 Agent 的命令，技能仍可使用。",
+    "agent_commands_after_reply": "Agent 自己的命令会在它第一次回复后出现。",
+    "preview_note": "来自你和这个 Agent 的上一次对话，本次对话可能不同。",
+    "empty": "暂无命令或技能",
     "no_skills_configured": "暂无配置的技能",
-    "no_results": "没有匹配的技能"
+    "no_results": "没有匹配的命令或技能",
+    "kind_skill": "技能",
+    "kind_mcp": "MCP"
   },
   "code_block": {
     "copy_code": "复制代码",

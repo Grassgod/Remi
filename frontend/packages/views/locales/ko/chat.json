@@ -20,7 +20,9 @@
     "queue": "대기열에 추가",
     "editing_queued": "대기 메시지 편집 중",
     "save": "저장",
-    "cancel_edit": "취소"
+    "cancel_edit": "취소",
+    "blocked_command": "Remi는 Chat에서 {{command}}를 실행하지 않습니다. 에이전트는 일반 텍스트로 받습니다.",
+    "command_queues": "명령은 이번 턴이 끝난 뒤 실행됩니다"
   },
   "model": {
     "label": "모델",

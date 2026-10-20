@@ -9,6 +9,7 @@ import {
   type BackgroundTaskStopReason,
 } from "@multiremi/contracts/unified-model";
 import { TRACE_BACKGROUND_TASK_STOP_OUTCOMES } from "@multiremi/contracts/trace";
+import type { ChatSlashCommandsResponse, SlashCommandEntry } from "@multiremi/contracts/slash-commands";
 import type { ChatBackgroundTask, ChatBackgroundTasksSnapshot } from "../../types";
 
 /** A display-only count: a malformed value reads as absent instead of failing the list. */
@@ -112,4 +113,32 @@ export const ChatBackgroundTasksSnapshotSchema = z.object({
   session_id: value.session_id,
   rows: value.rows,
   running: value.running ?? value.rows.filter((row) => row.status === "running" || row.status === "paused").length,
+}));
+
+// ── Slash-command catalogue (ADR 0025) ──────────────────────────────────────
+//
+// `GET /api/chat/slash-commands`: display data for the composer menu. One
+// malformed command is left out; an unknown `state` reads as `none` and an
+// unknown kind as a plain command. A body without a command list is a broken
+// answer, never an empty catalogue.
+const SlashCommandEntrySchema = z.object({
+  name: z.string().min(1),
+  description: z.string().catch(""),
+  hint: z.string().nullable().catch(null).default(null),
+  kind: z.enum(["command", "skill", "mcp_prompt"]).catch("command"),
+  skill_id: z.string().min(1).optional().catch(undefined),
+}).loose();
+
+export const ChatSlashCommandsSchema = z.object({
+  state: z.enum(["session", "preview", "none"]).catch("none"),
+  provider: z.string().nullable().catch(null).default(null),
+  reported_at: z.string().nullable().catch(null).default(null),
+  commands: z.array(z.unknown()).transform((rows): SlashCommandEntry[] => rows.flatMap((row) => {
+    const parsed = SlashCommandEntrySchema.safeParse(row);
+    if (!parsed.success) return [];
+    const { name, description, hint, kind, skill_id } = parsed.data;
+    return [{ name, description, hint, kind, ...(skill_id ? { skill_id } : {}) }];
+  })),
+}).loose().transform((value): ChatSlashCommandsResponse => ({
+  state: value.state, provider: value.provider, reported_at: value.reported_at, commands: value.commands,
 }));

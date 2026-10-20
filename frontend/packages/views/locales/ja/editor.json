@@ -79,7 +79,17 @@
     "rendering": "ダイアグラムを描画中…"
   },
   "slash_command": {
+    "aria_label": "コマンドとスキル",
+    "group_agent": "エージェントコマンド",
+    "group_skills": "スキル",
+    "loading": "このエージェントのコマンドを読み込み中…",
+    "load_failed": "このエージェントのコマンドを読み込めませんでした。スキルは引き続き使えます。",
+    "agent_commands_after_reply": "エージェント自身のコマンドは最初の返信の後に表示されます。",
+    "preview_note": "このエージェントとの前回のチャットから取得。このチャットでは異なる場合があります。",
+    "empty": "コマンドやスキルはありません",
     "no_skills_configured": "設定済みスキルなし",
-    "no_results": "一致するスキルなし"
+    "no_results": "一致するコマンドやスキルはありません",
+    "kind_skill": "スキル",
+    "kind_mcp": "MCP"
   }
 }

@@ -20,7 +20,9 @@
     "queue": "Queue",
     "editing_queued": "Editing queued message",
     "save": "Save",
-    "cancel_edit": "Cancel"
+    "cancel_edit": "Cancel",
+    "blocked_command": "Remi doesn't run {{command}} in Chat. The agent gets it as plain text.",
+    "command_queues": "A command runs after this turn ends"
   },
   "model": {
     "label": "Model",

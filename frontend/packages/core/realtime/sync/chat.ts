@@ -113,6 +113,13 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
     const id = getCurrentWsId();
     if (id) qc.invalidateQueries({ queryKey: chatKeys.session(id, sessionId) });
   };
+  // ADR 0025: a finished attempt reports the agent's latest command catalogue.
+  // Its own Chat and every preview may change, so the whole prefix goes stale;
+  // only the menu on screen reads again.
+  const invalidateSlashCommands = () => {
+    const id = getCurrentWsId();
+    if (id) void qc.invalidateQueries({ queryKey: chatKeys.slashCommandsAll(id) });
+  };
   const invalidateQueue = (sessionId: string) => {
     qc.invalidateQueries({ queryKey: chatKeys.pendingTask(sessionId) });
     invalidatePendingAggregate();
@@ -146,6 +153,7 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         // Assistant message just landed → has_unread may have flipped to true.
         invalidateSessionLists();
         invalidateSession(payload.chat_session_id);
+        invalidateSlashCommands();
       },
 
       // Chat task lifecycle writethrough: keep `chatKeys.pendingTask(sessionId)`
@@ -344,6 +352,8 @@ export function createChatHandlers({ qc }: SyncContext): SyncModule {
         // was true then, but FailTask now persists a row.
         settleChatPendingTask(qc, payload.chat_session_id, payload.task_id);
         invalidateQueue(payload.chat_session_id);
+        // A failed attempt reports the catalogue too.
+        invalidateSlashCommands();
       },
 
       "chat:session_read": (p) => {

@@ -19,7 +19,9 @@
     "queue": "キューに追加",
     "editing_queued": "待機中のメッセージを編集中",
     "save": "保存",
-    "cancel_edit": "キャンセル"
+    "cancel_edit": "キャンセル",
+    "blocked_command": "Remi は Chat で {{command}} を実行しません。エージェントにはただのテキストとして届きます。",
+    "command_queues": "コマンドはこのターンの終了後に実行されます"
   },
   "model": {
     "label": "モデル",

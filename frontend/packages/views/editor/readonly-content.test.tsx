@@ -612,6 +612,15 @@ describe("ReadonlyContent slash command rendering", () => {
     expect(pill?.textContent).toBe("/deploy");
   });
 
+  it("renders a chat command link as a slash command pill", () => {
+    const { container } = render(
+      <ReadonlyContent content="[/compact](slash://command/compact) keep the plan" />,
+    );
+
+    expect(container.querySelector(".slash-command")?.textContent).toBe("/compact");
+    expect(container.querySelector("a")).toBeNull();
+  });
+
   it("does not affect regular links", () => {
     const { container } = render(
       <ReadonlyContent content="[docs](https://example.com)" />,

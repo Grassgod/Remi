@@ -589,6 +589,26 @@ describe("Chat rows without the envelope header or attempts list", () => {
     } finally { view.unmount(); client.clear(); }
   });
 
+  // Markdown is a plain span here: the row hands it the chip link, which the
+  // real renderer shows as a chip (ui markdown fixtures, "mentions and slash links").
+  it("hands a message's leading command to Markdown as a chip link and leaves other text alone (ADR 0025)", () => {
+    setApiInstance({ getTurn: vi.fn() } as never);
+    const { view, client } = render2([
+      { seq: 1, id: "command", kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+        to_type: "agent", to_ref: "agent-1", body_md: "/compact keep the plan" },
+      { seq: 2, id: "legacy", kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+        to_type: "agent", to_ref: "agent-1", body_md: "[/deploy](slash://skill/s1) now" },
+      { seq: 3, id: "path", kind: "message", sender_type: "member", sender_id: "user", message_kind: "request",
+        to_type: "agent", to_ref: "agent-1", body_md: "/tmp/x is missing" },
+    ]);
+    try {
+      const row = (id: string) => view.container.querySelector(`[data-perf-key="${id}"] .prose`);
+      expect(row("command")).toHaveTextContent("[/compact](slash://command/compact) keep the plan");
+      expect(row("legacy")).toHaveTextContent("[/deploy](slash://skill/s1) now");
+      expect(row("path")).toHaveTextContent(/^\/tmp\/x is missing$/);
+    } finally { view.unmount(); client.clear(); }
+  });
+
   it("renders a failed turn as a notice with warm and cold retry and a lazy execution log", async () => {
     const getTaskTrace = vi.fn(); const getTurn = vi.fn(); const getTask = vi.fn();
     const retryTurn = vi.fn().mockResolvedValue({ turn: { id: "turn_1" } });

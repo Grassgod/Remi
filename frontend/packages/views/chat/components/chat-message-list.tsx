@@ -50,6 +50,7 @@ import { isTraceLateSubagent, type TraceLateSubagent } from "@multiremi/contract
 import { useT } from "../../i18n";
 import { clientIdOf, mergeOptimisticChatRows, type OptimisticChatRow } from "../lib/optimistic-log";
 import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
+import { leadingCommandChipMarkdown } from "../lib/leading-command";
 
 /** Bumped when Chat's row layout changes, so cached row heights from the old layout are misses. */
 const CHAT_LAYOUT_VERSION = ":chat-layout-v3";
@@ -422,6 +423,7 @@ function MessageBubble({ message, isPending, isPush, visible, trace = null, step
 }) {
   if (message.role === "user") {
     const markdown = message.content;
+    const rendered = leadingCommandChipMarkdown(markdown);
     return (
       <div className="flex justify-end">
         <div className="max-w-[70%] break-words rounded-[22px] bg-muted px-4 py-2.5 text-sm">
@@ -430,7 +432,7 @@ function MessageBubble({ message, isPending, isPush, visible, trace = null, step
            * Neutralise prose's leading/trailing margin so single-line
            * bubbles stay as compact as the plain-text version used to. */}
           <div className="prose prose-sm dark:prose-invert max-w-none [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-            <Markdown attachments={message.attachments}>{markdown}</Markdown>
+            <Markdown attachments={message.attachments}>{rendered}</Markdown>
           </div>
           <AttachmentList
             attachments={message.attachments}

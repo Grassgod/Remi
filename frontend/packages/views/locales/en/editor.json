@@ -63,8 +63,18 @@
     "group_search": "Search results"
   },
   "slash_command": {
+    "aria_label": "Commands and skills",
+    "group_agent": "Agent commands",
+    "group_skills": "Skills",
+    "loading": "Loading this agent's commands…",
+    "load_failed": "Couldn't load this agent's commands. Skills still work.",
+    "agent_commands_after_reply": "The agent's own commands show up after its first reply.",
+    "preview_note": "From your last chat with this agent; this chat may differ.",
+    "empty": "No commands or skills",
     "no_skills_configured": "No skills configured",
-    "no_results": "No matching skills"
+    "no_results": "No matching commands or skills",
+    "kind_skill": "Skill",
+    "kind_mcp": "MCP"
   },
   "code_block": {
     "copy_code": "Copy code",

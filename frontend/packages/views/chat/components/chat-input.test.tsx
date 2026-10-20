@@ -934,6 +934,77 @@ describe("ChatInput queued-message edit", () => {
   });
 });
 
+describe("ChatInput slash commands (ADR 0025)", () => {
+  const type = (value: string) =>
+    fireEvent.change(screen.getByTestId("editor"), { target: { value } });
+  const settle = () => act(async () => {});
+  const menu = (provider: string | null) => ({ status: "ready" as const, catalogue: "session" as const, provider, items: [] });
+
+  it("gives the editor the agent's menu and says when it opens", () => {
+    const onSlashCommandsOpen = vi.fn();
+    const slashCommands = menu("claude");
+    renderInput({ slashCommands, onSlashCommandsOpen });
+    expect(editorProps.last?.slashCommands).toBe(slashCommands);
+    (editorProps.last?.onSlashMenuOpen as () => void)();
+    expect(onSlashCommandsOpen).toHaveBeenCalledOnce();
+  });
+
+  it("has no menu where none is given", () => {
+    renderInput({});
+    expect(editorProps.last?.slashCommands).toBeUndefined();
+  });
+
+  it("queues a command while the agent runs, whatever the preference or shortcut", async () => {
+    useChatStore.getState().followUpMode = "steer";
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend, isRunning: true });
+    type("/compact keep the plan");
+    // The button says what will happen, and offers no steer.
+    const button = screen.getByRole("button", { name: "Queue" });
+    expect(button).toHaveAttribute("data-composer-action", "queue");
+    expect(button).toHaveAttribute("title", "Queue · Ctrl+Enter\nA command runs after this turn ends");
+    pressSubmitShortcut(false);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/compact keep the plan", undefined, [], "queue"));
+    await settle();
+    type("/review");
+    pressSubmitShortcut(true);
+    await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("/review", undefined, [], "queue"));
+    await settle();
+    // Ordinary text still follows the preference.
+    type("Use the staging database");
+    pressSubmitShortcut(false);
+    await waitFor(() => expect(onSend).toHaveBeenLastCalledWith("Use the staging database", undefined, [], "steer"));
+  });
+
+  it("sends a command normally while idle", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend });
+    type("/compact");
+    pressSubmitShortcut(false);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/compact", undefined, [], "send"));
+  });
+
+  it("warns, without stopping the send, about a command Remi does not run for the agent's provider", async () => {
+    const onSend = vi.fn().mockResolvedValue(undefined);
+    renderInput({ onSend, slashCommands: menu("claude") });
+    type("/model opus");
+    expect(screen.getByRole("status")).toHaveTextContent("Remi doesn't run /model in Chat. The agent gets it as plain text.");
+    pressSubmitShortcut(false);
+    await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model opus", undefined, [], "send"));
+    await waitFor(() => expect(document.querySelector("[data-chat-blocked-command]")).toBeNull());
+  });
+
+  it("does not warn about a command the provider does run, or before the provider is known", () => {
+    const first = renderInput({ slashCommands: menu("codex") });
+    type("/model");
+    expect(document.querySelector("[data-chat-blocked-command]")).toBeNull();
+    first.unmount();
+    renderInput({ slashCommands: menu(null) });
+    type("/clear");
+    expect(document.querySelector("[data-chat-blocked-command]")).toBeNull();
+  });
+});
+
 describe("ChatInput model chip", () => {
   const opus = { modelId: "claude-opus-4-1-20250805", label: "Opus 4.1", effort: null, fallback: false };
   const chip = () => document.querySelector<HTMLElement>("[data-chat-model]");

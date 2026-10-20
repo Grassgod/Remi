@@ -18,8 +18,9 @@ import type { HttpClient } from "../http";
 import { ApiContractError, parseStrictResponse } from "../schema";
 import {
   ChatSessionSchema, ChatSessionListSchema, ChatSessionUpdateResponseSchema, ChatNoContentSchema,
-  ChatBackgroundTasksSnapshotSchema, parseChatBackgroundTasks,
+  ChatBackgroundTasksSnapshotSchema, parseChatBackgroundTasks, ChatSlashCommandsSchema,
 } from "../schemas/chat";
+import type { ChatSlashCommandsResponse } from "@multiremi/contracts/slash-commands";
 
 /** Turn statuses a chat shows as in flight. */
 const ACTIVE_TURN_STATUSES: readonly string[] = ["pending", "running", "awaiting_human"];
@@ -138,6 +139,18 @@ export class ChatEndpoints {
       ChatBackgroundTasksSnapshotSchema, { endpoint: "GET /api/chat/sessions/:id/background-tasks" });
     if (snapshot.session_id !== sessionId) throw new ApiContractError("GET /api/chat/sessions/:id/background-tasks", "Server returned another session");
     return snapshot;
+  }
+
+  /**
+   * The agent's command catalogue for the composer menu (ADR 0025): the
+   * chat's own (`session_id`), or for a chat not created yet the agent's
+   * preview. Blocked and hidden commands are already gone.
+   */
+  async getChatSlashCommands(params: { agentId: string; sessionId?: string | null }): Promise<ChatSlashCommandsResponse> {
+    const search = new URLSearchParams({ agent_id: params.agentId });
+    if (params.sessionId) search.set("session_id", params.sessionId);
+    return parseStrictResponse<ChatSlashCommandsResponse>(await this.http.fetch<unknown>(`/api/chat/slash-commands?${search}`),
+      ChatSlashCommandsSchema, { endpoint: "GET /api/chat/slash-commands" });
   }
 
   /**

@@ -41,7 +41,7 @@ const SHOWS: Record<string, { has?: string[]; lacks?: string[] }> = {
   'raw html kept by sanitize': { has: ['<details>', '<kbd>Ctrl</kbd>', '<sub>2</sub>'] },
   'raw html stripped by sanitize': { lacks: ['<script', 'onerror', '<iframe', 'onclick', 'javascript:'] },
   'links and url transform': { has: ['href="./docs/readme.md"', 'href="irc://example.com"'], lacks: ['javascript:', 'data:', 'vbscript:', 'ftp:'] },
-  'mentions and slash links': { has: ['slash-command', '@Bob', '<a href="" '] },
+  'mentions and slash links': { has: ['slash-command', '/compact</span>', '@Bob', '<a href="" '], lacks: ['slash://command'] },
   'legacy mention shortcodes': { has: ['@Alice'] },
   'file cards': { has: ['report.pdf', 'legacy.zip'], lacks: ['javascript:'] },
   images: { has: ['<img src="https://example.com/a.png" alt="alt text"'], lacks: ['javascript:'] },

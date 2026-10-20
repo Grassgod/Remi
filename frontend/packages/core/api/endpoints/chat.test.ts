@@ -21,6 +21,39 @@ function endpointsWithResponse(body: unknown): ChatEndpoints {
 
 afterEach(() => vi.unstubAllGlobals());
 
+describe("ChatEndpoints slash-command catalogue (ADR 0025)", () => {
+  it("asks for the chat's own catalogue, or the agent's preview for a new chat", async () => {
+    const body = {
+      state: "session", provider: "claude", reported_at: "2026-10-20T00:00:00Z",
+      commands: [{ name: "compact", description: "Compact", hint: "[instructions]", kind: "command" }],
+    };
+    await expect(endpointsWithResponse(body).getChatSlashCommands({ agentId: "agent-1", sessionId: "chat-1" })).resolves.toEqual(body);
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/slash-commands?agent_id=agent-1&session_id=chat-1", expect.anything());
+    await endpointsWithResponse({ ...body, state: "preview" }).getChatSlashCommands({ agentId: "agent 1", sessionId: null });
+    expect(fetch).toHaveBeenCalledWith("https://api.example.test/api/chat/slash-commands?agent_id=agent+1", expect.anything());
+  });
+
+  it("drops a malformed command and reads unknown values leniently", async () => {
+    const api = endpointsWithResponse({
+      state: "future", provider: 7, reported_at: null,
+      commands: [
+        { name: "deploy", description: null, kind: "future-kind", skill_id: "s1", _meta: { path: "/x" } },
+        { name: "", description: "nameless" },
+        "bad",
+      ],
+    });
+    await expect(api.getChatSlashCommands({ agentId: "agent-1" })).resolves.toEqual({
+      state: "none", provider: null, reported_at: null,
+      commands: [{ name: "deploy", description: "", hint: null, kind: "command", skill_id: "s1" }],
+    });
+  });
+
+  it("refuses an answer without a command list instead of reading it as empty", async () => {
+    await expect(endpointsWithResponse({ state: "session" }).getChatSlashCommands({ agentId: "agent-1" }))
+      .rejects.toBeInstanceOf(ApiContractError);
+  });
+});
+
 describe("ChatEndpoints contracts", () => {
   it("creates sessions through the upstream agent/title contract and validates the acknowledgement", async () => {
     const api = endpointsWithResponse(session);
