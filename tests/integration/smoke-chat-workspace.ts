@@ -2,6 +2,8 @@
 /**
  * Isolated browser smoke: real Next -> Bun HTTP API -> temporary SQLite.
  * The test drives task claiming/completion itself; it never starts a provider.
+ * Product path knobs (state, uploads, config, REMI_HOME, ...) point into a
+ * temporary root, so it neither reads nor writes the real HOME's Remi state.
  *
  * bun run tests/integration/smoke-chat-workspace.ts [--port=3318]
  * CHROME_EXECUTABLE may select an installed Playwright Chromium or Chrome.
@@ -16,10 +18,9 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import type { Database } from "bun:sqlite";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { chromium, type Browser, type Page } from "playwright-core";
-import { startMultiremiServer } from "@multiremi/api.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import { chromium, type Browser, type Page, type Response } from "playwright-core";
+import type { startMultiremiServer as StartMultiremiServer } from "@multiremi/api.js";
+import { HERMETIC_ENV_RUN_ROOT_PATHS, scrubInheritedEnv } from "../setup/hermetic-env-policy.js";
 
 const args = process.argv.slice(2);
 if (args.includes("--help")) {
@@ -34,6 +35,9 @@ const webRoot = join(repo, "frontend/apps/web");
 const frontend = `http://127.0.0.1:${port}`;
 const root = mkdtempSync(join(tmpdir(), "remi-chat-workspace-fixture-"));
 const artifacts = mkdtempSync(join(tmpdir(), "remi-chat-workspace-smoke-"));
+// `next dev` rewrites next-env.d.ts to its dev route types; finally puts it back.
+const nextEnvPath = join(webRoot, "next-env.d.ts");
+const nextEnvBefore = existsSync(nextEnvPath) ? readFileSync(nextEnvPath, "utf8") : null;
 const checks: string[] = [];
 const apiFailures: string[] = [];
 const jsErrors: string[] = [];
@@ -41,7 +45,7 @@ let next: ChildProcess | null = null;
 let nextLogs = "";
 let browser: Browser | null = null;
 let page: Page | null = null;
-let server: ReturnType<typeof startMultiremiServer> | null = null;
+let server: ReturnType<typeof StartMultiremiServer> | null = null;
 let db: Database | null = null;
 let heartbeat: ReturnType<typeof setInterval> | null = null;
 let failure: unknown = null;
@@ -51,9 +55,18 @@ const redact = (value: string) => pat ? value.split(pat).join("[redacted]") : va
 
 // This is a standalone process. Ignore host deployment knobs so its API cannot
 // load host data or background integrations; fixtures below provide all state.
+// The path knobs then point inside the temporary root, the layout `bun test`
+// uses, so NODE_ENV=test's home-default guard holds.
+scrubInheritedEnv();
+// Also MULTIREMI_TEST_*, which the scrub keeps: this SQLite-only smoke reads none.
 for (const key of Object.keys(process.env)) if (key.startsWith("MULTIREMI_")) delete process.env[key];
-process.env.MULTIREMI_UPLOAD_DIR = join(root, "uploads");
 process.env.NODE_ENV = "test";
+process.env.MULTIREMI_TEST_RUN_ROOT = root;
+for (const [key, path] of Object.entries(HERMETIC_ENV_RUN_ROOT_PATHS)) process.env[key] = join(root, path);
+// Imported after the env is fixed: some modules resolve paths at load time.
+const [{ openSqliteDatabase }, { startMultiremiServer }, { MultiremiStore }] = await Promise.all([
+  import("@multiremi/store/db/sqlite.js"), import("@multiremi/api.js"), import("@multiremi/store.js"),
+]);
 
 try {
   await assertPortAvailable(port);
@@ -89,28 +102,86 @@ try {
   page = await context.newPage();
   page.setDefaultTimeout(20_000);
   page.on("pageerror", error => jsErrors.push(redact(error.message)));
+  const apiRequests: string[] = [];
+  page.on("request", request => {
+    if (request.url().startsWith(`${frontend}/api/`)) apiRequests.push(`${request.method()} ${new URL(request.url()).pathname}`);
+  });
   page.on("response", response => {
     if (response.url().startsWith(`${frontend}/api/`) && response.status() >= 500 && response.headers()["x-chat-smoke-injected-fault"] !== "1") apiFailures.push(`${new URL(response.url()).pathname} ${response.status()}`);
   });
   await page.goto(`${frontend}/${workspace.slug}/chat?agent=${agent.id}`, { waitUntil: "domcontentloaded", timeout: 90_000 });
-  await page.getByRole("heading", { name: "Chat", exact: true }).waitFor();
-  const editor = page.locator('.tiptap[contenteditable="true"]');
+  // The page has no banner; its conversation header names the unsaved draft "New chat".
+  await page.locator("[data-chat-page-header]").getByRole("heading", { name: "New chat", exact: true }).waitFor();
+  const composer = page.locator("[data-chat-composer]");
+  const editor = composer.locator('.tiptap[contenteditable="true"]');
   await editor.waitFor();
-  assert.equal(await editor.count(), 1, "Standalone Chat must have exactly one composer");
+  assert.equal(await composer.count(), 1, "Standalone Chat must have exactly one composer");
   assert.equal(await page.getByRole("button", { name: "Ask Multiremi", exact: true }).count(), 0, "Standalone page duplicated floating Chat");
-  check("non-local workspace Chat page and selected agent load without duplicate floating Chat");
+  // The footer shows the selected agent and its read-only model chip: the agent
+  // has no model, so the runtime's default runs. Then the "/" menu (ADR 0025).
+  await composer.locator("[data-chat-composer-footer]").getByText("Smoke Agent", { exact: true }).waitFor();
+  await composer.locator("[data-chat-model]").getByText("Default model", { exact: true }).waitFor();
+  await editor.press("/");
+  const slashMenu = page.getByRole("listbox", { name: "Commands and skills" });
+  await slashMenu.getByText("The agent's own commands show up after its first reply.", { exact: true }).waitFor();
+  await editor.press("Escape");
+  await slashMenu.waitFor({ state: "hidden" });
+  check("non-local workspace Chat page loads the selected agent, its model and the / menu without duplicate floating Chat");
 
+  // One primary button (ADR 0020): Send while idle; while a run is active,
+  // Stop on an empty composer, otherwise the follow-up mode (Queue by default).
+  const action = (name: "send" | "queue" | "steer" | "stop") => composer.locator(`[data-composer-action="${name}"]`);
+  const isPost = (path: RegExp) => (response: Response) => response.request().method() === "POST" && path.test(new URL(response.url()).pathname);
+  const messagePost = isPost(/^\/api\/sessions\/[^/]+\/messages$/);
+  const queuePost = isPost(/^\/api\/sessions\/[^/]+\/queue$/);
+  /** Sends now: idle starts a turn. */
   const send = async (content: string) => {
     await editor.fill(content);
-    const responsePromise = page!.waitForResponse(response => response.request().method() === "POST" && /\/api\/sessions\/[^/]+\/messages$/.test(new URL(response.url()).pathname));
-    await page!.getByRole("button", { name: /^(Send|Add to queue)$/ }).click();
+    const responsePromise = page!.waitForResponse(messagePost);
+    await action("send").click();
     const response = await responsePromise;
     assert.equal(response.status(), 200, `Send failed: ${await response.text()}`);
-    const result = await response.json() as { message: { id: string }; turn_id?: string; wake_applied: string };
+    const result = await response.json() as { message: { id: string }; turn_id?: string };
     const turn = result.turn_id ? store.getTurn(result.turn_id) : null;
     assert(turn?.current_attempt_id, "Send must wake a turn");
-    return { message: result.message, turn, attemptId: turn.current_attempt_id, wake_applied: result.wake_applied };
+    return { message: result.message, turn, attemptId: turn.current_attempt_id };
   };
+  /** Queues behind the running turn; the row stays outside the log. */
+  const enqueue = async (content: string, submit: () => Promise<void>) => {
+    await editor.fill(content);
+    const responsePromise = page!.waitForResponse(queuePost);
+    await submit();
+    const response = await responsePromise;
+    assert.equal(response.status(), 200, `Queue failed: ${await response.text()}`);
+    const result = await response.json() as { item: { id: string; status: string }; released: unknown };
+    assert.equal(result.item.status, "queued");
+    assert.equal(result.released, null, "A busy lane must not release a queued row");
+    return result.item;
+  };
+  const queued = () => store.listQueuedMessages(sessionId).items;
+  const queueRegion = page.getByRole("region", { name: "Queued messages" });
+  const queueRow = (position: number) => queueRegion.locator(`li[aria-label^="Preview queued message ${position}:"]`);
+  /**
+   * Stop cancels the turn the composer has read. A turn the worker has just
+   * claimed may not be the one it shows yet, so Stop is pressed again, as a
+   * user would, until the composer cancels this turn.
+   */
+  const stopFromComposer = async (turnId: string) => {
+    const cancel = `POST /api/turns/${turnId}/cancel`;
+    await poll(async () => {
+      if (!apiRequests.includes(cancel)) {
+        await action("stop").click({ timeout: 5_000 }).catch(() => {});
+        await poll(() => apiRequests.includes(cancel), 1_000, "cancel request").catch(() => {});
+      }
+      return apiRequests.includes(cancel);
+    }, 15_000, `composer Stop for ${turnId}`);
+  };
+  const runReply = async (attemptId: string, output: string) => {
+    store.startTask(attemptId);
+    store.completeTask(attemptId, { output, sessionId: "smoke-provider-session" });
+    await page!.getByText(output, { exact: true }).last().waitFor();
+  };
+
   const first = await send("CHAT_SMOKE_FIRST: discuss this workspace");
   const task = store.getTask(first.attemptId)!;
   const sessionId = task.chatSessionId!;
@@ -124,65 +195,102 @@ try {
 
   assert.equal(store.claimTask(runtime.id)?.id, first.attemptId);
   store.startTask(first.attemptId);
-  const second = await send("CHAT_SMOKE_SECOND: queued follow-up");
-  assert.equal(second.wake_applied, "next_turn");
-  assert.equal(store.getTask(second.attemptId)?.status, "queued");
-  assert.equal(store.claimTask(runtime.id), null, "Follow-up must not run concurrently");
-  const queue = page.getByRole("region", { name: "Queued messages" });
-  await queue.getByText("CHAT_SMOKE_SECOND: queued follow-up", { exact: true }).waitFor();
-  await queue.getByRole("button", { name: "Edit queued message", exact: true }).click();
-  await queue.getByRole("textbox", { name: "Edit queued message" }).fill("CHAT_SMOKE_SECOND_EDITED");
-  await queue.getByRole("button", { name: "Save", exact: true }).click();
-  await poll(() => store.getTask(second.attemptId)?.prompt === "CHAT_SMOKE_SECOND_EDITED", 10_000, "queue edit persistence");
-  check("in-flight follow-up queues serially and its editor persists changes");
+  await action("stop").waitFor();
+  // Queue is the default follow-up mode: the button names it and Mod-Enter uses it.
+  const second = await enqueue("CHAT_SMOKE_SECOND: queued follow-up", () => action("queue").click());
+  const third = await enqueue("CHAT_SMOKE_THIRD: queued follow-up", () => editor.press("ControlOrMeta+Enter"));
+  assert.deepEqual(queued().map(item => item.id), [second.id, third.id]);
+  assert.equal(store.claimTask(runtime.id), null, "Queued follow-ups must not start a turn while one runs");
+  assert(!store.listChatMessages(sessionId).some(message => message.body.includes("queued follow-up")), "Queued rows stay outside the log");
+  await queueRow(1).getByText("CHAT_SMOKE_SECOND: queued follow-up", { exact: true }).waitFor();
+  await queueRow(2).getByText("CHAT_SMOKE_THIRD: queued follow-up", { exact: true }).waitFor();
+  // Editing loads the row into the composer; Save writes it back.
+  await queueRegion.getByRole("button", { name: "Actions for queued message 1", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Edit message", exact: true }).click();
+  await composer.locator("[data-chat-queue-edit]").getByText("Editing queued message", { exact: true }).waitFor();
+  await poll(async () => await editor.innerText() === "CHAT_SMOKE_SECOND: queued follow-up", 10_000, "queued row loaded into the composer");
+  await editor.fill("CHAT_SMOKE_SECOND_EDITED");
+  await composer.getByRole("button", { name: "Save", exact: true }).click();
+  await poll(() => queued()[0]?.body_md === "CHAT_SMOKE_SECOND_EDITED", 10_000, "queue edit persistence");
+  await composer.locator("[data-chat-queue-edit]").waitFor({ state: "hidden" });
+  await queueRow(1).getByText("CHAT_SMOKE_SECOND_EDITED", { exact: true }).waitFor();
+  check("in-flight follow-ups queue on the server outside the log, and a row edits through the composer");
 
+  // Each completed turn releases exactly one queued row, oldest first (#458).
   store.completeTask(first.attemptId, { output: "CHAT_SMOKE_REPLY_ONE (simulated worker)", sessionId: "smoke-provider-session" });
   await page.getByText("CHAT_SMOKE_REPLY_ONE (simulated worker)", { exact: true }).last().waitFor();
-  assert.equal(store.claimTask(runtime.id)?.id, second.attemptId);
-  store.startTask(second.attemptId);
-  store.completeTask(second.attemptId, { output: "CHAT_SMOKE_REPLY_TWO (simulated worker)", sessionId: "smoke-provider-session" });
-  await page.getByText("CHAT_SMOKE_REPLY_TWO (simulated worker)", { exact: true }).last().waitFor();
-  check("two simulated worker completions refresh the real conversation without reload");
+  const releasedSecond = store.claimTask(runtime.id);
+  assert(releasedSecond, "Completing the turn must release the first queued row");
+  assert.match(releasedSecond.prompt, /CHAT_SMOKE_SECOND_EDITED/);
+  assert.doesNotMatch(releasedSecond.prompt, /CHAT_SMOKE_THIRD/);
+  assert.deepEqual(queued().map(item => item.id), [third.id]);
+  // Once its row leaves the queue, the released text can only be the conversation's.
+  await poll(async () => await queueRegion.locator("li").count() === 1, 10_000, "one queued row left");
+  await page.getByText("CHAT_SMOKE_SECOND_EDITED", { exact: true }).waitFor();
+  await runReply(releasedSecond.id, "CHAT_SMOKE_REPLY_TWO (simulated worker)");
+  const releasedThird = store.claimTask(runtime.id);
+  assert(releasedThird, "The next completed turn must release the next queued row");
+  assert.match(releasedThird.prompt, /CHAT_SMOKE_THIRD/);
+  assert.deepEqual(queued(), []);
+  await queueRegion.waitFor({ state: "hidden" });
+  check("completed simulated turns release one queued row each, in order, and refresh the conversation without reload");
 
-  const third = await send("CHAT_SMOKE_STOP_ME");
-  assert.equal(store.claimTask(runtime.id)?.id, third.attemptId);
-  store.startTask(third.attemptId);
-  await page.getByRole("button", { name: "Stop", exact: true }).click();
-  await poll(() => store.getTask(third.attemptId)?.status === "cancelled", 10_000, "stop persists cancellation");
-  check("Stop cancels the task through the real API");
+  store.startTask(releasedThird.id);
+  await stopFromComposer(releasedThird.turn_id!);
+  await poll(() => store.getTask(releasedThird.id)?.status === "cancelled", 10_000, "stop persists cancellation");
+  check("Stop cancels the running turn through the real API");
 
-  // Canonical queue edits operate on unread messages. Removing and resending
-  // moves a draft to the tail; the retired prioritize/clear endpoints have no
-  // server commands in this protocol.
-  const interrupted = await send("CHAT_SMOKE_ACTIVE_FOR_QUEUE");
-  assert.equal(store.claimTask(runtime.id)?.id, interrupted.attemptId);
-  store.startTask(interrupted.attemptId);
-  const removed = await send("CHAT_SMOKE_REMOVE_FROM_QUEUE");
-  const cleared = await send("CHAT_SMOKE_CLEAR_FROM_QUEUE");
+  // Steering (the other mode, Mod-Shift-Enter) sends now into the running
+  // turn. Unread messages can still be edited and deleted; a queued row can
+  // be steered on its own; deleting a row commits after its undo window.
+  const active = await send("CHAT_SMOKE_ACTIVE_FOR_STEER");
+  assert.equal(store.claimTask(runtime.id)?.id, active.attemptId);
+  store.startTask(active.attemptId);
+  await action("stop").waitFor();
+  await editor.fill("CHAT_SMOKE_STEER_UNREAD");
+  const steerPromise = page.waitForResponse(messagePost);
+  await editor.press("ControlOrMeta+Shift+Enter");
+  const steerResponse = await steerPromise;
+  assert.equal(steerResponse.status(), 200, `Steer failed: ${await steerResponse.text()}`);
+  const steered = await steerResponse.json() as { message: { id: string } };
+  assert.equal(store.claimTask(runtime.id), null, "A steer joins the running turn");
   const queuedHeaders = { Authorization: `Bearer ${pat}`, "X-Workspace-Slug": workspace.slug };
-  const edited = await context.request.patch(`${frontend}/api/messages/${removed.message.id}`, {
-    headers: queuedHeaders, data: { body_md: "CHAT_SMOKE_QUEUE_EDITED" },
+  const edited = await context.request.patch(`${frontend}/api/messages/${steered.message.id}`, {
+    headers: queuedHeaders, data: { body_md: "CHAT_SMOKE_STEER_EDITED" },
   });
   assert.equal(edited.status(), 200);
-  assert.equal(store.getMessage(removed.message.id)?.body_md, "CHAT_SMOKE_QUEUE_EDITED");
-  const deleted = await context.request.delete(`${frontend}/api/messages/${removed.message.id}`, { headers: queuedHeaders });
+  assert.equal(store.getMessage(steered.message.id)?.body_md, "CHAT_SMOKE_STEER_EDITED");
+  const deleted = await context.request.delete(`${frontend}/api/messages/${steered.message.id}`, { headers: queuedHeaders });
   assert.equal(deleted.status(), 200);
-  assert(store.getMessage(removed.message.id)?.deleted_at);
-  const resentResponse = await context.request.post(`${frontend}/api/sessions/${sessionId}/messages`, {
-    headers: queuedHeaders, data: { body_md: "CHAT_SMOKE_QUEUE_EDITED", to: { type: "agent", ref: agent.id } },
-  });
-  assert.equal(resentResponse.status(), 200);
-  const resent = await resentResponse.json() as { message: { id: string; seq: number } };
-  assert.notEqual(resent.message.id, removed.message.id);
-  assert(resent.message.seq > store.getMessage(cleared.message.id)!.seq);
-  for (const messageId of [cleared.message.id, resent.message.id]) {
-    assert.equal((await context.request.delete(`${frontend}/api/messages/${messageId}`, { headers: queuedHeaders })).status(), 200);
-  }
-  assert.equal(store.getTask(interrupted.attemptId)?.status, "running", "Deleting unread drafts must preserve the running turn");
-  store.completeTask(interrupted.attemptId, { output: "CHAT_SMOKE_QUEUE_COMPLETE (simulated worker)", sessionId: "smoke-provider-session" });
-  await page.getByText("CHAT_SMOKE_QUEUE_COMPLETE (simulated worker)", { exact: true }).last().waitFor();
-  check("unread message edit, delete/resend FIFO and bulk draft deletion preserve the running turn");
+  assert(store.getMessage(steered.message.id)?.deleted_at);
+  const rowSteered = await enqueue("CHAT_SMOKE_QUEUE_STEER", () => action("queue").click());
+  const rowSteerPromise = page.waitForResponse(isPost(new RegExp(`^/api/sessions/[^/]+/queue/${rowSteered.id}/steer$`)));
+  await queueRegion.getByRole("button", { name: "Steer queued message 1", exact: true }).click();
+  assert.equal((await rowSteerPromise).status(), 200);
+  assert.deepEqual(queued(), []);
+  assert.equal(store.claimTask(runtime.id), null, "A steered row joins the running turn");
+  await queueRegion.waitFor({ state: "hidden" });
+  await page.getByText("CHAT_SMOKE_QUEUE_STEER", { exact: true }).waitFor();
+  const rowDeleted = await enqueue("CHAT_SMOKE_QUEUE_DELETE", () => action("queue").click());
+  await queueRegion.getByRole("button", { name: "Actions for queued message 1", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Delete queued message", exact: true }).click();
+  await queueRegion.waitFor({ state: "hidden" });
+  await poll(() => !queued().some(item => item.id === rowDeleted.id), 15_000, "queued row delete after its undo window");
+  assert.equal(store.getTask(active.attemptId)?.status, "running", "Steering and queue edits must preserve the running turn");
+  store.completeTask(active.attemptId, { output: "CHAT_SMOKE_STEER_COMPLETE (simulated worker)", sessionId: "smoke-provider-session" });
+  await page.getByText("CHAT_SMOKE_STEER_COMPLETE (simulated worker)", { exact: true }).last().waitFor();
+  // The simulated worker never read the steered row: it opens the next turn
+  // by itself, without the deleted message or the deleted row.
+  const unreadTurn = store.claimTask(runtime.id);
+  assert(unreadTurn, "An unread steer must wake the next turn");
+  assert.match(unreadTurn.prompt, /CHAT_SMOKE_QUEUE_STEER/);
+  assert.doesNotMatch(unreadTurn.prompt, /CHAT_SMOKE_STEER_(UNREAD|EDITED)|CHAT_SMOKE_QUEUE_DELETE/);
+  await runReply(unreadTurn.id, "CHAT_SMOKE_STEER_READ (simulated worker)");
+  check("steer (Mod-Shift-Enter and per row), unread message edit/delete, and queued row delete preserve the running turn");
 
+  // A gateway answer (503) means the send may have landed: the message stays
+  // in its bubble as unconfirmed, not back in the composer, and Retry resends
+  // it with the same dedupe key.
   const retryContent = "CHAT_SMOKE_RETRY_DRAFT";
   const taskCountBeforeFailure = store.listTasks().length;
   const messageCountBeforeFailure = store.listChatMessages(sessionId).length;
@@ -191,58 +299,74 @@ try {
   await page.route(failureRoute, async route => {
     if (!injected && route.request().method() === "POST") {
       injected = true;
-      await route.fulfill({ status: 503, headers: { "content-type": "application/json", "x-chat-smoke-injected-fault": "1" }, body: JSON.stringify({ error: "Isolated smoke: injected temporary send failure" }) });
+      await route.fulfill({ status: 503, headers: { "content-type": "application/json", "x-chat-smoke-injected-fault": "1" }, body: JSON.stringify({ error: "Isolated smoke: injected gateway failure" }) });
     } else await route.continue();
   });
   await editor.fill(retryContent);
   const rejectedSend = page.waitForResponse(response => response.url() === failureRoute && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  assert.equal((await rejectedSend).status(), 503);
-  await page.getByRole("alert").filter({ hasText: "Message was not sent" }).waitFor();
-  await page.unroute(failureRoute);
-  assert.equal(await editor.innerText(), retryContent);
+  await action("send").click();
+  const rejected = await rejectedSend;
+  assert.equal(rejected.status(), 503);
+  const retryButton = page.getByRole("button", { name: "Retry sending this message", exact: true });
+  await retryButton.waitFor();
+  await page.getByText("Delivery unconfirmed ·", { exact: true }).waitFor();
+  assert.equal((await editor.innerText()).trim(), "", "An unconfirmed send must not return to the draft");
   assert.equal(store.listTasks().length, taskCountBeforeFailure);
   assert.equal(store.listChatMessages(sessionId).length, messageCountBeforeFailure);
   const retriedSend = page.waitForResponse(response => response.url() === failureRoute && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await retryButton.click();
   const retryResponse = await retriedSend;
-  assert.equal(retryResponse.status(), 201);
+  assert.equal(retryResponse.status(), 200);
+  await page.unroute(failureRoute);
+  const dedupeKey = rejected.request().postDataJSON().dedupe_key;
+  assert(dedupeKey, "Chat sends carry a dedupe key");
+  assert.equal(retryResponse.request().postDataJSON().dedupe_key, dedupeKey, "Retry must reuse the dedupe key");
   const retriedResult = await retryResponse.json() as { turn_id: string };
   const retried = { attemptId: store.getTurn(retriedResult.turn_id)!.current_attempt_id! };
-  assert.equal(store.listTasks().filter(item => item.prompt === retryContent).length, 1);
+  assert.equal(store.listTasks().filter(item => item.prompt.includes(retryContent)).length, 1);
   assert.equal(store.listChatMessages(sessionId).filter(item => item.body === retryContent).length, 1);
+  await retryButton.waitFor({ state: "hidden" });
   assert.equal(store.claimTask(runtime.id)?.id, retried.attemptId);
-  store.startTask(retried.attemptId);
-  store.completeTask(retried.attemptId, { output: "CHAT_SMOKE_RETRY_COMPLETE (simulated worker)", sessionId: "smoke-provider-session" });
-  await page.getByText("CHAT_SMOKE_RETRY_COMPLETE (simulated worker)", { exact: true }).last().waitFor();
-  check("one injected HTTP 503 retains the draft; retry creates exactly one message and task");
+  await runReply(retried.attemptId, "CHAT_SMOKE_RETRY_COMPLETE (simulated worker)");
+  check("an injected gateway 503 leaves the send unconfirmed; Retry reuses its dedupe key and creates exactly one message and task");
 
-  const row = page.getByRole("group", { name: "Chat history", exact: true }).locator('[aria-current="true"]');
-  await row.hover();
-  await row.getByRole("button", { name: "Rename chat session" }).click();
-  await row.getByRole("textbox", { name: "Rename chat session" }).fill("Persistent Chat Smoke");
-  await row.getByRole("textbox", { name: "Rename chat session" }).press("Enter");
+  // Sidebar row: Pin is the hover quick action; Rename and Archive live in its ⋯ menu.
+  const row = page.locator(`[data-chat-session-row="${sessionId}"]`);
+  const rowMenu = async (item: string) => {
+    await row.hover();
+    await row.getByRole("button", { name: "More actions", exact: true }).click();
+    await page!.getByRole("menuitem", { name: item, exact: true }).click();
+  };
+  await rowMenu("Rename…");
+  const renameDialog = page.getByRole("dialog", { name: "Rename chat" });
+  await renameDialog.getByRole("textbox", { name: "Rename chat" }).fill("Persistent Chat Smoke");
+  await renameDialog.getByRole("button", { name: "Save", exact: true }).click();
   await poll(() => store.getChatSession(sessionId)?.title === "Persistent Chat Smoke", 10_000, "rename persistence");
   await row.hover();
-  await row.getByRole("button", { name: "Pin chat", exact: true }).click();
+  await row.getByRole("button", { name: "Pin", exact: true }).click();
   await poll(() => store.getChatSession(sessionId)?.pinned === true, 10_000, "pin persistence");
   await page.reload({ waitUntil: "domcontentloaded" });
-  await row.getByText("Persistent Chat Smoke", { exact: true }).waitFor();
+  await page.locator("[data-chat-page-header]").getByRole("heading", { name: "Persistent Chat Smoke", exact: true }).waitFor();
+  await page.getByRole("region", { name: "Pinned", exact: true }).locator(`[data-chat-session-row="${sessionId}"]`).getByText("Persistent Chat Smoke", { exact: true }).waitFor();
   await row.hover();
-  await row.getByRole("button", { name: "Unpin chat", exact: true }).waitFor();
+  await row.getByRole("button", { name: "Unpin", exact: true }).waitFor();
   check("rename and pin survive browser reload");
 
-  await row.getByRole("button", { name: "Archive chat", exact: true }).click();
+  await rowMenu("Archive");
   await poll(() => store.getChatSession(sessionId)?.status === "archived", 10_000, "archive persistence");
   const restore = page.getByRole("button", { name: "Restore chat", exact: true });
   await restore.waitFor();
-  assert.equal(await page.getByRole("button", { name: "Send", exact: true }).isDisabled(), true);
-  const denied = await context.request.post(`${frontend}/api/sessions/${sessionId}/messages`, { headers: { Authorization: `Bearer ${pat}`, "X-Workspace-Slug": workspace.slug }, data: { body_md: "ARCHIVED_SHOULD_NOT_SEND", to: { type: "agent", ref: agent.id } } });
+  await poll(() => action("send").isDisabled(), 10_000, "archived composer disabled");
+  await page.getByText("This session is archived", { exact: true }).waitFor();
+  // An archived Chat refuses new queued rows (a member's direct message would reopen it).
+  const denied = await context.request.post(`${frontend}/api/sessions/${sessionId}/queue`, { headers: queuedHeaders, data: { body_md: "ARCHIVED_SHOULD_NOT_QUEUE", client_id: randomUUID() } });
   assert.equal(denied.status(), 409);
-  assert(!store.listChatMessages(sessionId).some(message => message.body === "ARCHIVED_SHOULD_NOT_SEND"));
+  assert.equal((await denied.json() as { code?: string }).code, "chat_archived");
+  assert.deepEqual(queued(), []);
   await restore.click();
   await poll(() => store.getChatSession(sessionId)?.status === "active", 10_000, "restore persistence");
-  check("archive makes the session read-only in UI and API; restore re-enables it");
+  await restore.waitFor({ state: "hidden" });
+  check("archive makes the session read-only in the UI and refuses queued rows in the API; restore re-enables it");
 
   // Remount the active session in floating Chat, upload without sending, then
   // remount it again as the standalone page to exercise draft attachment state.
@@ -253,7 +377,7 @@ try {
   const attachmentFile = join(root, "chat-smoke-attachment.txt");
   writeFileSync(attachmentFile, "Private attachment fixture for isolated Chat smoke.\n");
   const uploadedPromise = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/upload-file");
-  await page.locator('input[type="file"]').setInputFiles(attachmentFile);
+  await composer.locator('input[type="file"]').setInputFiles(attachmentFile);
   const uploaded = await uploadedPromise;
   assert.equal(uploaded.status(), 200);
   const upload = await uploaded.json() as { id: string };
@@ -262,9 +386,9 @@ try {
   await page.getByRole("button", { name: "Open Chat page", exact: true }).click();
   await page.waitForURL(url => url.pathname === `/${workspace.slug}/chat` && url.searchParams.get("session") === sessionId);
   await editor.getByText("chat-smoke-attachment.txt", { exact: true }).waitFor();
-  assert.equal(await editor.count(), 1, "Cross-surface navigation duplicated the composer");
+  assert.equal(await composer.count(), 1, "Cross-surface navigation duplicated the composer");
   const sentAttachmentPromise = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === `/api/sessions/${sessionId}/messages`);
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await action("send").click();
   const attachmentResponse = await sentAttachmentPromise;
   assert.equal(attachmentResponse.status(), 200);
   assert.deepEqual(attachmentResponse.request().postDataJSON().attachment_ids, [upload.id], "Cross-surface draft must retain uploaded attachment IDs");
@@ -276,9 +400,7 @@ try {
   assert.equal(download.status(), 200);
   assert.match(await download.text(), /Private attachment fixture/);
   assert.equal(store.claimTask(runtime.id)?.id, attached.attemptId);
-  store.startTask(attached.attemptId);
-  store.completeTask(attached.attemptId, { output: "CHAT_SMOKE_ATTACHMENT_READ (simulated worker)", sessionId: "smoke-provider-session" });
-  await page.getByText("CHAT_SMOKE_ATTACHMENT_READ (simulated worker)", { exact: true }).last().waitFor();
+  await runReply(attached.attemptId, "CHAT_SMOKE_ATTACHMENT_READ (simulated worker)");
   const downloadFromCard = page.getByRole("button", { name: "Download", exact: true });
   await downloadFromCard.waitFor();
   assert(!await page.getByText("!filechat-smoke-attachment.txt", { exact: true }).count(), "File-card syntax leaked into the message");
@@ -295,10 +417,11 @@ try {
   await page.setViewportSize({ width: 390, height: 844 });
   await editor.waitFor();
   await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth);
-  assert.equal(await editor.count(), 1);
+  assert.equal(await composer.count(), 1);
   await page.screenshot({ path: join(artifacts, "chat-mobile.png"), fullPage: false });
   await page.getByRole("button", { name: "Chat history", exact: true }).click();
-  await page.getByRole("textbox", { name: "Search chats…" }).waitFor();
+  await row.getByText("Persistent Chat Smoke", { exact: true }).waitFor();
+  await editor.waitFor({ state: "hidden" });
   await page.waitForFunction(() => document.documentElement.scrollWidth <= window.innerWidth);
   await page.screenshot({ path: join(artifacts, "chat-mobile-history.png"), fullPage: false });
   await page.getByRole("button", { name: "Back to conversation" }).click();
@@ -324,6 +447,7 @@ try {
   server?.stop(true);
   db?.close();
   rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  if (nextEnvBefore !== null && (!existsSync(nextEnvPath) || readFileSync(nextEnvPath, "utf8") !== nextEnvBefore)) writeFileSync(nextEnvPath, nextEnvBefore);
 }
 console.log(JSON.stringify({ ok: failure === null, checks, artifacts, realProvider: false, apiFailures, jsErrors, error: failure instanceof Error ? redact(failure.stack ?? failure.message) : failure }, null, 2));
 process.exit(failure === null ? 0 : 1);
