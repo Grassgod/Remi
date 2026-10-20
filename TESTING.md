@@ -64,12 +64,14 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 | 工作流 | 实际检查范围 |
 |---|---|
 | [dev-context.yml](.github/workflows/dev-context.yml) | PR / main push；Linux、Windows 上的 Node 检查器测试及默认文档阅读链校验 |
-| [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；独立的架构/CLI 守卫、CI 编排小回归、前端类型、前端测试、CLI/API/Web 构建、平台专项和浏览器专项；main push 与手动运行另有四个后端分片及完整覆盖校验 |
+| [release-build-check.yml](.github/workflows/release-build-check.yml) | 按路径触发；独立的架构/CLI 守卫、CI 编排小回归、前端类型、前端测试、CLI/API/Web 构建、平台专项和浏览器专项；main push 与手动运行另有八个后端分片及完整覆盖校验 |
 | [release.yml](.github/workflows/release.yml) / [platform-release.yml](.github/workflows/platform-release.yml) | 校验准备快照、tag 版本及同一 main SHA 的成功完整 CI 或严格验证的失败文件补跑；复用符合来源与内容校验的正式 candidate，缺少可用 candidate 时保留原构建路径 |
 
-`build` 保留为分支保护的必需检查，是所有适用 job 的汇总，不再承载串行测试与构建。平台专项 job `session-archive-platform` 已更名为 `runtime-platform`（ubuntu-latest 与 macos-latest 两个矩阵项，仍验证固定的 ACP 桥与内置 agent runtime，归档回归随 ADR 0018 删除）；`build` 的 `needs` 已改用新名。若分支保护的必需检查直接列出了 `session-archive-platform (ubuntu-latest)` / `session-archive-platform (macos-latest)`，需由仓库管理员改为 `runtime-platform (ubuntu-latest)` / `runtime-platform (macos-latest)`，否则旧名永远等不到状态而阻塞合并。它逐项要求预期的 success / skipped；失败、取消、缺少分片报告或非预期 skipped 均不能给出绿灯。PR 跳过后端分片；main push 与默认手动运行要求完整后端覆盖。PR 新提交取消该 PR 的旧运行，main 运行互不取消。两个浏览器专项保留各自的路径检测，路径不相关时跳过专项步骤，job 仍需正常成功。
+`build` 保留为分支保护的必需检查，是所有适用 job 的汇总，不再承载串行测试与构建。平台专项 job `session-archive-platform` 已更名为 `runtime-platform`（ubuntu-latest 与 macos-latest 两个矩阵项，仍验证固定的 ACP 桥与内置 agent runtime，归档回归随 ADR 0018 删除）；`build` 的 `needs` 已改用新名。若分支保护的必需检查直接列出了 `session-archive-platform (ubuntu-latest)` / `session-archive-platform (macos-latest)`，需由仓库管理员改为 `runtime-platform (ubuntu-latest)` / `runtime-platform (macos-latest)`，否则旧名永远等不到状态而阻塞合并。它逐项要求预期的 success / skipped；失败、取消、缺少分片报告或非预期 skipped 均不能给出绿灯。PR 跳过后端分片；main push 与默认手动运行要求完整后端覆盖。PR 新提交取消该 PR 的旧运行，main 运行互不取消。两个浏览器专项保留各自的路径检测，路径不相关时跳过专项步骤，job 仍需正常成功。API/Web 镜像构建在 PR 上只读取 main 的 gha 层缓存、不导出：导出要重传每次提交都会变化的源码与构建层（api 约 1.5 分钟、web 约 2 分钟），而 PR 作用域的缓存只有同一 PR 的后续运行能读；main push 与手动运行照常导出。
 
-[ci-backend.ts](scripts/ci-backend.ts) 从 bunfig 的 test root 自动发现 Bun 支持的 `.test` / `_test` / `.spec` / `_spec` 文件和八种 JS/TS 扩展，排除隐藏目录与 node_modules，隐藏文件名仍按后缀发现；不维护测试文件清单。它按 [历史权重](scripts/ci-backend-weights.json) 做 LPT 分配，新文件使用至少 60 秒或历史 p90 的保守权重。初始权重来自文件中标识的真实 Actions run/job/SHA，按日志文件标题边界计时，包含部分 runner 开销，不能视为当前版本的实测耗时。
+[ci-backend.ts](scripts/ci-backend.ts) 从 bunfig 的 test root 自动发现 Bun 支持的 `.test` / `_test` / `.spec` / `_spec` 文件和八种 JS/TS 扩展，排除隐藏目录与 node_modules，隐藏文件名仍按后缀发现；不维护测试文件清单。它按 [历史权重](scripts/ci-backend-weights.json) 做 LPT 分配，新文件使用至少 60 秒或历史 p90 的保守权重。现行权重由下文 `weights` 命令从文件中标识的完整运行（run ID 与 SHA）的覆盖报告导入，是该次运行各文件的实测时间；覆盖报告里没有的旧条目（已删除的文件）原样保留，规划只取当前发现的文件，不影响分配。权重只用于调度估算，不能视为当前版本的实测耗时。
+
+分片数只在 `backend-plan` job 的 `BACKEND_SHARDS` 设定（现为 8），传给 `plan --shards`；`plan` 不设默认值。`backend` 矩阵取自计划里的分片序号（`backend-plan` 的 `shards` 输出），`verify` 要求每个计划分片恰有一份完整报告，`build` 汇总整个矩阵的结果，因此矩阵、计划与覆盖校验不会不一致；verified retry 从基准运行的计划读取分片，不依赖当前分片数。选择 8 的估算：权重总和约 7,450 秒，8 片时 LPT 每片约 930 秒；用另一次完整运行的实测文件时间复核，最慢片约 950 秒，再加每片约 50 秒的固定开销（runner 准备、PostgreSQL service、checkout、Bun 下载缓存与安装），后端关键路径约 16–17 分钟。6 片约 22 分钟，10 片约 14 分钟但多出两片固定开销并占用更多并发 job。每多一片约多 1 runner 分钟。实测（同一 SHA 的手动完整运行 39454365698、39457662184）：各片测试步骤 620–1073 秒，后端 job 最长 18.2 / 18.9 分钟，整条运行 18.7 / 19.4 分钟（此前 4 片的完整运行为 32.6–38.6 分钟）；后端 job 合计约 130 分钟，此前约 119–128 分钟。
 
 每片使用独立 runner、PostgreSQL service 和一次包装测试进程，保留 hermetic preload、假 HOME 检查及 lock-order sentinel。启动前实际验证显式 `MULTIREMI_TEST_POSTGRES_URL` 的连接，失败报错。计划与报告绑定 SHA、bunfig 指纹、scope/preload 和完整文件归属；覆盖校验要求每个文件恰好出现一次且所有分片成功。架构快守卫故意在 `guards` 先跑，并在全量分片再次覆盖，以保留快速反馈与可审计发现范围。`guards` 另以 `CI=true`、`GITHUB_ACTIONS=true` 显式执行 CI 编排自身的五个小回归文件（ci-backend、run-tests、run-tests-signals、retry-failed-backend-tests、release-candidate），让真实 GitHub 分组日志、包装退出/清理、覆盖及补跑来源问题在 PR 阶段暴露；该步骤不执行数据库或业务套件。
 
@@ -78,7 +80,7 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 以下入口只做文件规划或报告校验，不启动测试；`run` 才执行后端分片：
 
 ```bash
-bun run scripts/ci-backend.ts plan --sha <40位提交SHA> --shards 4 --out ci-backend/plan.json
+bun run scripts/ci-backend.ts plan --sha <40位提交SHA> --shards 8 --out ci-backend/plan.json
 bun run scripts/ci-backend.ts verify --plan ci-backend/plan.json --reports ci-backend --out ci-backend/coverage.json
 bun run scripts/ci-backend.ts weights --coverage ci-backend/coverage.json --previous scripts/ci-backend-weights.json --run-id <完整运行ID> --out ci-backend/weights.json
 ```
