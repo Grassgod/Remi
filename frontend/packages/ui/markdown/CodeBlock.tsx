@@ -6,6 +6,7 @@ import { Button } from "@multiremi/ui/components/ui/button"
 import { Tooltip, TooltipTrigger, TooltipContent } from "@multiremi/ui/components/ui/tooltip"
 import { cn } from '@multiremi/ui/lib/utils'
 import { copyText } from '../lib/clipboard'
+import { useCopyFeedback } from '../hooks/use-copy-feedback'
 import {
   CODE_LIGATURE_CLASS,
   CODE_LIGATURE_DESCENDANT_CLASS,
@@ -70,7 +71,7 @@ export function CodeBlock({
   const { t } = useTranslation("ui")
   const [highlighted, setHighlighted] = React.useState<string | null>(null)
   const [isLoading, setIsLoading] = React.useState(true)
-  const [copied, setCopied] = React.useState(false)
+  const [copied, markCopied] = useCopyFeedback()
 
   // Resolve language alias - keep as string to allow 'text' fallback
   const langLower = language.toLowerCase()
@@ -135,11 +136,8 @@ export function CodeBlock({
   }, [code, resolvedLang])
 
   const handleCopy = React.useCallback(async () => {
-    if (await copyText(code)) {
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    }
-  }, [code])
+    if (await copyText(code)) markCopied()
+  }, [code, markCopied])
 
   // Terminal mode: raw monospace with minimal styling
   if (mode === 'terminal') {

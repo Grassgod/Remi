@@ -37,6 +37,7 @@ import { Button } from "@multiremi/ui/components/ui/button";
 import { Switch } from "@multiremi/ui/components/ui/switch";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -172,7 +173,7 @@ function TriggerRow({
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rotateOpen, setRotateOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback(1500);
   const [editSchedule, setEditSchedule] = useState(false);
 
   const handleDelete = async () => {
@@ -212,9 +213,8 @@ function TriggerRow({
   const handleCopy = async () => {
     if (!webhookUrl) return;
     if (await copyText(webhookUrl)) {
-      setCopied(true);
+      markCopied();
       toast.success(t(($) => $.trigger_row.url_copied));
-      setTimeout(() => setCopied(false), 1500);
     } else {
       toast.error(t(($) => $.trigger_row.url_copy_failed));
     }

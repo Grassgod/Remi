@@ -19,6 +19,7 @@ import {
 } from "@multiremi/ui/components/ui/dialog";
 import { Textarea } from "@multiremi/ui/components/ui/textarea";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import { cn } from "@multiremi/ui/lib/utils";
 import { useT } from "../../i18n";
 
@@ -186,15 +187,17 @@ function PromptTemplateDialog({
   onRetry: () => void;
 }) {
   const { t } = useT("settings");
-  const [copiedBlock, setCopiedBlock] = useState<TemplateBlock | null>(null);
+  const [lastCopiedBlock, setLastCopiedBlock] = useState<TemplateBlock | null>(null);
+  const [copied, markCopied] = useCopyFeedback(1_500);
+  const copiedBlock = copied ? lastCopiedBlock : null;
   const unavailable = failed || (!loading && !template?.instructions);
 
   async function copyBlock(block: TemplateBlock) {
     const text = template?.[block];
     if (!text) return;
     if (await copyText(text)) {
-      setCopiedBlock(block);
-      setTimeout(() => setCopiedBlock(null), 1_500);
+      setLastCopiedBlock(block);
+      markCopied();
     } else {
       toast.error(t(($) => $.prompts.copy_failed));
     }

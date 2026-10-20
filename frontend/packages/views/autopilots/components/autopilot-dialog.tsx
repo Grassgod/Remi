@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { cn } from "@multiremi/ui/lib/utils";
 import { copyText } from "@multiremi/ui/lib/clipboard";
+import { useCopyFeedback } from "@multiremi/ui/hooks/use-copy-feedback";
 import {
   Dialog,
   DialogContent,
@@ -1378,7 +1379,7 @@ function WebhookCreatedPanel({
   onClose: () => void;
 }) {
   const { t } = useT("autopilots");
-  const [copied, setCopied] = useState(false);
+  const [copied, markCopied] = useCopyFeedback(1500);
 
   // Same URL composition the trigger row uses: prefer the server-provided
   // webhook_url, fall back to apiBaseUrl + webhook_path, then origin + path.
@@ -1392,9 +1393,8 @@ function WebhookCreatedPanel({
   const handleCopy = async () => {
     if (!url) return;
     if (await copyText(url)) {
-      setCopied(true);
+      markCopied();
       toast.success(t(($) => $.trigger_row.url_copied));
-      setTimeout(() => setCopied(false), 1500);
     } else {
       toast.error(t(($) => $.trigger_row.url_copy_failed));
     }
