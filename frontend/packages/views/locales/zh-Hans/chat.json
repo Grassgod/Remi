@@ -363,7 +363,6 @@
     "pending_result": "完成后在这里显示结果。",
     "stopped_output": "停止前的输出",
     "working": "处理中",
-    "read_only": "子代理只读。如需调整，请在主对话中说明。",
     "loading": "正在加载…",
     "not_found": "找不到这个子代理",
     "model": "模型 {{model}}",
