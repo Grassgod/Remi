@@ -98,6 +98,7 @@ import { ChatQueue, type ChatQueueController } from "./chat-queue";
 import { SubagentPanelLayout } from "./subagent-panel";
 import { ChatSidePanelToggle, useChatPanelRecord } from "./side-panel-toggle";
 import { useChatBackgroundTasks } from "./use-background-tasks";
+import { useChatModel } from "./use-chat-model";
 
 const uiLogger = createLogger("chat.ui");
 const apiLogger = createLogger("chat.api");
@@ -423,6 +424,16 @@ export function ChatWindow({
   const presenceDetail = useAgentPresenceDetail(wsId, sessionAgentPending ? undefined : activeAgent?.id);
   const availability =
     presenceDetail === "loading" ? undefined : presenceDetail.availability;
+
+  // The composer's model chip names the chat's own agent's model: a started
+  // chat's agent, never the composer's fallback pick for it.
+  const chatModel = useChatModel({
+    wsId,
+    agent: activeSessionId ? agents.find((a) => a.id === currentSession?.agent_id) ?? null : activeAgent,
+    sessionId: displayedSessionId,
+    pendingTask,
+    enabled: chatVisible,
+  });
 
   // Mount / unmount logging. ChatWindow lives in DashboardLayout, so this
   // fires on layout mount (login / workspace switch / fresh page load).
@@ -1069,6 +1080,7 @@ export function ChatWindow({
             )}
           </>
         }
+        model={chatModel}
         contextItems={contextItems}
       />
     </>

@@ -21,6 +21,14 @@
     "save": "保存",
     "cancel_edit": "キャンセル"
   },
+  "model": {
+    "label": "モデル",
+    "default": "デフォルトモデル",
+    "default_detail": "モデル未指定：ランタイムのデフォルトモデルで実行します",
+    "effort": "推論強度：{{value}}",
+    "fallback": "このターンは予備モデルに切り替わりました",
+    "settings_hint": "エージェントの設定で変更できます"
+  },
   "message_list": {
     "show_details": "詳細を表示",
     "replied_in": "{{elapsed}}で返信",

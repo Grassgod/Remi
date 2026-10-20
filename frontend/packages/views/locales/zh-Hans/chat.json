@@ -21,6 +21,14 @@
     "save": "保存",
     "cancel_edit": "取消"
   },
+  "model": {
+    "label": "模型",
+    "default": "默认模型",
+    "default_detail": "未指定模型，由运行时的默认模型执行",
+    "effort": "推理强度：{{value}}",
+    "fallback": "这一轮已切换到备用模型",
+    "settings_hint": "在智能体设置中修改"
+  },
   "message_list": {
     "show_details": "查看详情",
     "replied_in": "{{elapsed}} 内回复",

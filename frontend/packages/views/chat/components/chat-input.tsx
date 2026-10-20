@@ -34,6 +34,8 @@ import type { Attachment } from "@multiremi/core/types";
 import type { MentionItem } from "../../editor/extensions/mention-suggestion";
 import { useT } from "../../i18n";
 import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
+import type { ChatModelDisplay } from "../lib/chat-model";
+import { ChatModelChip } from "./chat-model-chip";
 
 const logger = createLogger("chat.ui");
 
@@ -138,6 +140,11 @@ interface ChatInputProps {
    * box is an `@container`, so its items can collapse when it is narrow.
    */
   leftAdornment?: ReactNode;
+  /**
+   * The model the chat runs on, shown read-only after the pickers; nothing
+   * while there is no agent or it is still loading.
+   */
+  model?: ChatModelDisplay | null;
   /** Rendered before the action buttons at the bottom-right — the context ring. */
   rightAdornment?: ReactNode;
   /** Chat @ suggestions: current/recent issue/project entries. */
@@ -157,6 +164,7 @@ export function ChatInput({
   noAgent,
   agentName,
   leftAdornment,
+  model,
   rightAdornment,
   contextItems,
 }: ChatInputProps) {
@@ -583,6 +591,7 @@ export function ChatInput({
         <div data-chat-composer-footer="" className="absolute inset-x-1.5 bottom-1 flex items-center gap-2">
           <div data-chat-composer-footer-start="" className="@container flex min-w-0 flex-1 items-center gap-1 pl-0.5">
             {leftAdornment}
+            {model && <ChatModelChip model={model} />}
           </div>
           <div className="flex shrink-0 items-center gap-1">
             {rightAdornment}

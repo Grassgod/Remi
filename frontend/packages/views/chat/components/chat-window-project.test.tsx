@@ -19,6 +19,8 @@ const backend = vi.hoisted(() => ({
   logReady: true,
   entries: [] as unknown[],
   projectsHeld: false,
+  agents: [] as Array<Record<string, unknown>>,
+  sessionsHold: null as Promise<void> | null,
   create: vi.fn(), update: vi.fn(), send: vi.fn(), refresh: vi.fn(), markRead: vi.fn(),
   enqueue: vi.fn(), updateQueued: vi.fn(), cancel: vi.fn(),
 }));
@@ -26,7 +28,7 @@ const apiLogger = vi.hoisted(() => ({ error: vi.fn() }));
 vi.mock("@multiremi/core/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@multiremi/core/api")>();
   return { ...actual, api: {
-    listAgents: async () => [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }],
+    listAgents: async () => backend.agents,
     listMembers: async () => [{ user_id: "user-a", role: "owner" }],
     listProjects: async () => backend.projectsHeld ? new Promise<never>(() => {}) : ({ projects: [
       { id: "project-a", title: "Remi", archived_at: null, icon: null },
@@ -36,6 +38,7 @@ vi.mock("@multiremi/core/api", async (importOriginal) => {
     listRuntimes: async () => [],
     listChatSessions: async () => {
       listChatSessionsCalls();
+      if (backend.sessionsHold) await backend.sessionsHold;
       return backend.sessions;
     },
     listChatMessagesPage: async () => {
@@ -114,15 +117,22 @@ vi.mock("./session-dropdown", () => ({ SessionDropdown: () => <div data-testid="
 vi.mock("../../common/actor-avatar", () => ({
   ActorAvatar: ({ actorId }: { actorId: string }) => <span data-testid={`avatar-${actorId}`} />,
 }));
-vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, onSaveQueueEdit, onStop, disabled, leftAdornment }: {
+// The chip's own reads are covered in use-chat-model.test; here only which agent it names.
+vi.mock("./use-chat-model", () => ({ useChatModel: ({ agent }: { agent: { id: string; model: string } | null }) =>
+  agent ? { modelId: agent.model || null, label: null, effort: null, fallback: false } : null }));
+vi.mock("./chat-input", () => ({ ChatInput: ({ onSend, onSaveQueueEdit, onStop, disabled, leftAdornment, agentName, model }: {
   onSend: (value: string, ids?: string[], local?: unknown[], mode?: string) => Promise<void>;
   onSaveQueueEdit: (sessionId: string, edit: unknown, content: string, ids: string[]) => Promise<void>;
   onStop: () => void;
   disabled: boolean;
   leftAdornment?: ReactNode;
+  agentName?: string;
+  model?: { modelId: string | null } | null;
 }) => (
   <>
     <div data-testid="composer-footer">{leftAdornment}</div>
+    <span data-testid="composer-agent">{agentName}</span>
+    <span data-testid="composer-model">{model ? model.modelId ?? "default" : "none"}</span>
     <button disabled={disabled} onClick={() => void onSend("Hello").catch(() => {})}>Send test message</button>
     <button onClick={() => void onSend("Steer this", undefined, [], "steer").catch(() => {})}>Steer test message</button>
     <button onClick={() => void onSend("Queue this", ["att-1"], [{ id: "att-1", filename: "a.png", content_type: "image/png", size_bytes: 4 }], "queue")
@@ -209,6 +219,8 @@ beforeEach(() => {
   backend.logReady = true;
   backend.entries = [];
   backend.projectsHeld = false;
+  backend.agents = [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }];
+  backend.sessionsHold = null;
   backend.create.mockReset().mockImplementation(async (data) => {
     const created = { ...session, project_id: null, ...data };
     backend.sessions = [created];
@@ -515,6 +527,48 @@ describe("ChatWindow work location in the composer footer", () => {
     // useDeleteChatSession and chat:session_deleted clear the active chat.
     act(() => store.getState().setActiveSession(null));
     expect(await within(screen.getByTestId("composer-footer")).findByRole("button", { name: "Work location: No project" })).toBeEnabled();
+  });
+});
+
+describe("ChatWindow model chip in the composer footer", () => {
+  const alpha = { id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a", model: "model-a" };
+  const beta = { id: "agent-b", name: "Beta", archived_at: null, owner_id: "user-a", model: "model-b" };
+
+  it("names a started chat's own agent, never the composer's fallback pick while the chat loads", async () => {
+    backend.agents = [alpha, beta];
+    backend.sessions = [{ ...session, agent_id: "agent-b" }];
+    // The page and the floating window share the composer.
+    for (const mountChat of [() => mount(true), () => mountFloatingOpen(true)]) {
+      let release!: () => void;
+      backend.sessionsHold = new Promise((resolve) => { release = resolve; });
+      const view = mountChat();
+      try {
+        // Until the chat's record arrives the composer falls back to the first agent; the chip stays out.
+        await waitFor(() => expect(screen.getByTestId("composer-agent")).toHaveTextContent("Alpha"));
+        expect(screen.getByTestId("composer-model")).toHaveTextContent("none");
+        await act(async () => release());
+        await waitFor(() => expect(screen.getByTestId("composer-model")).toHaveTextContent("model-b"));
+      } finally { view.unmount(); view.client.clear(); }
+    }
+  });
+
+  it("names the selected agent for a new chat, and follows the selection", async () => {
+    backend.agents = [alpha, beta];
+    const view = mountFloatingOpen(true, null);
+    try {
+      await waitFor(() => expect(screen.getByTestId("composer-model")).toHaveTextContent("model-a"));
+      act(() => view.store.getState().setSelectedAgentId("agent-b"));
+      await waitFor(() => expect(screen.getByTestId("composer-model")).toHaveTextContent("model-b"));
+    } finally { view.unmount(); view.client.clear(); }
+  });
+
+  it("shows nothing without an agent", async () => {
+    backend.agents = [];
+    const view = mount();
+    try {
+      await act(async () => { await new Promise((resolve) => setTimeout(resolve, 20)); });
+      expect(screen.getByTestId("composer-model")).toHaveTextContent("none");
+    } finally { view.unmount(); view.client.clear(); }
   });
 });
 
