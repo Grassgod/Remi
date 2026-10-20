@@ -37,6 +37,7 @@
  */
 
 import type { GcRunMode, StorageReport, StorageSubjectRef, SubjectSnapshot } from "./storage.js";
+import type { SlashCommandCatalogue } from "./slash-commands.js";
 import type {
   TraceBackgroundTaskStopRequest,
   TraceBackgroundTaskUsage,
@@ -485,6 +486,14 @@ export interface DaemonTaskCompletionFields {
    * receiver reads a missing or malformed value as null.
    */
   late_subagents?: TraceLateSubagent[] | null;
+  /**
+   * ADR 0025: the latest command catalogue the bridge advertised to this
+   * session (`available_commands_update`), bounded by `SLASH_COMMAND_LIMITS`,
+   * with no local path. Optional, without a capability bit: older daemons
+   * omit it and older servers ignore it; absent or null leaves the stored
+   * catalogue as it is, and an empty `commands` list is a real, empty one.
+   */
+  available_commands?: SlashCommandCatalogue | null;
 }
 
 /** Turn input travels as messages; attempt ids remain trace/outbox keys. */

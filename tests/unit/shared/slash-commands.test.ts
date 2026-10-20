@@ -5,6 +5,10 @@
  */
 import { describe, expect, it } from "bun:test";
 import {
+  boundSlashCommands,
+  observeAvailableCommands,
+  SLASH_COMMAND_LIMITS,
+  visibleSlashCommands,
   BLOCKED_SLASH_COMMANDS,
   blockedSlashCommandNote,
   COMPACT_COMMAND_REPLY,
@@ -170,5 +174,78 @@ describe("skillCommandName", () => {
       expect(bridgeReadsCommand(`/${command} args`)).toBe(true);
       expect(leadingSlashCommand(`/${command} args`)?.name).toBe(command);
     }
+  });
+});
+
+describe("observeAvailableCommands (ADR 0025)", () => {
+  it("keeps name, description, hint and kind, and only the directory name of a skill's SKILL.md", () => {
+    // Shapes from claude-agent-acp 0.93 and codex-acp 2.2.2 (AIR client), as captured without credentials.
+    const observed = observeAvailableCommands([
+      { name: "compact", description: "Free up context", input: { hint: "<optional custom summarization instructions>" } },
+      { name: "deploy-prod", description: "Deploy (project)", input: null,
+        _meta: { jetbrains: { air: { version: 1, kind: "skill", skillPath: "/Users/someone/repo/.claude/skills/deploy-prod/SKILL.md" } } } },
+      { name: "$imagegen", description: "Generate images", input: null,
+        _meta: { jetbrains: { air: { version: 1, skillPath: "C:\\Users\\someone\\.codex\\skills\\.system\\imagegen\\SKILL.md" } } } },
+      { name: "mcp:docs:search", description: "", input: { hint: "  query  " } },
+      { name: "plan", description: "Turn plan mode on.", _meta: { jetbrains: { air: { commandAction: { kind: "setConfigOption" } } } } },
+    ]);
+    expect(observed).toEqual([
+      { name: "compact", description: "Free up context", hint: "<optional custom summarization instructions>", kind: "command", skillDir: null },
+      { name: "deploy-prod", description: "Deploy (project)", hint: null, kind: "skill", skillDir: "deploy-prod" },
+      { name: "$imagegen", description: "Generate images", hint: null, kind: "skill", skillDir: "imagegen" },
+      { name: "mcp:docs:search", description: "", hint: "query", kind: "mcp_prompt", skillDir: null },
+      { name: "plan", description: "Turn plan mode on.", hint: null, kind: "command", skillDir: null },
+    ]);
+    expect(JSON.stringify(observed)).not.toContain("/Users/someone");
+    expect(JSON.stringify(observed)).not.toContain("commandAction");
+  });
+
+  it("drops what no bridge can invoke and the repeats, and bounds the rest", () => {
+    const long = "d".repeat(SLASH_COMMAND_LIMITS.descriptionChars + 50);
+    const observed = observeAvailableCommands([
+      { name: "Git Commit", description: "a space cannot follow a slash" }, { name: "", description: "" }, { name: 7 },
+      null, "compact", { name: "context", description: long, input: { hint: "h".repeat(400) } }, { name: "context", description: "again" },
+      ...Array.from({ length: 300 }, (_, index) => ({ name: `cmd-${index}`, description: "" })),
+    ])!;
+    expect(observed[0]).toMatchObject({ name: "context" });
+    expect(observed[0]!.description).toHaveLength(SLASH_COMMAND_LIMITS.descriptionChars);
+    expect(observed[0]!.description.endsWith("…")).toBe(true);
+    expect(observed[0]!.hint).toHaveLength(SLASH_COMMAND_LIMITS.hintChars);
+    expect(observed).toHaveLength(SLASH_COMMAND_LIMITS.entries);
+    expect(observed.filter((command) => command.name === "context")).toHaveLength(1);
+    expect(observeAvailableCommands(undefined)).toBeNull();
+    expect(observeAvailableCommands({ name: "compact" })).toBeNull();
+    expect(observeAvailableCommands([])).toEqual([]);
+  });
+});
+
+describe("boundSlashCommands and visibleSlashCommands (ADR 0025)", () => {
+  it("keeps only the contract's keys of valid entries, and fits 32 KiB", () => {
+    const entries = boundSlashCommands([
+      { name: "compact", description: "c", hint: null, kind: "command", extra: "/Users/someone/path" },
+      { name: "deploy-prod", description: "d", hint: "  [service] ", kind: "skill", skill_id: "skl_1" },
+      { name: "bad", description: "d", hint: null, kind: "unknown" },
+      { name: "bad-skill", description: "d", hint: null, kind: "skill", skill_id: "" },
+      { name: "no-description", hint: null, kind: "command" },
+    ]);
+    expect(entries).toEqual([
+      { name: "compact", description: "c", hint: null, kind: "command" },
+      { name: "deploy-prod", description: "d", hint: "[service]", kind: "skill", skill_id: "skl_1" },
+    ]);
+    const many = boundSlashCommands(Array.from({ length: 200 }, (_, index) => ({
+      name: `command-${index}`, description: "x".repeat(300), hint: "y".repeat(200), kind: "command" })));
+    expect(many.length).toBeLessThan(200);
+    expect(new TextEncoder().encode(JSON.stringify({ provider: "claude", reported_at: new Date().toISOString(), commands: many })).length)
+      .toBeLessThanOrEqual(SLASH_COMMAND_LIMITS.bytes);
+    expect(many.map((command) => command.name)).toEqual(Array.from({ length: many.length }, (_, index) => `command-${index}`));
+  });
+
+  it("lists neither blocked nor hidden commands, per provider, and keeps Codex skills", () => {
+    const commands = ["compact", "model", "rename", "status", "logout", "plan", "review", "$plan"]
+      .map((name) => ({ name, description: "", hint: null, kind: "command" as const }));
+    const names = (provider: string) => visibleSlashCommands(provider, commands).map((command) => command.name);
+    expect(names("claude")).toEqual(["compact", "status", "plan", "review", "$plan"]);
+    expect(names("codex")).toEqual(["compact", "model", "review", "$plan"]);
+    expect(names("antigravity")).toEqual(["compact", "model", "rename", "status", "review", "$plan"]);
   });
 });

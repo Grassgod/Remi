@@ -155,3 +155,162 @@ function shortHash(value: string): string {
   }
   return (hash >>> 0).toString(16).padStart(8, "0").slice(0, 6);
 }
+
+// ── The agent's command catalogue (ADR 0025 decisions 2-4) ──────────────────
+
+/** Where a command comes from, as far as the bridge tells: a skill, an MCP prompt, or a command of unknown origin. */
+export type SlashCommandKind = "command" | "skill" | "mcp_prompt";
+
+/** One command of an agent's catalogue, as the daemon reports it and the API returns it. */
+export interface SlashCommandEntry {
+  /** What is sent after `/` (Codex skills keep their `$`): `compact`, `fix-issue`, `$deploy-prod`, `mcp:server:prompt`. */
+  name: string;
+  description: string;
+  /** A free-text hint for the arguments, for display only; null when the command takes none. */
+  hint: string | null;
+  kind: SlashCommandKind;
+  /** The Remi skill this command is, when the daemon installed it this turn (ADR 0025 decision 7). */
+  skill_id?: string;
+}
+
+/** The latest catalogue of one agent session: the optional `available_commands` of `task.complete` / `task.fail`. */
+export interface SlashCommandCatalogue {
+  provider: string;
+  /** ISO 8601: when the daemon read the catalogue, at the end of the attempt. */
+  reported_at: string;
+  commands: SlashCommandEntry[];
+}
+
+/** `GET /api/chat/slash-commands`: the catalogue the Chat menu shows, with the blocked and hidden commands taken out. */
+export interface ChatSlashCommandsResponse {
+  /**
+   * `session`: reported by this Chat's own agent session (an empty list is a
+   * real, empty catalogue); `preview`: the requesting user's latest other Chat
+   * with this agent on the same provider and Runtime; `none`: nothing reported
+   * yet (a daemon from before ADR 0025 never reports).
+   */
+  state: "session" | "preview" | "none";
+  provider: string | null;
+  reported_at: string | null;
+  commands: SlashCommandEntry[];
+}
+
+/** Bounds on a reported catalogue (ADR 0025 decision 2). */
+export const SLASH_COMMAND_LIMITS = {
+  entries: 200,
+  nameChars: 128,
+  descriptionChars: 300,
+  hintChars: 200,
+  /** The whole `available_commands` value, JSON-encoded. */
+  bytes: 32 * 1024,
+} as const;
+
+const SLASH_COMMAND_KINDS: readonly SlashCommandKind[] = ["command", "skill", "mcp_prompt"];
+
+/**
+ * A command from a bridge's `available_commands_update`, reduced to what Remi
+ * keeps. No `_meta` and no path survives: only the `kind` the bridge marks and
+ * the directory name of a skill's `SKILL.md`, which the daemon matches against
+ * the skills it installed and never reports.
+ */
+export interface ObservedSlashCommand {
+  name: string;
+  description: string;
+  hint: string | null;
+  kind: SlashCommandKind;
+  /** The directory a skill's `SKILL.md` sits in, from the AIR `skillPath`; null when the bridge gave none. */
+  skillDir: string | null;
+}
+
+function clip(value: string, max: number): string {
+  return value.length > max ? `${value.slice(0, max - 1)}…` : value;
+}
+
+/** A name that can follow a `/`: no whitespace (a bridge cannot invoke `/Git Commit`), no control characters. */
+function invocableName(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const name = value.trim().replace(/^\//, "");
+  if (!name || name.length > SLASH_COMMAND_LIMITS.nameChars || /[\s\u0000-\u001f\u007f]/.test(name)) return null;
+  return name;
+}
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+/**
+ * The `availableCommands` of an `available_commands_update`, observed: names a
+ * bridge could not run are dropped, the first of a repeated name wins, and
+ * descriptions, hints and the count are cut to the reporting bounds. Null when
+ * `raw` is not a list.
+ */
+export function observeAvailableCommands(raw: unknown): ObservedSlashCommand[] | null {
+  if (!Array.isArray(raw)) return null;
+  const seen = new Set<string>();
+  const observed: ObservedSlashCommand[] = [];
+  for (const value of raw) {
+    const entry = record(value);
+    const name = invocableName(entry?.name);
+    if (!entry || !name || seen.has(name)) continue;
+    seen.add(name);
+    const air = record(record(record(entry._meta)?.jetbrains)?.air);
+    const skillPath = typeof air?.skillPath === "string" ? air.skillPath : "";
+    // The directory of `<root>/<dir>/SKILL.md`; only its name is kept.
+    const skillDir = /[\\/]SKILL\.md$/i.test(skillPath) ? skillPath.split(/[\\/]/).at(-2) ?? "" : "";
+    const rawHint = record(entry.input)?.hint;
+    const hint = typeof rawHint === "string" ? rawHint.trim() : "";
+    observed.push({
+      name,
+      description: clip(typeof entry.description === "string" ? entry.description.trim() : "", SLASH_COMMAND_LIMITS.descriptionChars),
+      hint: hint ? clip(hint, SLASH_COMMAND_LIMITS.hintChars) : null,
+      kind: name.startsWith("$") || air?.kind === "skill" ? "skill" : name.startsWith("mcp:") ? "mcp_prompt" : "command",
+      skillDir: skillDir || null,
+    });
+    if (observed.length >= SLASH_COMMAND_LIMITS.entries) break;
+  }
+  return observed;
+}
+
+/**
+ * A catalogue within the bounds: valid entries only, with unknown keys
+ * dropped, at most 200, and as many from the front as fit in 32 KiB. The
+ * daemon applies it before it reports and the server before it stores.
+ */
+export function boundSlashCommands(values: readonly unknown[]): SlashCommandEntry[] {
+  const seen = new Set<string>();
+  const entries: SlashCommandEntry[] = [];
+  for (const value of values) {
+    const entry = record(value);
+    const name = invocableName(entry?.name);
+    if (!entry || !name || seen.has(name) || typeof entry.description !== "string"
+      || (entry.hint !== null && entry.hint !== undefined && typeof entry.hint !== "string")
+      || !SLASH_COMMAND_KINDS.includes(entry.kind as SlashCommandKind)
+      || (entry.skill_id !== undefined && (typeof entry.skill_id !== "string" || !entry.skill_id.trim()))) continue;
+    seen.add(name);
+    const hint = typeof entry.hint === "string" && entry.hint.trim() ? clip(entry.hint.trim(), SLASH_COMMAND_LIMITS.hintChars) : null;
+    entries.push({
+      name,
+      description: clip(entry.description.trim(), SLASH_COMMAND_LIMITS.descriptionChars),
+      hint,
+      kind: entry.kind as SlashCommandKind,
+      ...(typeof entry.skill_id === "string" ? { skill_id: entry.skill_id.trim() } : {}),
+    });
+    if (entries.length >= SLASH_COMMAND_LIMITS.entries) break;
+  }
+  // Leave room for the envelope (provider, time) inside the byte budget.
+  const budget = SLASH_COMMAND_LIMITS.bytes - 256;
+  const encoder = new TextEncoder();
+  let size = 2;
+  let kept = 0;
+  for (const entry of entries) {
+    size += encoder.encode(JSON.stringify(entry)).length + 1;
+    if (size > budget) break;
+    kept++;
+  }
+  return entries.slice(0, kept);
+}
+
+/** The commands a Chat menu offers: everything but the blocked and hidden ones for this provider. */
+export function visibleSlashCommands(provider: string | null | undefined, commands: readonly SlashCommandEntry[]): SlashCommandEntry[] {
+  return commands.filter((command) => slashCommandHandling(provider, command.name) === null);
+}
