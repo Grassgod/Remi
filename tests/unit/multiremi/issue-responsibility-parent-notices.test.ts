@@ -1,8 +1,10 @@
 import {describe,expect,it,spyOn} from 'bun:test';
 import {createResponsibleTestIssue,seedHistoricalIssueFacts} from './helpers.js';
-import {conversationLogPgAdminUrl,withConversationLogStore} from './fixtures/conversation-log-store.js';
+import {conversationLogPgAdminUrl,withConversationLogStore,useMigratedConversationLogStores} from './fixtures/conversation-log-store.js';
 import type {StoreContext,WorkspaceEvent} from '@multiremi/store/context.js';
 import type {MultiremiStore} from '@multiremi/store.js';
+
+useMigratedConversationLogStores();
 
 // D18: a child status notice reaches the direct parent's execution owner. An
 // unresolved ancestor above that parent neither skips nor reroutes the notice.

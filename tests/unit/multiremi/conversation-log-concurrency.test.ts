@@ -2,7 +2,7 @@ import { createResponsibleTestIssue, replayHistoricalTestChildDone } from './hel
 import { mutateExecutionFixture } from "./unified-test-paths.js";
 import type { Database } from "bun:sqlite";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -15,6 +15,7 @@ import { DB_REPLY_TRANSITION_EXCEPTIONS, createRequestMetricsMiddleware, current
 import { createCommitEventQueue, type StoreContext } from "@multiremi/store/context.js";
 import { AgentIssueUpdatesRepo } from "@multiremi/store/repos/agent-issue-updates-repo.js";
 import { bindFeishuTopicFixture } from "./feishu-topic-fixture.js";
+import { createPostgresStoreTemplate } from "../../helpers/postgres-store-template.js";
 
 const worker = new URL("./fixtures/conversation-log-process.ts", import.meta.url).pathname;
 const migrationId = "20260927_conversation_log";
@@ -64,7 +65,25 @@ async function withSqlite(run: (db: Database, path: string) => Promise<void>, fr
   try { await run(db, path); } finally { db.close(); rmSync(dir, { recursive: true, force: true }); }
 }
 
+// Migrated (non-fresh) cases clone a suite-owned PostgreSQL TEMPLATE; each is
+// still its own database that child processes and new Stores open as before.
+let pgTemplate: ReturnType<typeof createPostgresStoreTemplate> | undefined;
+
 async function withPostgres(run: (db: PostgresSyncDatabase, url: string) => Promise<void>, fresh = false): Promise<void> {
+  if (!fresh && pgTemplate) {
+    const template = pgTemplate;
+    const database = await template.createDatabase();
+    let db: PostgresSyncDatabase | undefined;
+    try {
+      db = new PostgresSyncDatabase(database.url);
+      new MultiremiStore(db).ensureLocalWorkspace();
+      await run(db, database.url);
+    } finally {
+      try { db?.close(); }
+      finally { await template.dropDatabase(database.name); }
+    }
+    return;
+  }
   const name = `mul426_${process.pid}_${Math.floor(Math.random() * 1e8)}`;
   const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
   await admin.unsafe(`CREATE DATABASE ${name}`);
@@ -673,6 +692,20 @@ function verifyChatTurnTiming(db: SqlDatabase): void {
 }
 
 describe("conversation log multi-process allocation (MUL-405)", () => {
+  beforeAll(async () => {
+    if (!pgAdminUrl) return;
+    const template = createPostgresStoreTemplate(pgAdminUrl, { prefix: "mul426t", fixture: "mul426-conversation-log-concurrency" });
+    try { await template.prepare(); }
+    catch (error) { await template.dispose(); throw error; }
+    pgTemplate = template;
+  }, 30_000);
+  afterAll(async () => {
+    const template = pgTemplate;
+    pgTemplate = undefined;
+    if (!template) return;
+    try { await template.dispose(); }
+    finally { console.info(`REMI_TEST_DB_FIXTURE_STATS ${JSON.stringify({ ...template.stats(), scope: "suite" })}`); }
+  });
   it("SQLite: chat turns appear with assistant messages and preserve message order", async () => {
     await withSqlite(async (db) => verifyChatTurnTiming(db));
   });

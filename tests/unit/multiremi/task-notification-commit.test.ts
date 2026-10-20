@@ -3,7 +3,9 @@ import type { SqlDatabase as UnifiedFixtureDatabase } from '@multiremi/store/db/
 import { describe, expect, it } from "bun:test";
 import type { MultiremiTaskMessage } from "@multiremi/contracts/types.js";
 import { StoreContext } from "@multiremi/store/context.js";
-import { conversationLogPgAdminUrl, withConversationLogStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl, withConversationLogStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
+
+useMigratedConversationLogStores();
 
 describe("task notifications respect the caller's commit", () => {
   for (const backend of ["sqlite", "pg"] as const) {

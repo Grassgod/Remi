@@ -5,7 +5,9 @@ import type { TasksRepo } from '@multiremi/store/repos/tasks-repo.js';
 import { describe, expect, it, spyOn } from "bun:test";
 import { StoreContext, type WorkspaceEvent } from "@multiremi/store/context.js";
 import { IssueLockSetStaleError } from "@multiremi/store/repos/issues-repo.js";
-import { conversationLogPgAdminUrl, withConversationLogStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl, withConversationLogStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
+
+useMigratedConversationLogStores();
 
 /** These tests reopen persisted pre-delivery terminal rows, not newly accepted work. */
 function createReopenFixtureIssue(store:MultiremiStore,input:CreateIssueInput) {

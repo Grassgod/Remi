@@ -2,7 +2,9 @@ import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from "bun:test";
 import { buildSessionProjection } from "@multiremi/store/session-projection.js";
 import { conversationLogProjectionEvents } from "@multiremi/store/conversation-log-projection.js";
-import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
+
+useMigratedConversationLogStores();
 
 describe("MUL-427: log-backed wakeups and projections", () => {
   for (const backend of ["sqlite", "pg"] as const) {

@@ -1,6 +1,8 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { describe, expect, it } from "bun:test";
-import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
+
+useMigratedConversationLogStores();
 
 export const AGENT_COMMENTED_EQUIVALENCE_CASES = [
   ["ordinary agent comment", true],

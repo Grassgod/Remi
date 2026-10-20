@@ -5,7 +5,9 @@ import { createCommitEventQueue, type StoreContext } from "@multiremi/store/cont
 import type { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { resetDbReplyLimitForTest } from "@multiremi/store/db/postgres.js";
 import { DB_REPLY_TRANSITION_EXCEPTIONS } from "@multiremi/observability/request-metrics.js";
-import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore, withHistoricalConversationStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore, withHistoricalConversationStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
+
+useMigratedConversationLogStores();
 
 describe("MUL-427 merge rulings", () => {
   for (const backend of ["sqlite", "pg"] as const) {

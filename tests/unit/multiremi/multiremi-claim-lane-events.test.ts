@@ -2,8 +2,10 @@ import { createHistoricalTestIssue, createResponsibleTestIssue } from './helpers
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { StoreContext } from "@multiremi/store/context.js";
 import { IssueLockSetStaleError, type IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
-import { conversationLogPgAdminUrl, withConversationLogStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl, withConversationLogStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
 import { createStore, db, resetMultiremiTestEnv } from "./helpers.js";
+
+useMigratedConversationLogStores();
 
 afterEach(resetMultiremiTestEnv);
 
