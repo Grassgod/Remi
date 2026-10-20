@@ -27,7 +27,7 @@ export function useMigratedConversationLogStores(): void {
     const state: NonNullable<typeof migrated> = {};
     if (conversationLogPgAdminUrl) {
       const template = createPostgresStoreTemplate(conversationLogPgAdminUrl, { prefix: "mul427t", fixture: "conversation-log-store" });
-      try { await template.prepare(); }
+      try { await template.prepare(); await template.warm(); }
       catch (error) { await template.dispose(); throw error; }
       state.template = template;
     }

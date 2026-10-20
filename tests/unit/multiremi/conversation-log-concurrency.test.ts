@@ -695,7 +695,7 @@ describe("conversation log multi-process allocation (MUL-405)", () => {
   beforeAll(async () => {
     if (!pgAdminUrl) return;
     const template = createPostgresStoreTemplate(pgAdminUrl, { prefix: "mul426t", fixture: "mul426-conversation-log-concurrency" });
-    try { await template.prepare(); }
+    try { await template.prepare(); await template.warm(); }
     catch (error) { await template.dispose(); throw error; }
     pgTemplate = template;
   }, 30_000);

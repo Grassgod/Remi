@@ -26,7 +26,7 @@ export function useMigratedHotspotDatabases(): void {
     const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
     if (adminUrl) {
       const template = createPostgresStoreTemplate(adminUrl, { prefix: "mul473t", fixture: "first-screen-hotspots-database" });
-      try { await template.prepare(); }
+      try { await template.prepare(); await template.warm(); }
       catch (error) { await template.dispose(); throw error; }
       state.template = template;
     }

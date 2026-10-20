@@ -25,7 +25,7 @@ export function migratedStoreBackend(backend: MigratedStoreBackend, options: { p
         const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
         if (!adminUrl) throw new Error(`${options.fixture} requires MULTIREMI_TEST_POSTGRES_URL`);
         const owner = createPostgresStoreTemplate(adminUrl, options);
-        try { await owner.prepare(); }
+        try { await owner.prepare(); await owner.warm(); }
         catch (error) { await owner.dispose(); throw error; }
         template = owner;
       }, 30_000);

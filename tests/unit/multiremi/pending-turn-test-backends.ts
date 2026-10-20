@@ -93,7 +93,7 @@ export function pendingTurnBackendTests(
         }
         if (snapshot) {
           const owner = createPostgresStoreTemplate(adminUrl!, { prefix: "mul483t", fixture: `pending-turn-snapshot:${name}` });
-          try { await owner.prepare(); }
+          try { await owner.prepare(); await owner.warm(); }
           catch (error) { await owner.dispose(); throw error; }
           template = owner;
           return;

@@ -21,13 +21,15 @@ export interface PostgresCaseDatabase { name: string; url: string }
  * The template stores the migration seed (schema_migrations timestamps), so the
  * SQLite snapshot exclusions apply: cold migration, empty-schema, startup side
  * effect and environment/clock/UUID-sensitive cases keep a fresh database. Like
- * the SQLite image, the template is built lazily by the first case under that
- * case's environment; a later case whose clock, RNG or environment differs, or
- * whose migration report is missing, falls back to a fresh empty database.
+ * the SQLite image, the template matches the environment of the cases that
+ * clone it: `warm()` (beforeAll) builds it under the suite's environment and a
+ * first case under another environment rebuilds it once; after that, a case
+ * whose clock, RNG or environment differs, or whose migration report is
+ * missing, falls back to a fresh empty database.
  *
  * Only an explicit local test server is accepted; only databases this factory
- * created are dropped. The consuming suite must await `prepare()` in beforeAll
- * and `dispose()` in afterAll.
+ * created are dropped. The consuming suite must await `prepare()` (then
+ * optionally `warm()`) in beforeAll and `dispose()` in afterAll.
  */
 export function createPostgresStoreTemplate(adminUrl: string, options: { prefix: string; fixture: string }) {
   if (!/^[a-z][a-z0-9_]{0,20}$/.test(options.prefix)) throw new Error("Template database prefix must be a short lowercase identifier");
@@ -39,7 +41,7 @@ export function createPostgresStoreTemplate(adminUrl: string, options: { prefix:
   const ownedName = new RegExp(`^${options.prefix}_[a-f0-9]{32}$`);
   const owned = new Set<string>();
   let admin: Bun.SQL | undefined;
-  let template: { name: string; environment: string; reportDir: string } | undefined;
+  let template: { name: string; environment: string; reportDir: string; clones: number } | undefined;
   const stats = {
     fixture: options.fixture, dialect: "postgres", templateBuilds: 0, clones: 0, freshFallbacks: 0,
     databaseCreates: 0, templateMs: 0, createMs: 0,
@@ -78,9 +80,31 @@ export function createPostgresStoreTemplate(adminUrl: string, options: { prefix:
       // CREATE DATABASE ... TEMPLATE requires that nobody is connected to it.
       db.close();
     }
-    template = { name: database.name, environment, reportDir: resolveMigrationReportDirectory() };
+    template = { name: database.name, environment, reportDir: resolveMigrationReportDirectory(), clones: 0 };
     stats.templateBuilds++;
     stats.templateMs += performance.now() - started;
+  }
+
+  /** A template for this environment; an unused one built under another env is replaced once. */
+  async function ensureTemplate(environment: string): Promise<boolean> {
+    if (template?.environment === environment) return true;
+    if (template && template.clones > 0) return false;
+    if (template) {
+      const stale = template.name;
+      template = undefined;
+      await dropDatabase(stale);
+    }
+    await buildTemplate(environment);
+    return true;
+  }
+
+  /**
+   * Optional, from the suite's beforeAll (its own timeout): build the template
+   * under the current environment so the first case does not pay the cold
+   * migration inside its hook. A first case under another env rebuilds it.
+   */
+  async function warm(): Promise<void> {
+    if (normalClockAndRandom()) await ensureTemplate(environmentFingerprint());
   }
 
   /** A new database for one case: a template clone when compatible, else a fresh empty one. */
@@ -91,14 +115,13 @@ export function createPostgresStoreTemplate(adminUrl: string, options: { prefix:
         stats.freshFallbacks++;
         return await createOwned();
       }
-      const environment = environmentFingerprint();
-      if (!template) await buildTemplate(environment);
-      const compatible = template!.environment === environment
+      const compatible = await ensureTemplate(environmentFingerprint())
         && ["before", "after"].every(phase => existsSync(join(template!.reportDir, `${UNIFIED_MODEL_MIGRATION}-${phase}.json`)));
       if (!compatible) {
         stats.freshFallbacks++;
         return await createOwned();
       }
+      template!.clones++;
       stats.clones++;
       return await createOwned(template!.name);
     } finally {
@@ -127,5 +150,5 @@ export function createPostgresStoreTemplate(adminUrl: string, options: { prefix:
     if (errors.length) throw new AggregateError(errors, `${options.fixture} cleanup failed`);
   }
 
-  return { prepare, createDatabase, dropDatabase, dispose, stats: () => ({ ...stats }) };
+  return { prepare, warm, createDatabase, dropDatabase, dispose, stats: () => ({ ...stats }) };
 }
