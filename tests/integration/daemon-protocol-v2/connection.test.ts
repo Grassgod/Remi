@@ -8,6 +8,9 @@ import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { MultiremiDaemonHttpError } from "@multiremi/worker/client.js";
 import { DaemonProtocolRpcError } from "@multiremi/worker/daemon-protocol-client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const fixtures: DaemonProtocolHarness[] = [];
 async function fixture(options: Parameters<typeof DaemonProtocolHarness.create>[0] = {}) {

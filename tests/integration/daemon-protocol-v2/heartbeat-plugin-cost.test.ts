@@ -6,6 +6,9 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonHeartbeatPayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiDaemonSshMeshStatus } from "@multiremi/contracts/types.js";
 import { DaemonProtocolHarness } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of fixtures.splice(0)) await h.dispose(); });

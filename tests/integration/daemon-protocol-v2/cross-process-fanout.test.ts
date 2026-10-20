@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { createPeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 interface UiReply {
   ready?: boolean;

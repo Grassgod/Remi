@@ -8,7 +8,7 @@
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
-import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
+import { openIntegrationDatabase, type IntegrationDatabase, useMigratedIntegrationDatabases } from "../helpers/integration-database.js";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -24,6 +24,8 @@ import type { ProviderEvent, SteerResult } from "@shared/contracts/provider-type
 import { AcpProvider, type AcpProviderOptions } from "@acp/provider.js";
 import { agentTexts, traceItems } from "../helpers/turn-trace.js";
 import type { FakeSteerConfig } from "../fixtures/acp/fake-steering-agent.js";
+
+useMigratedIntegrationDatabases();
 
 let database: IntegrationDatabase | null = null;
 let fixtureStore: MultiremiStore | null = null;

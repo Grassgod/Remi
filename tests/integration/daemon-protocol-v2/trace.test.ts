@@ -8,6 +8,9 @@ import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { join } from "node:path";
 import { EmptyLiveHub } from "@multiremi/api/hub/live-hub.js";
 import { createLocalHubTransport } from "@multiremi/api/hub/hub-transport.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of fixtures.splice(0)) await h.dispose(); });

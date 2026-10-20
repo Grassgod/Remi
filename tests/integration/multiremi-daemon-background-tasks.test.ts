@@ -9,7 +9,7 @@
 // ordinary lane machine then makes the turn), and lane snapshots are recorded.
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
+import { openIntegrationDatabase, type IntegrationDatabase, useMigratedIntegrationDatabases } from "../helpers/integration-database.js";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -27,6 +27,8 @@ import type { FakeAsyncTaskStep, FakeSubagentConfig, FakeSubagentStep } from "..
 import { readTaskContextFile, TASK_CONTEXT_FILE_ENV, TASK_CONTEXT_PARKED_MESSAGE } from "@shared/task-context-file.js";
 import { taskCredential, taskTurnId } from "../../apps/remi/cli/core/task-context.js";
 import { runGitCredentialHelper } from "@daemon/agent-runtime/repo/credential-broker.js";
+
+useMigratedIntegrationDatabases();
 
 let database: IntegrationDatabase | null = null;
 let workDir: string | null = null;
