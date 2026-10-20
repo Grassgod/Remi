@@ -947,6 +947,11 @@ describe("Chat column", () => {
       // the centered column stays on the composer's center line.
       expect(scroll.parentElement).toHaveClass("@container/chat-log",
         "@min-[800px]/chat-log:[&>[data-session-log-scroll]]:[scrollbar-gutter:stable_both-edges]");
+      // On a wide pane the column's `cqi` resolves against that container, the
+      // nearest one: it must span the pane like the composer's, with no width,
+      // margin or padding of its own and no container in between.
+      expect(scroll.parentElement!.className).not.toMatch(/(^|\s)(p[xlr]?|m[xlr]?|w|max-w)-/);
+      expect(scroll.className).not.toContain("@container");
     } finally { view.unmount(); }
   });
 });

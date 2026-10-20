@@ -9,7 +9,7 @@ import type { ChatSession } from "@multiremi/core/types";
 import enChat from "../../locales/en/chat.json";
 import enIssues from "../../locales/en/issues.json";
 import enRuntimes from "../../locales/en/runtimes.json";
-import { CHAT_COLUMN_CLASS } from "../lib/chat-column";
+import { CHAT_COLUMN_CLASS, CHAT_PANE_CLASS } from "../lib/chat-column";
 
 const backend = vi.hoisted(() => ({
   sessions: [] as ChatSession[],
@@ -96,7 +96,7 @@ vi.mock("../../navigation", () => ({
 vi.mock("../../layout/page-header", () => ({ PageHeader: ({ children }: { children: ReactNode }) => <div>{children}</div> }));
 vi.mock("./use-chat-resize", () => ({ useChatResize: () => ({ boundsReady: true }) }));
 vi.mock("./use-chat-context-items", () => ({ useChatContextItems: () => [] }));
-vi.mock("./chat-message-list", () => ({ ChatMessageList: () => null, ChatMessageSkeleton: () => null }));
+vi.mock("./chat-message-list", () => ({ ChatMessageList: () => <div data-testid="chat-message-list" />, ChatMessageSkeleton: () => null }));
 vi.mock("./human-request-dock", () => ({ HumanRequestDock: ({ className }: { className?: string }) => <div data-testid="human-request-dock" className={className} /> }));
 vi.mock("./offline-banner", () => ({ OfflineBanner: () => null }));
 vi.mock("./no-agent-banner", () => ({ NoAgentBanner: () => null }));
@@ -735,5 +735,22 @@ describe("ChatWindow Chat column", () => {
     expect(restore.parentElement).toHaveClass(...column);
     fireEvent.click(restore);
     expect(await screen.findByText("Action failed. Please try again.")).toHaveClass(...column);
+  });
+
+  it("sizes the page's column from one pane holding the message list, the rows above the composer and the composer", async () => {
+    backend.sessions = [session];
+    backend.pending = { task_id: "task-a", turn_id: "turn-a", status: "running", supports_queue: true };
+    mount(true);
+    const pane = (await screen.findByTestId("chat-message-list")).parentElement!;
+    expect(pane).toHaveClass(CHAT_PANE_CLASS);
+    expect(pane).toContainElement(screen.getByTestId("human-request-dock"));
+    expect(pane).toContainElement(screen.getByTestId("composer-footer"));
+  });
+
+  it("gives the floating window no pane, so its column keeps 768px however wide the window grows", async () => {
+    backend.sessions = [session];
+    mountFloatingOpen(true);
+    expect(await screen.findByTestId("human-request-dock")).toHaveClass(...CHAT_COLUMN_CLASS.split(" "));
+    expect(document.querySelector(`[class~="${CHAT_PANE_CLASS}"]`)).toBeNull();
   });
 });
