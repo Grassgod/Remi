@@ -22,6 +22,14 @@
     "save": "Save",
     "cancel_edit": "Cancel"
   },
+  "model": {
+    "label": "Model",
+    "default": "Default model",
+    "default_detail": "No model set: the runtime's default model runs",
+    "effort": "Reasoning effort: {{value}}",
+    "fallback": "This turn switched to the fallback model",
+    "settings_hint": "Set in the agent's settings"
+  },
   "message_list": {
     "show_details": "Show details",
     "replied_in": "Replied in {{elapsed}}",
