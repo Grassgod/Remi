@@ -57,6 +57,7 @@
      - 工作目录是用户自己的文件夹时（Runtime 工作区、Project 的 `local_directory`），Skill 写到 provider home：Claude 的 `CLAUDE_CONFIG_DIR/skills`，Codex 的 `CODEX_HOME/skills`，清单也在那里，用户文件夹里不出现任何 Skill 文件。离线核对：codex 0.163 的 app-server `skills/list` 把 `CODEX_HOME/skills` 里 Remi 写的 Skill 列为 user scope、已启用、无错误。
      - Antigravity 保持原来的 `.agents/skills`。
    - 每个 Skill 整体重写；Agent 不再拥有的 Skill 按清单 `.remi-skills.json` 删除。只写入、只删除 Remi 创建并记入清单的目录：目录里原有的同名 Skill（provider 自带、agent 或用户自己的）原样保留，Remi 的同名 Skill 不装。
+   - [ADR 0025](0025-chat-slash-commands.md) 决策 7 修订：Remi 生成的 `SKILL.md` 的 `name` 写目录名而不是平台上的显示名，`/目录名`（Codex 是 `$目录名`）就能调用；名字含非 ASCII 字符的 Skill 目录名带上名字的短哈希，原名写在 `description` 开头。
    - Codex 0.163 总会加载用户的 `$HOME/.agents/skills`，没有关闭整个目录的开关。因此会话 `config.toml` 每次启动都按路径为其中每个 Skill 写 `[[skills.config]] enabled = false`，`HOME` 不变。
 
 6. **工作区与 Project 的提示词各合成一份。**

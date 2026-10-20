@@ -23,7 +23,7 @@
 | **Agent 个性** | `multiremi_agents.instructions`（UI「指令」框） | 写在该 Agent 每个会话 `AGENTS.md` 的开头（名字、简介、instructions），每一轮都生效 | 身份、职责边界、个性化工作方式（见 §2 骨架） | 平台已注入的内容（Issue 流程、workspace 说明）；仓库规则；大段可复用操作手册（应做成 Skill） |
 | 仓库规则 | 各仓库 `AGENTS.md` / `CLAUDE.md` | 编码 CLI 按 cwd 自动读取 | 仓库级开发约定 | Agent 人设 |
 | 飞书 Remi 人格 | 工作区 bot 配置所选 Agent 的 `multiremi_agents.instructions` | 控制面按 `multiremi_feishu_bot_configs.agent_id` 绑定 Chat/Task；消息沿 Task → AgentSession → ACP 执行并加载 Agent 指令，见[配置与分配链路](deploy/66-8-remi-environment.md) | 飞书聊天 Remi 的身份、职责与工具约定 | 不另建 `soul.md` 或本地 group 配置；同一 agent row 是唯一来源 |
-| 可复用操作知识 | Skill（`SKILL.md`） | 每轮同步到 provider 原生加载的目录（Claude `.claude/skills`，Codex `.agents/skills`；Runtime 工作区写 provider home），不再内联进提示词 | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
+| 可复用操作知识 | Skill（`SKILL.md`） | 每轮同步到 provider 原生加载的目录（Claude `.claude/skills`，Codex `.agents/skills`；Runtime 工作区写 provider home），不再内联进提示词；生成的 `SKILL.md` 以目录名作 `name`，`/目录名`（Codex `$目录名`）即可调用（[ADR 0025](adr/0025-chat-slash-commands.md)） | 有触发条件的操作手册（见 §4） | 人设、一次性任务说明 |
 
 ## 2. 提示词（instructions）规范
 

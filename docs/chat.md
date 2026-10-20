@@ -191,6 +191,16 @@ Web 输入框运行中按偏好（设置 →「偏好」→「聊天」，默认
 自动终态回复发给 Chat 创建者的工作区成员，成功结果和最终失败均进入该成员的收件箱。
 Chat 列表的未读计数使用同一 member lane；读到较早消息保留最终回复未读，读到回复后清零。
 
+## 斜杠命令
+
+一对一私聊里，以 `/名字` 开头的消息原样作为这一轮的开头发给 agent，由它的 ACP 桥执行，例如 Claude 的 `/compact`、`/init`、自定义命令和技能，Codex 的 `/review`、`/compact` 和 `$技能`。命令只在消息开头才执行；带发言人标签的消息（群聊、飞书话题、Issue）里不执行。设计见 [ADR 0025](adr/0025-chat-slash-commands.md)，已实现的部分：
+
+- **拦截。** 少数命令在托管的运行机器上有害或没有意义：会动到运行机器主人的账号或设置，或绕过 Remi 换模型。daemon 不让桥执行它们，而是在消息前加一行 `[Remi] The user typed the command /<名字>, which Remi does not run here. It reached you as text and did not run.`，原文接在后面，模型据此说明。名单按 provider 区分，在 [slash-commands.ts](../packages/contracts/src/slash-commands.ts)：Claude 的 `/remote-control`、`/model`、`/effort`、`/fast`、`/config`、`/clear`、`/usage`、`/login`、`/logout` 等（含它们的别名），Codex 的 `/logout`、`/status`，Antigravity 的 `/logout`、`/usage`。插话文字同样处理。
+- **`/compact`。** 两个桥执行压缩时都不回复文字。这一轮输入是 `/compact`、看到了压缩、且没有插话或自主轮时，轮正常完成，回复是 `Context compacted.`，压缩步骤照常显示；其他「只有压缩、没有文字」的轮仍判为空输出失败。
+- **技能名。** Remi 安装的平台技能以目录名作 `SKILL.md` 的 `name`，例如「Git Commit」用 `/git-commit`（Codex 用 `$git-commit`）调用。
+
+输入框的「/」菜单仍只列出所选 agent 的平台技能，选中后插入的链接不会被当成命令；按 ADR 0025 把 agent 自己的命令带回网页、修正菜单的 agent 和插入内容还没有实现。
+
 ## 权限与实时更新
 
 直接聊天仅创建者可读写，另需满足工作区成员与 Agent 访问条件。其他工作区成员及管理员不能读取别人的私聊。
