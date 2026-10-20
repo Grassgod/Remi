@@ -266,7 +266,6 @@ describe("daemon protocol v2 real connection", () => {
   });
 
   it("does not enter the provider when shutdown occurs during preparation after the start ACK", async () => {
-    const summaryEndpoint = localProgressSummary();
     let providerCalls = 0;
     let preparing = false;
     let releasePreparation!: () => void;
@@ -274,6 +273,9 @@ describe("daemon protocol v2 real connection", () => {
     const h = await fixture({ providerFactory: () => ({
       async *sendStream() { providerCalls++; }, getLastResponse: () => null,
     }) });
+    // The daemon reads these settings per task; set them after the harness has
+    // opened its (env-fingerprinted) migrated database.
+    const summaryEndpoint = localProgressSummary();
     // Hold an actual awaited workspace preparation boundary, then run its
     // original implementation: authorization and workspace work stay real.
     const daemon = h.daemon as any;
@@ -319,7 +321,6 @@ describe("daemon protocol v2 real connection", () => {
   });
 
   it("drains an already-started provider on shutdown without aborting its execution", async () => {
-    const summaryEndpoint = localProgressSummary();
     let providerCalls = 0;
     let executionSignal: AbortSignal | undefined;
     let releaseProvider!: () => void;
@@ -335,6 +336,8 @@ describe("daemon protocol v2 real connection", () => {
         getLastResponse: () => ({ text: "finished", sessionId: "drained-session", usage: [], toolCalls: [] } as any),
       }),
     });
+    // Per-task daemon settings: set after the harness opened its migrated database.
+    const summaryEndpoint = localProgressSummary();
     await h.startDaemon();
     const runtimeId = h.store.listRuntimes()[0]!.id;
     const agent = h.store.createAgent({ name: "graceful provider drain", provider: "claude", runtimeId });
