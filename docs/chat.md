@@ -198,8 +198,9 @@ Chat 列表的未读计数使用同一 member lane；读到较早消息保留最
 - **拦截。** 少数命令在托管的运行机器上有害或没有意义：会动到运行机器主人的账号或设置，或绕过 Remi 换模型。daemon 不让桥执行它们，而是在消息前加一行 `[Remi] The user typed the command /<名字>, which Remi does not run here. It reached you as text and did not run.`，原文接在后面，模型据此说明。名单按 provider 区分，在 [slash-commands.ts](../packages/contracts/src/slash-commands.ts)：Claude 的 `/remote-control`、`/model`、`/effort`、`/fast`、`/config`、`/clear`、`/usage`、`/login`、`/logout` 等（含它们的别名），Codex 的 `/logout`、`/status`，Antigravity 的 `/logout`、`/usage`。插话文字同样处理。
 - **`/compact`。** 两个桥执行压缩时都不回复文字。这一轮输入是 `/compact`、看到了压缩、且没有插话或自主轮时，轮正常完成，回复是 `Context compacted.`，压缩步骤照常显示；其他「只有压缩、没有文字」的轮仍判为空输出失败。
 - **技能名。** Remi 安装的平台技能以目录名作 `SKILL.md` 的 `name`，例如「Git Commit」用 `/git-commit`（Codex 用 `$git-commit`）调用。
+- **命令目录。** 每轮结束时，daemon 把 agent 最近一次发布的命令列表随终态报告带回，存在这个 Chat 的 agent 会话线上（协议见 [daemon 协议](daemon-protocol-v2.md)）；Remi 这一轮装下的平台技能带上 `skill_id`。`GET /api/chat/slash-commands?agent_id=&session_id=` 返回菜单要显示的命令，被拦截和隐藏的已去掉：`state` 为 `session`（这个 Chat 自己报过的，空列表也算）、`preview`（还没报过时，用请求者自己和这个 agent 最近一次对话的列表，provider 和 Runtime 都要与 agent 现在的一致）或 `none`（旧 daemon 从不上报）。带 `session_id` 时只有 Chat 的创建人能读，与读这个 Chat 相同；只带 `agent_id` 时要求能和这个 agent 聊天。Claude 对 `/context` 这类不调模型的命令会把同一段输出发两次，provider 只保留第一份。
 
-输入框的「/」菜单仍只列出所选 agent 的平台技能，选中后插入的链接不会被当成命令；按 ADR 0025 把 agent 自己的命令带回网页、修正菜单的 agent 和插入内容还没有实现。
+输入框的「/」菜单仍只列出所选 agent 的平台技能，选中后插入的链接不会被当成命令；按 ADR 0025 改用上面的接口、修正菜单的 agent 和插入内容还没有实现。
 
 ## 权限与实时更新
 

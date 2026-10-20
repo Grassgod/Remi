@@ -1,6 +1,6 @@
 # ADR 0025：Chat 输入框的「/」菜单——agent 自己的命令和技能
 
-- 状态：已接受（Q1–Q8 由评审人按建议决定（2026-10-20），用户可推翻，见文末「已决定」）。PR1「命令轮安全」已实现（决策 7、8、9 和契约类型的修正）；命令列表带回、接口和网页菜单（决策 1–6）尚未实现。本 ADR 不代表功能已部署，也不代表 daemon 已升级。
+- 状态：已接受（Q1–Q8 由评审人按建议决定（2026-10-20），用户可推翻，见文末「已决定」）。PR1「命令轮安全」已实现（决策 7、8、9 和契约类型的修正）；PR2「列表带回与保存」已实现（决策 2、3、4 和 Claude 重复回复的去重）；网页菜单（决策 1、5、6）尚未实现。本 ADR 不代表功能已部署，也不代表 daemon 已升级。
 - 依赖 [ADR 0023](0023-turn-input-and-provider-agents-md.md) 决策 4：私有 Chat 一对一时，本轮输入就是用户输入的原文，所以开头的 `/命令` 能原样到达桥。修订 ADR 0023 决策 5 的一处：Remi 写入的 `SKILL.md` 里 `name` 改用目录名（决策 7）。
 - 依赖 [ADR 0020](0020-chat-follow-up-queue-and-native-steering.md)：运行中发出的命令一律排队，不插话（决策 6）；排队每轮只放行一条，命令通常自成一轮。
 - 编号：main 上最后一份为 0024（2026-10-20 核对 `origin/main` 85383dd0e）。
@@ -17,7 +17,7 @@
 
 - **菜单只有平台技能，而且可能是别的 agent 的。** [slash-command-suggestion.tsx](../../frontend/packages/views/editor/extensions/slash-command-suggestion.tsx) 的 `buildItems` 只列 `activeAgent.skills`，`activeAgent` 取自 `useChatStore` 的 `selectedAgentId`。这个值是「上次选的 agent」，打开已有对话时并不总会同步：`?session=` 链接（[chat-page.tsx](../../frontend/packages/views/chat/components/chat-page.tsx) 第 24 行）和 `setActiveSession`（[store.ts](../../frontend/packages/core/chat/store.ts) 369–386 行）都不改它；而会话窗口自己优先用会话的 agent（[chat-window.tsx](../../frontend/packages/views/chat/components/chat-window.tsx) 401–405 行）。没有配置技能时菜单为空。
 - **选中技能插入的是链接，不是命令。** 节点序列化为 `[/名字](slash://skill/<技能 id>)`（[slash-command-extension.ts](../../frontend/packages/views/editor/extensions/slash-command-extension.ts) 59–64 行）。服务端和 daemon 都不改写它，agent 收到的就是这段 Markdown 链接文字；开头是 `[`，桥不会把它当命令。
-- **桥发布的命令到不了服务端。** 两个桥都发 `available_commands_update`。provider 在两次 prompt 之间只保留用量帧（[provider.ts](../../packages/acp/src/provider.ts) `_handleIdleUpdate`，2079–2122 行），而桥恰好在 `session/new`、`session/load` 刚应答时发这一帧；prompt 期间到达的那一帧又被 trace 翻译器忽略（[trace-translator.ts](../../packages/server/src/worker/trace-translator.ts) 1594–1596 行）。契约类型的字段名也写错了：[acp-protocol.ts](../../packages/contracts/src/acp-protocol.ts) 633–636 行写成 `commands`，ACP 和两个桥用的都是 `availableCommands`，条目还有 `input.hint` 和 `_meta`。
+- **PR2 之前，桥发布的命令到不了服务端（决策 2–4 修正）。** 两个桥都发 `available_commands_update`。provider 在两次 prompt 之间只保留用量帧（[provider.ts](../../packages/acp/src/provider.ts) `_handleIdleUpdate`，2079–2122 行），而桥恰好在 `session/new`、`session/load` 刚应答时发这一帧；prompt 期间到达的那一帧又被 trace 翻译器忽略（[trace-translator.ts](../../packages/server/src/worker/trace-translator.ts) 1594–1596 行）。契约类型的字段名也写错了：[acp-protocol.ts](../../packages/contracts/src/acp-protocol.ts) 633–636 行写成 `commands`，ACP 和两个桥用的都是 `availableCommands`，条目还有 `input.hint` 和 `_meta`。
 - **PR1 之前，手动打 `/compact` 会让这一轮失败。** 私有 Chat 里桥会执行压缩，但压缩轮没有回复文字，daemon 看到「有压缩、没文字」就把这一轮判为 `agent_error.empty_or_unparseable_output`（当时的 `daemon.ts` 5335–5345 行；决策 9 修正）。
 - **PR1 之前，手动打 Codex 的 `/logout` 会真的登出（决策 8 修正）。** codex-acp 收到后调用 app-server 的 `account/logout`，而会话 home 的 `auth.json` 是指向运行机器主人凭据的软链接（[codex-home.ts](../../packages/daemon/src/agent-runtime/agent-plugins/codex-home.ts) 133–135 行）。
 
@@ -64,30 +64,34 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 
 每个条目分开保存：稳定 id、来源（`native` / `platform`）、真正发送的调用文字（`/compact`、`$deploy-prod`）、显示名、说明、参数提示、`skill_id`（平台技能）。去重按 `skill_id`，不按名字：平台技能叫 `review` 不会吞掉 Codex 的 `/review`。
 
-### 2. 命令列表从哪里来：轮结束时随终态报告带回
+### 2. 命令列表从哪里来：轮结束时随终态报告带回（已实现）
 
-- **provider 记下最新的一份。** `available_commands_update` 无论在空闲时还是 prompt 中到达，provider 都把它存在会话池条目上（后到的整份替换先到的），并提供读取方法；帧本身照旧丢弃，不进 trace。
-- **daemon 在终态报告里带上。** `task.complete` 和 `task.fail` 增加可选字段 `available_commands`：`{provider, reported_at, commands: [{name, description, hint, kind, skill_id?}]}`。在 daemon 里规整：说明截到 300 字符，提示截到 200 字符，至多 200 条，整个字段不超过 32 KiB；`_meta` 只取出 `kind` 和技能目录名，不上传本地路径；`skill_id` 由 daemon 按它写进的技能对上（决策 7）。
+- **provider 记下最新的一份。** `available_commands_update` 无论在空闲时还是 prompt 中到达，provider 都把它存在会话池条目上（后到的整份替换先到的），并提供读取方法 `availableCommands(chatId)`；子会话（子代理）的列表不算。帧本身照旧不进 trace，trace 翻译器继续把它当作与轮无关的会话状态忽略：这份列表属于 provider 会话，驻留的进程被下一个尝试接着用时它仍在，而 trace 只属于一个尝试。
+  - 两个桥都在 `session/new` 应答后马上发列表，这时 Remi 还在设模式和模型，会话还没进池，原来的空闲处理找不到会话就丢掉了。现在正在启动的进程发来的列表先记下，会话进池时归给它。
+  - 只保留 `contracts` 的 `ObservedSlashCommand`：名字、说明、参数提示、`kind`（`$` 开头或 AIR `kind: "skill"` 为技能，`mcp:` 开头为 MCP 提示词，其余是来源不明的命令），以及 `skillPath` 所在目录的名字。不留 `_meta`，不留路径。名字里有空白的条目丢掉（桥认不出 `/Git Commit`），同名只留第一个。
+- **daemon 在终态报告里带上。** `turn.complete` 和 `task.fail` 增加可选字段 `available_commands`：`{provider, reported_at, commands: [{name, description, hint, kind, skill_id?}]}`。daemon 在这一尝试的每个 prompt 后读一次列表，按 `SLASH_COMMAND_LIMITS` 截好：说明 300 字符，提示 200 字符，至多 200 条，整个字段不超过 32 KiB。agent 从没发过列表时不带这个字段。
+  - `skill_id`：这一轮 `syncAgentSkills` 真正装下的 Remi 技能（它现在返回装下的目录），条目的技能目录等于该技能的目录，或名字等于技能的命令名（生成的 `SKILL.md` 是目录名，自带 frontmatter 的是作者写的 `name`）时填上。Codex 只认 `$` 开头的名字，所以内置的 `/review` 不会变成平台技能 `review`。没装上的（同名目录早已存在）不填。
 - **为什么是轮结束时。** 菜单是在两轮之间用的；Claude 的终端命令过滤要到这一轮的 `system/init` 之后才生效，轮结束时拿到的正是过滤后的那份。终态报告走可靠通道，可以重放；可选字段有先例（PR 5 的 `late_subagents`，[daemon-protocol.ts](../../packages/contracts/src/daemon-protocol.ts) 483–487 行，服务端在 [report-handlers.ts](../../packages/server/src/api/daemon-protocol/report-handlers.ts) 83–100 行读取，缺失时不报错）。
 - **版本不一致。** 新服务端遇到旧 daemon：字段缺失，保留原来存的值。旧服务端遇到新 daemon：只读它认识的字段，多出的字段被忽略。不需要能力位，也不需要新帧。
 
-### 3. 服务端保存：每条会话线一份
+### 3. 服务端保存：每条会话线一份（已实现）
 
-- `multiremi_session_lanes` 加一列 `available_commands TEXT`（JSON，可空），两条迁移链都做加法迁移。先例是 ADR 0020 加在会话线上的 `queue_paused_at`、`queue_pause_reason`。
-- 只接受这条会话线最新尝试的上报（`last_attempt_id` 等于报告里的尝试），重放的旧报告不会盖掉新的。字段格式不对就记一行日志并忽略，不影响终态。
+- `multiremi_session_lanes` 加一列 `available_commands TEXT`（JSON，可空；迁移 `20261020_lane_available_commands`），两条迁移链都做加法迁移。先例是 ADR 0020 加在会话线上的 `queue_paused_at`、`queue_pause_reason`。列里存上报的目录，外加写下它的 `attempt_id`、该尝试的 `created_at` 和 `runtime_id`。
+- 终态事务里写：字段缺失或 null 时什么都不写；格式不对就记一行日志（不记内容）并忽略，不影响终态；服务端再按 `SLASH_COMMAND_LIMITS` 截一遍，只留契约里的键；空列表照存，与「从没报过」（null）不同。
+- 较早的尝试不覆盖较新尝试写下的目录，按尝试的 `created_at` 比较。没有用 `last_attempt_id`：Chat 会话线的这一列只在部分完成路径上推进，不能代表「最新的尝试」。同一个尝试重放时照常写。会话线的 `updated_at` 不变，它决定扫描顺序，而目录不是会话线的进展。
 - 列表跟着会话线走，所以侧边聊天（ADR 0024）有自己的一份。
 
-### 4. 接口
+### 4. 接口（已实现）
 
-- `GET /api/chat/slash-commands?agent_id=<id>[&session_id=<id>]`，只给 Chat 的创建人用（与 `/background-tasks` 相同的会话检查）。返回 `{state, provider, reported_at, commands}`：
+- `GET /api/chat/slash-commands?agent_id=<id>[&session_id=<id>]`，返回 contracts 的 `ChatSlashCommandsResponse`：`{state, provider, reported_at, commands}`。带 `session_id` 时与读这个 Chat 相同，只有创建人能读（别人 403），`agent_id` 可省，填了别的 agent 时 400；只带 `agent_id` 时（还没建的新对话）要求是工作区成员且能和这个 agent 聊天（不能时 403）。两个都没有时 400，agent 不存在时 404。
   - `state: "session"`：这个会话自己的会话线上报过；
-  - `state: "preview"`：会话还没有上报（新对话，或还没跑完第一轮），用当前用户自己和这个 agent 的最近一个对话的列表，provider 和 Runtime 都要与 agent 现在的一致；
+  - `state: "preview"`：会话还没有上报（新对话，或还没跑完第一轮），用当前用户自己和这个 agent 的另一个对话里最新的列表（看最近 50 个），provider 和 Runtime 都要与 agent 现在的一致；别人的对话从不参与；
   - `state: "none"`：都没有（旧 daemon 从不上报，也落到这里）。
   - `session` 而列表为空，表示桥确实发来了空列表，与 `none`（还没收到）分开显示。
   - 存着的列表与 agent 现在的 provider 不一致时不返回（agent 从 Claude 改成 Codex 后，旧列表作废）。
-- 决策 8 的隐藏和拦截在这里过滤，所以改名单只要部署服务端。
-- 网页在 `chat:done` 时让这个查询失效，不需要新的实时事件。
-- CLI 对齐：登记为 `cli_exempt`，类别 `pure_ui`（输入框菜单；agent 自己就能看到它的命令）。
+- 决策 8 的隐藏和拦截在这里过滤（`visibleSlashCommands`），所以改名单只要部署服务端；存储里保留桥发来的全部。
+- 网页在 `chat:done` 时让这个查询失效，不需要新的实时事件（PR3）。
+- CLI 对齐：登记为 `cli_exempt`，类别 `pure_ui`（输入框菜单；用 CLI 发消息的人直接在 `message send` 里写命令）。生成脚本同时补上了此前手写在清单里的后台任务两条路由的分类，脚本重新生成的清单与仓库一致。
 
 ### 5. 新对话和旧 daemon
 
@@ -176,7 +180,7 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 | 名字里有空格的技能，正文自带 frontmatter | 保留作者写的 `name`；这种技能在 Claude 里不能用 `/` 调用，只出现在「技能」组，按普通文字插入。 |
 | agent 换了 provider 或 Runtime | 旧列表不返回，回到 `preview` 或 `none`。 |
 | 平台技能刚加上 | 「技能」组立刻有；原生条目在下一轮结束后对上。 |
-| `/context` 回两条相同的回复（R8） | 实现时在浏览器里确认显示效果，必要时按内容去重或报给上游。 |
+| `/context` 回两条相同的回复（R8） | 原因：claude-agent-acp 0.93 对不调模型的命令（`/context`、`/heapdump`、`/extra-usage`）把 `local_command_output` 和这一轮的 result 各发一次，消息 id 不同（`dist/acp-agent.js` 4242–4260、5381–5395）。Remi 的 trace 按消息 id 分条目，所以聊天里不会多一条消息行，但同一段输出会先作为执行步骤里的中间说明、再作为回复各出现一次。PR2 起 provider 在 Claude 的这类命令里丢掉与上一条文字完全相同的第二条消息；别的提示词和 Codex 不受影响。 |
 | Codex 里以 `/status`、`/review` 开头的普通句子 | 桥按前缀当成命令（这是桥的行为）；`/status` 会被拦截加注，`/review` 照常执行评审。 |
 
 ## 未采用的方案
@@ -194,8 +198,8 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 - PR1 改变的行为（新 daemon 上生效）：被拦截的命令不再执行，模型收到说明行；`/compact` 轮不再失败；Remi 安装的技能 `name` 改为目录名，名字含非 ASCII 字符的技能换到带哈希的目录。PR1 不改接口、协议和存储。
 - 技能名改为目录名后，模型看到的技能名变成 `git-commit` 这样的形式；已有会话下一轮生效。
 - 拦截名单把 `/new`、`/reset` 等普通词也算作命令：一条以 `/new` 开头的消息会带上说明行。以 `/` 开头的普通句子很少，说明行也不改变原文，所以接受。
-- PR2 之后：daemon 协议的终态报告多一个可选字段，不改版本、不加能力位，[协议文档](../daemon-protocol-v2.md)要写明；会话线多一列，两条迁移链都要做，列表不超过 32 KiB；接口快照（`scripts/snapshot-api-routes.ts`）和 `cli-capabilities.json` 要更新。
-- [Chat 契约](../chat.md#斜杠命令)、[开发入口](../dev/README.md)、[Agent 配置规范](../agent-config-spec.md)和 ADR 0023 决策 5 已随 PR1 更新。
+- PR2：daemon 协议的终态报告多一个可选字段，不改版本、不加能力位（[协议文档](../daemon-protocol-v2.md) 5.4b）；会话线多一列，两条迁移链都做了，一份目录不超过 32 KiB；接口快照和 `cli-capabilities.json` 已更新。新 daemon 配旧服务端、旧 daemon 配新服务端都照常工作，只是没有目录（`none`）。
+- [Chat 契约](../chat.md#斜杠命令)、[开发入口](../dev/README.md)、[Agent 配置规范](../agent-config-spec.md)和 ADR 0023 决策 5 已随 PR1、PR2 更新。
 
 ## 实施计划
 
@@ -204,7 +208,7 @@ Antigravity 1.4.0 的录制帧里，会话开始就发 `available_commands_updat
 | PR | 内容 | 量 |
 |---|---|---|
 | PR1 命令轮安全（只动 daemon 和 contracts；已实现） | contracts 的 [slash-commands.ts](../../packages/contracts/src/slash-commands.ts)（开头命令解析、按 provider 的拦截与隐藏名单、说明行、技能命令名）；修正 `AvailableCommandsUpdate` 类型；在本轮输入（[ephemeral.ts](../../packages/daemon/src/agent-runtime/prompts/ephemeral.ts)）和插话文字（`buildSteerInput`）上加拦截；`/compact` 轮「有压缩没文字」不算失败、回复用固定句（[daemon.ts](../../packages/server/src/worker/daemon.ts)）；技能 frontmatter 写目录名（[skills/ephemeral.ts](../../packages/daemon/src/agent-runtime/skills/ephemeral.ts)）。可以单独发版，先堵上今天就存在的 `/compact` 失败和 Codex `/logout`。 | S |
-| PR2 列表带回与保存 | provider 记下最新列表（空闲和 prompt 中都记）；daemon 规整、对上 `skill_id`，写进 `task.complete` / `task.fail`；服务端读可选字段、会话线新列（两条迁移链）、只认最新尝试；`GET /api/chat/slash-commands`（`session` / `preview` / `none`、按 provider 过滤、按名单过滤）；CLI 豁免、接口快照、协议文档。 | M |
+| PR2 列表带回与保存（已实现） | provider 记下最新列表（空闲、启动中和 prompt 中都记，[provider.ts](../../packages/acp/src/provider.ts)）；daemon 规整、对上 `skill_id`（`reportedSlashCommands`），写进 `turn.complete` / `task.fail`；服务端读可选字段（[report-handlers.ts](../../packages/server/src/api/daemon-protocol/report-handlers.ts)）、会话线新列（两条迁移链）、较早的尝试不覆盖（[store/slash-commands.ts](../../packages/server/src/store/slash-commands.ts)）；`GET /api/chat/slash-commands`（`session` / `preview` / `none`、按 provider 过滤、按名单过滤，响应类型在 contracts）；Claude 不调模型的命令的重复回复去重；CLI 豁免、接口快照、协议文档。 | M |
 | PR3 网页菜单 | 用对话自己的 agent；两组、匹配顺序、键盘规则；命令标签与参数占位；只在开头触发；运行中排队；被拦截命令的提示；消息里的命令标签；`chat:done` 刷新；中英文文案。 | M |
 
 PR1 不依赖其他两个。PR2 定下接口形状后 PR3 可以并行。
@@ -213,10 +217,12 @@ PR1 不依赖其他两个。PR2 定下接口形状后 PR3 可以并行。
 
 - **contracts 单元测试（PR1，[slash-commands.test.ts](../../tests/unit/shared/slash-commands.test.ts)）。** 开头命令的解析（`/`、`/ 名字`、`$`、开头空白和换行、大小写、换行后的参数）；三个 provider 的每个被拦截命令及其变体加上说明行后，按最宽松的桥的读法都不再是命令，再加一次不变；允许的命令、隐藏的命令、`/$技能`、文字中间和带标签的命令不受影响；不认识的 provider 用并集；技能命令名对 ASCII 名字与以前的目录名完全一致，非 ASCII 名字带稳定哈希且互不相同。
 - **daemon 测试（PR1）。** [turn-input.test.ts](../../tests/unit/daemon/turn-input.test.ts)：私有 Chat 的允许命令原样在开头；三个 provider 的每个被拦截命令在本轮输入和插话里都带说明行，记录的哈希是发出文字的哈希；按 provider 区分（Codex `/status` 拦截、Claude `/status` 不拦截）；带标签的命令不动。[skills-ephemeral.test.ts](../../tests/unit/daemon/skills-ephemeral.test.ts)：`name` 是目录名；非 ASCII 名字各占一个目录、原名进说明；自带 frontmatter 不变；旧版装下的技能在下一次同步时重写，旧的共享 `skill` 目录被删除。[multiremi-daemon-smoke.test.ts](../../tests/integration/multiremi-daemon-smoke.test.ts)（真 daemon，假 provider 记下收到的文字）：`/compact` 轮只压缩时以「Context compacted.」完成；桥自己回了文字时用桥的文字；普通文字、带标签的 `/compact`、`/compactor`、`/context` 只压缩时仍判失败；`/model` 到达 provider 时说明行在前。
-- **provider 单元测试（测试桥）。** `session/new` 应答后马上到达的列表被记下；prompt 中的重发替换它；读取方法返回最新的一份；超长说明和条数被截断。
-- **服务端测试（SQLite 与 PostgreSQL 都跑）。** 终态报告带列表、不带列表、格式错误；重放的旧尝试不覆盖新的；接口的 `session` / `preview` / `none`；`preview` 只取当前用户自己的对话且 provider、Runtime 一致；别人的会话返回 404；名单过滤生效。
+- **contracts 单元测试（PR2，同一文件）。** 观察到的条目只留名字、说明、提示、`kind` 和技能目录名，不留路径和 `_meta`；名字带空白、重复、超限的条目处理；`boundSlashCommands` 只留契约的键并装进 32 KiB；`visibleSlashCommands` 按 provider 去掉拦截和隐藏的命令，保留 Codex 的 `$技能`。
+- **provider 单元测试（PR2，测试桥，[available-commands.test.ts](../../tests/unit/acp/available-commands.test.ts)）。** `session/new` 应答后、会话进池前到达的列表被记下，路径不留；prompt 中的重发替换它，并在下一个 prompt 里保留；空列表算数；子会话的列表不算；Claude 的 `/context` 重复回复只留一份，其他提示词、内容不同的第二条消息和 Codex 不受影响。
+- **daemon 测试（PR2）。** [skills-ephemeral.test.ts](../../tests/unit/daemon/skills-ephemeral.test.ts)：`syncAgentSkills` 返回装下的目录；`reportedSlashCommands` 按名字和技能目录填 `skill_id`，Codex 只认 `$` 名字，没装上的、没有 id 的不填。[multiremi-daemon-smoke.test.ts](../../tests/integration/multiremi-daemon-smoke.test.ts)：真 daemon 把假 provider 的列表随终态报告带到 Chat 的会话线，平台技能带上 `skill_id`；provider 说不知道或没有这个方法时什么都不存，空列表照存。
+- **服务端测试（PR2，SQLite 与 PostgreSQL 都跑，[chat-slash-commands.test.ts](../../tests/unit/multiremi/chat-slash-commands.test.ts)）。** 迁移在新库和升级的库上各加一次列；经真服务端的协议层发 `turn.complete` / `task.fail`：带列表时存到会话线、路径和多余的键不留；不带（旧 daemon）和格式错误时不动已存的、终态照常；空列表照存；较早的尝试不覆盖较新的，同一尝试可以重写；接口的 `session` / `preview` / `none`，拦截与隐藏的不列出；`preview` 只取请求者自己的对话，别的成员既拿不到预览、也读不了创建人的会话（403）；agent 换 Runtime 后没有预览、换 provider 后旧列表作废；不能和私有 agent 聊天的成员 403，参数错误 400，agent 不存在 404。
 - **网页单元测试。** 扩展 [slash-command-suggestion.test.tsx](../../frontend/packages/views/editor/extensions/slash-command-suggestion.test.tsx)：用的是会话的 agent 而不是 `selectedAgentId`；分组与按 `skill_id` 去重（同名的 Codex `/review` 与平台技能 `review` 不合并）；匹配顺序；弱匹配不抢 Enter，Mod+Enter 照常发送；输入法组字；只在开头触发；插入的标签序列化成调用文字、含下划线也不转义；参数提示不进正文；`preview`、`none`、加载失败三种提示。扩展 [chat-input.test.tsx](../../frontend/packages/views/chat/components/chat-input.test.tsx)：运行中以 `/` 开头的消息按排队发送；被拦截命令的提示。
-- **集成测试（显式开启，需要本机已装的固定版本 bundle，不需要凭据）。** 把这次验证改成测试：假的 Messages / Responses 接口，覆盖发布的列表与终端过滤、`/自定义命令` 和 `/技能` 展开、Codex `$技能` 注入、`/compact` 只有压缩帧、带标签时不执行。放在 `tests/integration/`，默认跳过。
+- **集成测试（显式开启，需要本机已装的固定版本 bundle，不需要凭据；尚未做）。** 把这次验证改成测试：假的 Messages / Responses 接口，覆盖发布的列表与终端过滤、`/自定义命令` 和 `/技能` 展开、Codex `$技能` 注入、`/compact` 只有压缩帧、带标签时不执行。放在 `tests/integration/`，默认跳过。
 - **真实 provider 的手工验收。** 需要用户的凭据，不在本阶段执行：`/compact`、`/review`、`/init`、一个平台技能、一个项目自定义命令，各在 Claude 和 Codex 上跑一遍；确认拦截加注后模型的回答合理。
 
 ## 已决定（评审人按建议决定（2026-10-20），用户可推翻）
