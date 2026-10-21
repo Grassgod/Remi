@@ -84,6 +84,15 @@ async function startUiProcess(databasePath: string, runtimePort: number, secret:
 const harnesses: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of harnesses.splice(0)) await h.dispose(); });
 
+// Bound for the whole path: UI command -> DB write -> cross-process head pointer
+// -> daemon `turn.message`. ADR 0007's <=200 ms budget covers only the channel
+// hop (a ~100-byte head pointer), not this full path, and 200 ms flaked at
+// 232 ms on a shared CI runner. 350 ms absorbs runner jitter while staying below
+// the 400 ms poll that ADR 0007 / C12 removed (and far below
+// DAEMON_HEARTBEAT_INTERVAL_MS), so a regression back to polling or to waiting
+// for a heartbeat still fails here.
+const UI_TO_DAEMON_FANOUT_BOUND_MS = 350;
+
 describe("MUL-419 ui to runtime fanout across OS processes", () => {
   for (const status of ["responded", "timeout", "cancelled"] as const) {
   it(`shares a UI-${status} decision message with its executor and Feishu card host`, async () => {
@@ -180,8 +189,8 @@ describe("MUL-419 ui to runtime fanout across OS processes", () => {
       expect((await ui.command(status === "responded" ? { op: "respond_human_request", requestId, humanToken: humanAccess.token }
         : { op: "expire_human_request", requestId, status })).requestId).toBe(requestId);
       if (status === "responded") await waitFor(() => h.received.some(frame => frame.t === "turn.message"
-        && frame.p.message.reply_to_id === requestId), "decision reply message", 200);
-      expect(performance.now() - started).toBeLessThan(200);
+        && frame.p.message.reply_to_id === requestId), "decision reply message", UI_TO_DAEMON_FANOUT_BOUND_MS);
+      expect(performance.now() - started).toBeLessThan(UI_TO_DAEMON_FANOUT_BOUND_MS);
       expect(claims).not.toHaveBeenCalled();
       claims.mockRestore();
       expect(h.received.filter(frame => frame.t === "turn.message" && frame.p.message.reply_to_id === requestId))
