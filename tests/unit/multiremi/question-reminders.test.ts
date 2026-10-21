@@ -4,7 +4,14 @@ import { resetMultiremiTestEnv } from './helpers.js';
 import { ISSUE_DECISION_CARD_REMINDER_DELAY_MS } from '@multiremi/store/repos/feishu-bot-repo.js';
 import { decodeDecisionCardBody, questionCardAction } from '@shared/feishu-task-card.js';
 
-afterEach(resetMultiremiTestEnv);
+// setup() sets the bot key per case; restore it so later cases and files see
+// the environment they started with.
+const previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+afterEach(() => {
+  if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+  else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
+  resetMultiremiTestEnv();
+});
 pendingTurnBackendTests('persistent native Q reminders', fixture => {
   function setup() {
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString('base64');

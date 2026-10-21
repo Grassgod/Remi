@@ -60,4 +60,4 @@ pendingTurnBackendTests("cold bootstrap offer acceptance", fixture => {
       expect(store.getTask(offer.attempt_id)?.status).toBe(accepted ? "dispatched" : "queued");
     } finally { layer.closeAll(); layer.stop(); await layer.drain(); }
   }, 120_000);
-}, { isolation: "snapshot" });
+}, { isolation: "snapshot", file: import.meta.path });

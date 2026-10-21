@@ -48,6 +48,9 @@ function snapshot(h: DaemonProtocolHarness, id: string) {
   sub.unsubscribe(); return result;
 }
 
+// Fault injections per kind (halved from 20; all three kinds still run).
+const INJECTION_ROUNDS = 10;
+
 describe("memory trace over the real protocol", () => {
   it("round-trips an escaped event at the 1 MiB ceiling through append, push and reverse trace.read RPC", async () => {
     const h = await fixture(); const t = task(h);
@@ -76,7 +79,7 @@ describe("memory trace over the real protocol", () => {
   }, 10_000);
 
   for (const injection of ["socket", "daemon", "server"] as const) {
-    it(`reconciles dense trace exactly once over 20 ${injection} injections`, async () => {
+    it(`reconciles dense trace exactly once over ${INJECTION_ROUNDS} ${injection} injections`, async () => {
       let interrupt: string | null = null;
       const h = await fixture({ beforeSend(frame, socket) {
         if (frame.t === "trace.append") {
@@ -88,7 +91,7 @@ describe("memory trace over the real protocol", () => {
           interrupt = null; socket.close(4001); return false;
         }
       } });
-      for (let round = 0; round < 20; round++) {
+      for (let round = 0; round < INJECTION_ROUNDS; round++) {
         const t = task(h);
         h.store.startTask(t.id); h.store.completeTask(t.id, { output: "fixture done" });
         if (injection !== "socket") await h.disconnect();

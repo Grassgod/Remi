@@ -1,6 +1,8 @@
 # 统一模型切换手册
 
-本手册供全部存储、收件箱、daemon、接口与网页改接合入后使用。当前分支已接入存储迁移，尚未进行生产切换。209 操作、切换窗口、发版与删表均由负责人另行授权；本单只在本地 SQLite 与 PostgreSQL 验证脚本。完整 fleet 与 outbox 门禁沿用 [daemon v2 切换清单](daemon-v2-cutover.md)，运行时名单从平台动态获取。
+> 状态（2026-10-21，用户确认）：生产已切换到统一模型。第 2 步的 209 数据副本演练不会再执行，其脚本、说明页与测试已删除；以下步骤保留为当时的切换记录。
+
+本手册供全部存储、收件箱、daemon、接口与网页改接合入后使用。编写时当前分支已接入存储迁移，尚未进行生产切换。209 操作、切换窗口、发版与删表均由负责人另行授权；本单只在本地 SQLite 与 PostgreSQL 验证脚本。完整 fleet 与 outbox 门禁沿用 [daemon v2 切换清单](daemon-v2-cutover.md)，运行时名单从平台动态获取。
 
 ## 切换顺序
 
@@ -55,7 +57,7 @@
    ```
 
    若正式版号不高于拒绝用例中的旧版号，停止填写并核对发布方案，不放宽断言。发布前核对 `package.json`、正式 tag、Release 资产、常量及目标 main SHA；此处定向检查不替代发布负责人确认的发版门禁。
-2. 备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。[209 数据副本演练步骤与脚本](../migrations/unified-model-copy-rehearsal.md)已准备；本任务不执行。执行须贺华杰批准，由 Remi-CC 完成，取得行数、Issue 抽样、真实读进度和恢复耗时证据后再申请生产窗口。
+2. 备份脱敏副本供 QA 演练，不允许开发 agent 连接生产库。当时为此准备了 209 数据副本演练脚本（`scripts/rehearse-unified-model-copy.*` 及说明页），须贺华杰批准、由 Remi-CC 执行。生产切换已完成（2026-10-21 用户确认），该演练不再需要，脚本、说明页与测试已删除；此步骤不再是任何窗口的前提。
 3. Remi-CC 执行数据库与 api-home 备份，保留校验文件和恢复清单。备份脚本需要 Bash、匹配服务端主版本的 pg_dump/pg_restore、tar 和 sha256sum。API 镜像目前没有 pg_dump；由运维选择已具备客户端的 PostgreSQL 工具容器，挂载 api-home 与备份目录，注入已有连接环境变量。不要为执行备份临时修改生产 API 镜像。
 
    ```bash
@@ -70,7 +72,7 @@
 
    schema 锁释放后，实际 `serve` 继续执行 `prepareUsageAccountingStartup`，同步 server 入口再执行 `ensureUsageAccountingStartup`，用量 gate 成功才继续启动 HTTP/后台任务。F24 用 v0.2.87/#384 两个标记已就绪的副本，首启与重启分别按 api、api-runtime 角色运行同一数据库顺序，报告全部用量表的稳定内容摘要、原 attempt ID/归属、actual/context/unknown/金额/coverage 和前后 mismatch；有任何内容变化先解释并修复，不能只看 marker 或行数通过。
 
-   F24 的 `copy-startup.json` / `copy-timing.json` 记录 api、api-runtime 各自独立离线进程的首启/重启，含角色、轮次、PID、完整候选 SHA/镜像 digest、毫秒单位及 success/not_ready。父进程从 spawn 前计时，子进程完成 schema migration、prepare/ensure gate 及统一模型/全部用量/checkpoint/实际读进度/Issue/未读通知的必要读回校验后发送 offline ready；`startup_total_ms` 覆盖这段实际路径，ready 后清理/退出另计。role 锁、数据库连接、schema migration、prepare/ensure gate（含锁等待）的步骤和 `database_total_ms` 保留单列；失败不报 ready，保留阶段与已测步骤。仍不启动 HTTP、daemon、飞书或 outbox，`http_ready_measured=false`。未测容器调度/冷启动、Store facade、read pool/Live Hub/peer、后台任务与生产竞争/并发启动，离线 ready 不代表完整生产服务 ready。窗口预算采用最慢副本两角色首启实测 startup_total_ms 之和，并另外预留未测服务初始化与人工核对时间。
+   以下为已删除的副本演练脚本当时的产物说明，仅作记录。F24 的 `copy-startup.json` / `copy-timing.json` 记录 api、api-runtime 各自独立离线进程的首启/重启，含角色、轮次、PID、完整候选 SHA/镜像 digest、毫秒单位及 success/not_ready。父进程从 spawn 前计时，子进程完成 schema migration、prepare/ensure gate 及统一模型/全部用量/checkpoint/实际读进度/Issue/未读通知的必要读回校验后发送 offline ready；`startup_total_ms` 覆盖这段实际路径，ready 后清理/退出另计。role 锁、数据库连接、schema migration、prepare/ensure gate（含锁等待）的步骤和 `database_total_ms` 保留单列；失败不报 ready，保留阶段与已测步骤。仍不启动 HTTP、daemon、飞书或 outbox，`http_ready_measured=false`。未测容器调度/冷启动、Store facade、read pool/Live Hub/peer、后台任务与生产竞争/并发启动，离线 ready 不代表完整生产服务 ready。窗口预算采用最慢副本两角色首启实测 startup_total_ms 之和，并另外预留未测服务初始化与人工核对时间。
 6. 只读运行对账，记录 counts、mismatches、各会话 head 和游标。迁移前报告用于核对 attempt 身份及链分组；日常对账不再要求人的 cursor 等于当前 head。
 
    ```bash

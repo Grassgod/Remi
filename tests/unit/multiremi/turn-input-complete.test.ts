@@ -197,4 +197,4 @@ pendingTurnBackendTests("plain turn input acknowledgement", fixture => {
     expect(head.replay).toBe(true);
     expect(head.range!.complete).toBeUndefined();
   });
-}, { isolation: "snapshot" });
+}, { isolation: "snapshot", file: import.meta.path });

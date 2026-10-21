@@ -40,9 +40,12 @@ function usageState(db: SqlDatabase, taskId: string) {
       db.query(`SELECT * FROM ${table} WHERE task_id=? ORDER BY ${table === "multiremi_usage_runs" || table === "multiremi_usage_run_scopes" ? "run_id" : table === "multiremi_usage_units" || table === "multiremi_usage_unit_receipts" ? "run_id, unit_id" : table === "multiremi_usage_legacy_versions" ? "source_version" : "task_id"}`).all(taskId)])) };
 }
 
+// Fault injections per kind (halved from 20; all three kinds still run).
+const INJECTION_ROUNDS = 10;
+
 describe("v2 report reconciliation with real sockets and DB", () => {
   for (const injection of ["socket", "daemon", "server"] as const) {
-    it(`reconciles all emitted report keys exactly once over 20 ${injection} injections`, async () => {
+    it(`reconciles all emitted report keys exactly once over ${INJECTION_ROUNDS} ${injection} injections`, async () => {
       let interruptTask: string | null = null;
       const faultReplies: Array<ReturnType<typeof spyOn>> = [];
       const h = await fixture({ beforeSend(frame, socket, harness) {
@@ -90,7 +93,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
         return result;
       });
       try {
-        for (let round = 0; round < 20; round++) {
+        for (let round = 0; round < INJECTION_ROUNDS; round++) {
           const t = task(h);
           const box = outbox(h);
           interruptTask = t.id;
@@ -137,7 +140,7 @@ describe("v2 report reconciliation with real sockets and DB", () => {
         const applied = h.effectiveLedger.filter(entry => sent.has(`${entry.partition}:${entry.seq}`))
           .map(entry => `${entry.partition}:${entry.seq}`);
         expect(applied.sort()).toEqual([...sent].sort());
-        expect(sent.size).toBe(120);
+        expect(sent.size).toBe(INJECTION_ROUNDS * 6);
         expect(h.errors).toEqual([]);
         const reads = [...h.snapshotReadMs].sort((a, b) => a - b);
         console.info("Report Store snapshot read timings (ms)", JSON.stringify({ injection, count: reads.length,

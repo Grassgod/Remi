@@ -17,6 +17,7 @@ import {
 import { runMultiremi } from "../../../apps/remi/cli/multiremi.js";
 import { dispatch } from "../../../apps/remi/cli/index.js";
 import { unifiedCommandSpecs } from "../../../apps/remi/cli/commands/unified.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 
 const root = resolve(import.meta.dir, "../../..");
 const realFetch = globalThis.fetch;
@@ -77,7 +78,7 @@ describe("native collaboration CLI contracts", () => {
     expect(JSON.parse(result.stdout)).toMatchObject([{ seq: 1, body_md: "first entry" }, { seq: 50, body_md: "last" }]);
   });
 
-  for (const backend of ["sqlite", "pg"] as const) {
+  for (const backend of backendsInScope(import.meta.path, ["sqlite", "pg"] as const)) {
     it.skipIf(backend === "pg" && !conversationLogPgAdminUrl)(
       `${backend}: session log get reports Issue claim, Chat reply and symbolic recipient delivery`, async () => {
         await withConversationLogStore(backend, async (store, db) => {

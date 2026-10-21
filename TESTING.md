@@ -42,6 +42,20 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 [PR2大夹具](tests/fixtures/multiremi/first-screen-hotspots-pr2-fixture.ts)的 `attachmentOnly: true` 仅用于附件上传、权限和ETag功能场景，保留所需身份、Issue和Chat；未传该选项的golden、query-count和benchmark仍使用原默认规模。不得用小夹具替代规模回归或更新golden来掩盖变化。
 
+### PostgreSQL 覆盖范围
+
+双 dialect 套件默认在 SQLite 和 PostgreSQL 上都跑。[postgres-scope](tests/helpers/postgres-scope.ts) 是唯一的例外清单：列入的套件只跳过 PostgreSQL 一侧，SQLite 仍跑全部用例，每项附一行理由。只有 PostgreSQL 用例与 SQLite 是同一个业务场景、断言不区分 dialect 时才可列入；有下列任一情况就必须保留 PostgreSQL：
+
+- 断言或分支依赖 dialect、SQL 方言差异、catalog/EXPLAIN/PRAGMA、trigger 或 sequence；
+- 锁、事务深度、savepoint、回滚，或在事务中注入故障；
+- 并发、竞态、多连接、Worker 或子进程；
+- 迁移、历史 schema 或回填；
+- 控制时钟，或依赖过期、lease、提醒、心跳、空闲天数等时间戳比较；
+- 同步 PG bridge、read pool、回复大小上限、语句/查询计数或 golden；
+- 文件里有专门的 PostgreSQL 用例块，或曾因 PostgreSQL 缺陷修复过（`git log` 中提到 postgres/PG 的修复提交）。
+
+接入方式：`pendingTurnBackendTests` 传 `file: import.meta.path`，自写循环用 `backendsInScope(import.meta.path, [...])`；不在清单里的文件两种写法都保留两个 dialect。[架构守卫](tests/arch/postgres-scope.test.ts)要求清单中的文件存在、理由只占一行、经上述入口接入，且只有清单内的文件使用这些入口；它还按文件名和内容信号（锁/回滚、数据库故障注入、并发/进程、迁移、catalog/trigger、时钟与时间戳、read pool/回复上限/语句计数/reopen）拒绝条目。命中信号时把套件留在双 dialect，不要放宽信号。守卫不读 git 历史，新增条目时需人工核对上面最后一条。
+
 ## 真实服务与手动验证
 
 | 根脚本 | 验证内容 | 运行前准备 |
@@ -107,9 +121,9 @@ main 后端变红时应定位相应合并并修复或回滚；测试问题由 QA
 
 直接 `bun test <path>` 保留 `NODE_ENV`、`PATH`、`HOME`、`SHELL`、`USER`、`GIT_*` 和 `SQLITE_LIB_PATH` 等宿主能力，只提供上述进程内隔离。preload 不修改 HOME，不 mock OS；Bun 1.3.14 的 `homedir()` 和 `userInfo().homedir` 在启动时固定。workspaces、state 的 HOME 兜底在 `NODE_ENV=test` 时抛 `real_home_default_in_test`，要求开关或显式参数。
 
-`bun run test <path> [bun test 参数]` 通过 [run-tests.ts](scripts/run-tests.ts) 在启动测试进程前换成假 HOME（Windows 同设 USERPROFILE），清除 XDG_*，把 Git 全局配置指向不存在的临时 .gitconfig，并将 Bun 转译/安装缓存放在仓库 `node_modules/.cache/bun/` 下。跑完递归检查假 HOME；任何文件、空目录或符号链接都逐行报告并返回 1，无白名单。HOME 为空时保留测试退出码，再清理假 HOME。CI 的架构和后端全套均使用此包装；这层覆盖无路径开关及未来新增的 HOME 写入。遇到 Git 配置差异，定位实际影响并修测试夹具，不修改用户全局配置。
+`bun run test <path> [bun test 参数]` 通过 [run-tests.ts](scripts/run-tests.ts) 在启动测试进程前换成假 HOME（Windows 同设 USERPROFILE），清除 XDG_*，把 Git 全局配置指向不存在的临时 .gitconfig，并将 Bun 转译/安装缓存放在仓库 `node_modules/.cache/bun/` 下。假 HOME 启动前预置一组真实开发机会有、代码不得触碰的 sentinel（带 SSH Mesh include 块的 `.ssh/config`、`authorized_keys`、已有 mesh 工作区与 include、daemon outbox 与 workspaces 状态，见 `homeSentinels`）。跑完对整个假 HOME 做快照比对（目录、文件 SHA-256、符号链接目标，不跟随链接）；任何新增、改写或删除都逐行报告并返回 1，无白名单。HOME 与预置内容一致时保留测试退出码，再清理假 HOME。CI 的架构和后端全套均使用此包装；这层覆盖无路径开关及未来新增的 HOME 写入。遇到 Git 配置差异，定位实际影响并修测试夹具，不修改用户全局配置。
 
-Daemon 测试和独立 harness 必须注入 [disabledSshMeshRuntime()](tests/helpers/ssh-mesh-isolation.ts)，或使用带临时 `home` 的 SSH Mesh paths；仅更换 mesh root 不会隔离 `.ssh/config` 和 `.ssh/authorized_keys`。`NODE_ENV=test` 时，[SSH Mesh 路径解析](packages/daemon/src/ssh-mesh.ts)拒绝模块加载时的 `HOME` / `userInfo().homedir` / `homedir()`（含符号链接别名），抛出 `ssh_mesh_real_home_in_test`；进程内改写 HOME 不能代替显式注入。启动 daemon 的测试子进程也必须使用临时 HOME。[回归测试](tests/integration/daemon-real-home-isolation.test.ts)用假 HOME 运行 steer、approval-e2e、drain-outbox，比较整个 HOME 的目录列表、文件 SHA-256 和符号链接，保留原有 Mesh/OpenSSH sentinel，并以故意写入验证快照能检出变化。三个子进程真实并行运行，共享一个 90 秒总预算；steer、approval-e2e 和 drain-outbox 保留各自原有用例期限，并在三者都结束后检查整个 HOME。
+Daemon 测试和独立 harness 必须注入 [disabledSshMeshRuntime()](tests/helpers/ssh-mesh-isolation.ts)，或使用带临时 `home` 的 SSH Mesh paths；仅更换 mesh root 不会隔离 `.ssh/config` 和 `.ssh/authorized_keys`。`NODE_ENV=test` 时，[SSH Mesh 路径解析](packages/daemon/src/ssh-mesh.ts)拒绝模块加载时的 `HOME` / `userInfo().homedir` / `homedir()`（含符号链接别名），抛出 `ssh_mesh_real_home_in_test`；进程内改写 HOME 不能代替显式注入。启动 daemon 的测试子进程也必须使用临时 HOME。上述包装的 sentinel HOME 覆盖每个后端测试文件（原先只由单独的回归测试对 steer、approval-e2e、drain-outbox 三个文件复跑检查），[包装回归](tests/unit/scripts/run-tests.test.ts)以故意新增、改写和删除验证快照能检出变化。
 
 [环境护栏测试](tests/arch/hermetic-test-env.test.ts)检查 preload 挂载、实际执行标记和变量泄漏；测试只导入 policy，不能通过直接导入 preload 自行清理后证明隔离成功。[HOME 调用 ratchet](tests/arch/homedir-call-sites.test.ts)限制生产源码每文件的 HOME 读取数量，新增调用需要隔离审查。通过 `bun run` 执行的独立手动 harness 不加载该测试 preload，也不走 test 包装，仍使用真实环境。
 

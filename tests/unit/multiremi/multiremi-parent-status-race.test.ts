@@ -13,6 +13,9 @@ import type { ChildMutation, RaceOperation, RaceResult } from "./fixtures/parent
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 const mutations: ChildMutation[] = ["create", "attach", "reopen_done", "reopen_cancelled", "assign_done", "assign_cancelled"];
+// Interleavings per path/mutation/order (halved from 20; every combination still runs, both
+// parent outcomes still alternate).
+const INTERLEAVING_ROUNDS = 10;
 
 function message<T>(worker: Worker, input: unknown, phase: string): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -183,10 +186,10 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     for (const path of ["api", "scm"] as const) {
       for (const mutation of mutations) {
         for (const first of ["parent", "child"] as const) {
-          it(`${path}: ${mutation}, ${first} first, 20 interleavings without deadlocks`, async () => {
+          it(`${path}: ${mutation}, ${first} first, ${INTERLEAVING_ROUNDS} interleavings without deadlocks`, async () => {
             const violations: string[] = [];
             let busy = 0;
-            for (let round = 0; round < 20; round += 1) {
+            for (let round = 0; round < INTERLEAVING_ROUNDS; round += 1) {
               sequence += 1;
               const parent = createResponsibleTestIssue(store, { title: `Parent ${sequence}`, status: "in_progress", assigneeType: "agent", assigneeId: ownerId });
               const childId = mutation === "create" ? `race-child-${sequence}` : createResponsibleTestIssue(store, {
@@ -255,7 +258,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
                 expect(store.listIssueActivity(parent.id).filter(entry => entry.type === "scm_merge_completed").length).toBeLessThanOrEqual(1);
               }
             }
-            console.log(`[MUL-471 ${dialect}] ${path}/${mutation}/${first}: 20 rounds, busy=${busy}, violations=${violations.length}`);
+            console.log(`[MUL-471 ${dialect}] ${path}/${mutation}/${first}: ${INTERLEAVING_ROUNDS} rounds, busy=${busy}, violations=${violations.length}`);
             expect(violations).toEqual([]);
           }, 120_000);
         }

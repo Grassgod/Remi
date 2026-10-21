@@ -220,4 +220,4 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue API', fixture => {
     expect((await f.request('POST', `/api/turns/${f.store.getTurnForAttempt(attempt.id)!.id}/cancel`, {}, task.token)).status).toBe(200);
     expect((await (await f.request('GET', f.base)).json()).paused).toMatchObject({ reason: 'turn_ended' });
   }, 120_000);
-}, { isolation: "snapshot" });
+}, { isolation: "snapshot", file: import.meta.path });

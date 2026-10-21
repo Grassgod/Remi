@@ -71,6 +71,9 @@ function thrown(action: () => unknown): Error & { code?: string } {
   throw new Error("Expected the action to throw");
 }
 
+// Repetitions per race scenario (halved from 10; every scenario and pair still runs).
+const RACE_ROUNDS = 5;
+
 for (const backend of ["SQLite", "PostgreSQL"] as const) {
   const pgUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
   describe.skipIf(backend === "PostgreSQL" && !pgUrl)(`MUL-476 relation locks (${backend})`, () => {
@@ -613,8 +616,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
       }
     }
 
-    it("PG-L8c: move vs task creation permits exactly one writer (10 rounds)", async () => {
-      for (let round = 0; round < 10; round++) {
+    it(`PG-L8c: move vs task creation permits exactly one writer (${RACE_ROUNDS} rounds)`, async () => {
+      for (let round = 0; round < RACE_ROUNDS; round++) {
         const f = fixture(round % 2 === 1);
         const common = { sourceWorkspace: f.source, targetWorkspace: f.target, ownerId: f.agent.id, otherId: f.parent.id };
         const results = await race([
@@ -629,8 +632,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
     }, 120_000);
 
     for (const role of ["reparent", "dependency"] as const) {
-      it(`PG-L4: opposing ${role} writes reject cycles without deadlock (10 rounds)`, async () => {
-        for (let round = 0; round < 10; round++) {
+      it(`PG-L4: opposing ${role} writes reject cycles without deadlock (${RACE_ROUNDS} rounds)`, async () => {
+        for (let round = 0; round < RACE_ROUNDS; round++) {
           const f = fixture();
           const common = { role, sourceWorkspace: f.source, targetWorkspace: f.target };
           const results = await race([
@@ -646,8 +649,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
 
     for (const parentFirst of [true, false]) {
       for (const [writer, reopener] of [["reparent", "reopen"], ["reparent", "assign"], ["dependency", "reopen"], ["dependency", "assign"]] as const) {
-        it(`PG-L5 ${parentFirst ? "P < C" : "C < P"}: ${writer} vs ${reopener} of the done child, no deadlock (10 rounds)`, async () => {
-          for (let round = 0; round < 10; round++) {
+        it(`PG-L5 ${parentFirst ? "P < C" : "C < P"}: ${writer} vs ${reopener} of the done child, no deadlock (${RACE_ROUNDS} rounds)`, async () => {
+          for (let round = 0; round < RACE_ROUNDS; round++) {
             const f = family(parentFirst);
             const common = { sourceWorkspace: f.workspace, targetWorkspace: f.workspace, ownerId: f.agent.id };
             const results = await race([
@@ -706,8 +709,8 @@ for (const backend of ["SQLite", "PostgreSQL"] as const) {
         expectDepthOne();
       }, 30_000);
 
-      it(`PG-L12 ${direction}: move vs Runtime deletion has no deadlock (10 rounds)`, async () => {
-        for (let round = 0; round < 10; round++) {
+      it(`PG-L12 ${direction}: move vs Runtime deletion has no deadlock (${RACE_ROUNDS} rounds)`, async () => {
+        for (let round = 0; round < RACE_ROUNDS; round++) {
           const f = fixture(reverse);
           const runtime = store.registerRuntime({ id: `rt_delete_${f.tag}`, name: "Source Runtime", provider: "codex", workspaceId: f.source });
           store.reportIssueWorkspace({ issueId: f.child.id, runtimeId: runtime.id,

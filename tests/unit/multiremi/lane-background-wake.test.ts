@@ -17,10 +17,11 @@ import { backgroundDoorbellDedupeKey, readBackgroundDoorbell } from "@shared/bac
 import type { DaemonLaneBackgroundWakePayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { traceBackfillBackends } from "./trace-backfill-backends.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 import { PROVIDER_SESSION, backgroundWorld, daemonHarness, runAttempt, type BackgroundWorld } from "./background-tasks-fixture.js";
 
 const TIMEOUT = 60_000;
-const backends = await traceBackfillBackends("bgwake");
+const backends = backendsInScope(import.meta.path, await traceBackfillBackends("bgwake"));
 
 afterAll(async () => {
   for (const backend of backends) await backend.dispose();

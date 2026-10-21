@@ -70,6 +70,21 @@ describe("test HOME wrapper", () => {
     expect(result.output).toContain(".remi/qa-canary");
   });
 
+  it("starts with real-looking HOME sentinels and fails on a rewrite or a deletion", () => {
+    const result = fixture(`import { readFileSync, rmSync } from "node:fs";
+    test("sentinels", () => {
+      expect(readFileSync(join(homedir(), ".ssh", "config"), "utf8")).toContain("# >>> multiremi ssh mesh >>>");
+      expect(readFileSync(join(homedir(), ".ssh", "authorized_keys"), "utf8")).toContain(" personal");
+      writeFileSync(join(homedir(), ".ssh", "authorized_keys"), "ssh-ed25519 replaced\\n");
+      rmSync(join(homedir(), ".multiremi", "outbox", "sentinel"));
+    });`);
+    expect(result.output).toContain("1 pass");
+    expect(result.status).toBe(1);
+    expect(result.output).toContain(".ssh/authorized_keys (changed)");
+    expect(result.output).toContain(".multiremi/outbox/sentinel (deleted)");
+    expect(result.output).not.toContain(".ssh/config (changed)");
+  });
+
   it("rejects empty directories and symlinks without traversing them", () => {
     const result = fixture(`test("entries", () => {
       mkdirSync(join(homedir(), "empty"));
