@@ -5181,6 +5181,10 @@ runMigrations(this.db);
     return this.chat.createChatSession(input);
   }
 
+  isChatSessionIdUsed(id: string): boolean {
+    return this.chat.isChatSessionIdUsed(id);
+  }
+
   listChatSessions(workspaceId?: string | null, options: Parameters<ChatRepo["listChatSessions"]>[1] = {}): MultiremiChatSession[] {
     return this.chat.listChatSessions(workspaceId, options);
   }

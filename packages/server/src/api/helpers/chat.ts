@@ -29,8 +29,18 @@ export function requestedChatWorkspaceId(
   return resolveRequestWorkspaceId(c, store, explicitId);
 }
 
+/**
+ * A client-made chat id has the server's own shape (`createId("chat")`), so
+ * a client can open a new chat before the create answers. Internal callers
+ * may use other ids; the API takes only this one.
+ */
+const CLIENT_CHAT_SESSION_ID = /^chat_[0-9a-z]{12}$/;
+
 export function withChatSessionRequestContext(c: Context, store: MultiremiStore, input: CreateChatSessionInput): CreateChatSessionInput | Response {
   if ("issueId" in input || "issue_id" in input) return c.json({ error: "Chat sessions do not support Issue binding" }, 400);
+  if (input.id != null && (typeof input.id !== "string" || !CLIENT_CHAT_SESSION_ID.test(input.id))) {
+    return c.json({ error: "id must be chat_ followed by 12 lowercase letters or digits" }, 400);
+  }
   const workspaceId = requestedChatWorkspaceId(c, store, input);
   if (workspaceId instanceof Response) return workspaceId;
   const denied = denyCurrentUserWorkspaceAccess(c, store, workspaceId);
@@ -42,6 +52,11 @@ export function withChatSessionRequestContext(c: Context, store: MultiremiStore,
   if (!agent || agent.workspaceId !== workspaceId) return c.json({ error: "agent not found" }, 404);
   if (!canCurrentUserAccessAgent(c, store, agent)) {
     return c.json({ error: "you do not have access to this agent" }, 403);
+  }
+  // Checked only for a caller allowed to create here. The answer is the same
+  // for every workspace and says nothing about the chat that had the id.
+  if (input.id != null && store.isChatSessionIdUsed(input.id)) {
+    return c.json({ error: "Chat session id has already been used" }, 409);
   }
   return withChatSessionCreator(c, { ...input, workspaceId, workspace_id: workspaceId });
 }
