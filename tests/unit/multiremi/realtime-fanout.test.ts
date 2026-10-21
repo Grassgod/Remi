@@ -8,7 +8,7 @@
  * second OS process would add variance without changing what can break here.
  * PR-C (MUL-464) scales the same topology out to real child processes.
  */
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeAll, describe, expect, it, spyOn } from "bun:test";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -133,6 +133,46 @@ describe("realtime fanout — role routing", () => {
       expect(browserFrames).toHaveLength(0);
       expect(daemonEvents).toEqual([{ type: "task:queued", task }]);
     } finally {
+      fanout.close();
+    }
+  });
+
+  it("logs a peer chat:done with its lag behind the commit and the sockets it reached", () => {
+    const store = createStore();
+    const agent = store.createAgent({ name: "Fanout chat", provider: "codex" });
+    const chat = store.createChatSession({ agentId: agent.id, workspaceId: "local", creatorId: "local" });
+    const userFrames: string[] = [];
+    const registries = {
+      browser: new Map() as any,
+      browserUser: new Map([["local", new Set([fakeBrowserClient(userFrames)])]]) as any,
+    };
+    const fanout = createRealtimeFanout({ role: "ui", store, registries });
+    const info = spyOn(console, "log").mockImplementation(() => {});
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const chatDone = (taskId: string, committedMsAgo: number): PeerEventEnvelope => ({
+      v: 1, origin: "process-runtime", kind: "workspace_event",
+      payload: { event: { type: "chat:done", workspaceId: "local", chatSessionId: chat.id, actorType: "system", actorId: "",
+        payload: { chat_session_id: chat.id, task_id: taskId, created_at: new Date(Date.now() - committedMsAgo).toISOString() } } },
+    });
+    const lines = (spy: typeof info) => spy.mock.calls.filter(call => String(call[0]).includes("peer chat:done"));
+    try {
+      fanout.deliverRemote(chatDone("tsk_prompt", 0));
+      fanout.deliverRemote(chatDone("tsk_late", 4_000));
+      expect(userFrames.map(frame => JSON.parse(frame).payload.task_id)).toEqual(["tsk_prompt", "tsk_late"]);
+      expect(lines(info)).toHaveLength(1);
+      expect(lines(info)[0]![1]).toMatchObject({ event: "peer_chat_done", chat_session_id: chat.id, task_id: "tsk_prompt", sockets: 1 });
+      expect(lines(warn)).toHaveLength(1);
+      expect(String(lines(warn)[0]![0])).toContain("peer chat:done delivered late");
+      expect(lines(warn)[0]![1]).toMatchObject({ task_id: "tsk_late", sockets: 1 });
+      expect((lines(warn)[0]![1] as { lag_ms: number }).lag_ms).toBeGreaterThanOrEqual(4_000);
+
+      // A process that serves no browser does not report a browser delivery.
+      const runtime = createRealtimeFanout({ role: "runtime", store, registries });
+      try { runtime.deliverRemote(chatDone("tsk_runtime", 0)); } finally { runtime.close(); }
+      expect(lines(info)).toHaveLength(1);
+    } finally {
+      info.mockRestore();
+      warn.mockRestore();
       fanout.close();
     }
   });

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import type { HubFrame, HubStreamKey } from "@multiremi/contracts/live-hub.js";
 import { createHub, type HubFillReader } from "@multiremi/api/hub/hub-core.js";
 import { createPeerHubTransport } from "@multiremi/api/hub/peer-hub-transport.js";
@@ -34,7 +34,29 @@ function reader() {
     add(seq: number) {
       rows.set(seq, { seq, kind: "entry", payload: { session_id: "s", seq, kind: "message", visibility: "shown", revision: 1 } });
     },
+    /** Write a whole row, as the shared database holds it after the peer's commit. */
+    put(seq: number, payload: Record<string, unknown>) {
+      rows.set(seq, { seq, kind: "entry", payload: { session_id: "s", seq, ...payload } });
+    },
     get reads() { return reads; },
+  };
+}
+
+/** A Chat turn card: hidden while its turn runs, shown once it ends. */
+function turnCard(revision: number, status: "running" | "completed") {
+  return { id: "turn_1", kind: "turn", revision, visibility: status === "completed" ? "shown" : "hidden", metadata: { status } };
+}
+
+function recordingSink() {
+  const frames: HubFrame[] = [];
+  const gaps: [number, number][] = [];
+  return {
+    frames, gaps,
+    sink: {
+      getBufferedAmount: () => 0,
+      send: (batch: readonly HubFrame[]) => { frames.push(...batch); },
+      gap: (from: number, to: number) => { gaps.push([from, to]); },
+    },
   };
 }
 
@@ -164,22 +186,94 @@ describe("Hub peer transport", () => {
     expect(JSON.stringify(f.posts)).not.toContain("never-send");
   });
 
-  it("turns a revised whole row (a finished Chat turn card) into the same reread gap", async () => {
+  it("reads a revised whole row (a finished Chat turn card) back and forwards it to the subscriber holding it", async () => {
     const f = pair(); fixtures.push(f);
-    const seen: number[] = [];
-    const gaps: [number, number][] = [];
+    const out = recordingSink();
     f.db.add(0);
-    f.hub.subscribeWithSink("log:s", 0, {
-      getBufferedAmount: () => 0,
-      send: (frames) => seen.push(...frames.map((frame) => frame.seq)),
-      gap: (from, to) => gaps.push([from, to]),
-    });
-    f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "entry", payload: {} }], head: 0 });
-    await waitFor(() => seen.length === 1, "base row");
-    f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "entry", payload: { secret: "never-send", revision: 4 } }], head: 0, changed: true });
-    await waitFor(() => gaps.length === 1, "revision gap");
-    expect(gaps).toEqual([[0, 0]]);
+    f.db.put(1, turnCard(2, "running"));
+    f.hub.subscribeWithSink("log:s", 0, out.sink);
+    f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 1 });
+    await waitFor(() => out.frames.length === 2, "base rows");
+    f.db.put(1, turnCard(5, "completed"));
+    f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: { secret: "never-send", revision: 5 } }], head: 1, changed: true });
+    await waitFor(() => out.frames.length === 3, "revised row");
+    expect(out.frames[2]).toMatchObject({ seq: 1, kind: "entry", payload: { revision: 5, visibility: "shown", metadata: { status: "completed" } } });
+    expect(out.gaps).toEqual([]);
     expect(JSON.stringify(f.posts)).not.toContain("never-send");
+    expect(f.posts.flatMap((post) => post.events)).toContainEqual(expect.objectContaining({ changed_seq: 1, changed_entry: true }));
+  });
+
+  it("forwards a revised whole row to a subscriber that started past it and never received it", async () => {
+    const f = pair(); fixtures.push(f);
+    const out = recordingSink();
+    // The member's message (0), the hidden running card (1), a later row (2).
+    f.db.add(0);
+    f.db.put(1, turnCard(2, "running"));
+    f.db.add(2);
+    f.left.publish({ key: "log:s", frames: [{ seq: 2, kind: "entry", payload: {} }], head: 2 });
+    await waitFor(() => f.hub.knownHead("log:s")?.head === 2, "head 2");
+    // A browser reads its window over HTTP (the hidden card is not in it) and
+    // subscribes after the window's head: this hub never delivers it the card.
+    f.hub.subscribeWithSink("log:s", 3, out.sink);
+    await f.hub.warmUpSettled();
+    await f.right.settled();
+    expect(out.frames).toEqual([]);
+    f.db.put(1, turnCard(5, "completed"));
+    f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 2, changed: true });
+    await waitFor(() => out.frames.length === 1, "finished card");
+    expect(out.frames[0]).toMatchObject({ seq: 1, payload: { id: "turn_1", revision: 5, visibility: "shown" } });
+    expect(out.gaps).toEqual([]);
+
+    // The same revision is not sent twice; a newer one is.
+    f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 2, changed: true });
+    await f.right.settled();
+    expect(out.frames).toHaveLength(1);
+    f.db.put(1, turnCard(6, "completed"));
+    f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 2, changed: true });
+    await waitFor(() => out.frames.length === 2, "newer card");
+    expect(out.frames[1]).toMatchObject({ seq: 1, payload: { revision: 6 } });
+  });
+
+  it("tells every subscriber past a row the peer patched to reread it, every time", async () => {
+    const f = pair(); fixtures.push(f);
+    const holder = recordingSink();
+    const late = recordingSink();
+    f.db.add(0);
+    f.db.add(1);
+    f.hub.subscribeWithSink("log:s", 0, holder.sink);
+    f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 1 });
+    await waitFor(() => holder.frames.length === 2, "base rows");
+    f.hub.subscribeWithSink("log:s", 2, late.sink);
+    for (let edit = 1; edit <= 2; edit += 1) {
+      f.left.publish({ key: "log:s", frames: [{ seq: 0, kind: "patch", payload: { secret: "never-send" } }], head: 1 });
+      await waitFor(() => holder.gaps.length === edit && late.gaps.length === edit, `reread ${edit}`);
+    }
+    expect(holder.gaps).toEqual([[0, 0], [0, 0]]);
+    expect(late.gaps).toEqual([[0, 0], [0, 0]]);
+    expect(JSON.stringify(f.posts)).not.toContain("never-send");
+  });
+
+  it("falls back to a reread gap when the revised row cannot be read here", async () => {
+    const f = pair(); fixtures.push(f);
+    const out = recordingSink();
+    const warnings: string[] = [];
+    const warn = spyOn(console, "warn").mockImplementation((message: unknown) => { warnings.push(String(message)); });
+    try {
+      f.db.add(0);
+      f.db.put(1, turnCard(2, "running"));
+      f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 1 });
+      await waitFor(() => f.hub.knownHead("log:s")?.head === 1, "head 1");
+      f.hub.subscribeWithSink("log:s", 2, out.sink);
+      await f.hub.warmUpSettled();
+      f.db.fill.readRange = async () => { throw new Error("read pool saturated"); };
+      f.left.publish({ key: "log:s", frames: [{ seq: 1, kind: "entry", payload: {} }], head: 1, changed: true });
+      await waitFor(() => out.gaps.length === 1, "fallback gap");
+      expect(out.gaps).toEqual([[1, 1]]);
+      expect(out.frames).toEqual([]);
+      expect(warnings.some((message) => message.includes("changed row read failed for log:s seq 1"))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("detects queue eviction from pre-enqueue sequence numbers and reconciles once", async () => {

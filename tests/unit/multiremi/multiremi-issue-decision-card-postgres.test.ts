@@ -111,6 +111,8 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
   let store: MultiremiStore;
   let previousLarkAppId: string | undefined;
   let previousLarkAppSecret: string | undefined;
+  let previousEncryptionKey: string | undefined;
+  let previousPublicUrl: string | undefined;
   let scanBefore: ReturnType<typeof scanCounts>;
 
   beforeAll(async () => {
@@ -123,6 +125,8 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
     await admin.end();
     previousLarkAppId = process.env.MULTIREMI_LARK_APP_ID;
     previousLarkAppSecret = process.env.MULTIREMI_LARK_APP_SECRET;
+    previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+    previousPublicUrl = process.env.MULTIREMI_PUBLIC_URL;
     process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 11).toString("base64");
     process.env.MULTIREMI_PUBLIC_URL = "https://remi.example.com";
     process.env.MULTIREMI_LARK_APP_ID = "cli_pg412";
@@ -146,6 +150,10 @@ describe.skipIf(!available)("MUL-412 decision cards on Postgres", () => {
       else process.env.MULTIREMI_LARK_APP_ID = previousLarkAppId;
       if (previousLarkAppSecret === undefined) delete process.env.MULTIREMI_LARK_APP_SECRET;
       else process.env.MULTIREMI_LARK_APP_SECRET = previousLarkAppSecret;
+      if (previousEncryptionKey === undefined) delete process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
+      else process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = previousEncryptionKey;
+      if (previousPublicUrl === undefined) delete process.env.MULTIREMI_PUBLIC_URL;
+      else process.env.MULTIREMI_PUBLIC_URL = previousPublicUrl;
     }
     // MUL-482: this file owns its beforeAll → afterAll delta. Other files'
     // intentional DB savepoint tests remain in the raw report (cmt_kexlr6zs2ras).

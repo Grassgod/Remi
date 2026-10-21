@@ -14,7 +14,7 @@ export const HUB_PEER_HEARTBEAT_MS = 5_000;
 export const HUB_PEER_STALE_MS = 15_000;
 
 type PeerHubPayload =
-  | { kind: "head"; key: HubStreamKey; head: number; log_version: number | null; changed_seq?: number }
+  | { kind: "head"; key: HubStreamKey; head: number; log_version: number | null; changed_seq?: number; changed_entry?: true }
   | { kind: "human_request"; event: HumanRequestEvent }
   | { kind: "hb" };
 type PeerHubFrame = PeerHubPayload & { sender_epoch: string; hub_seq: number };
@@ -30,7 +30,8 @@ function isPeerHubFrame(payload: unknown): payload is PeerHubFrame {
       && Number.isSafeInteger(frame.head) && (frame.head as number) >= 0
       && (frame.log_version === null || Number.isSafeInteger(frame.log_version))
       && (frame.changed_seq === undefined || (Number.isSafeInteger(frame.changed_seq)
-        && (frame.changed_seq as number) >= 0 && (frame.changed_seq as number) <= (frame.head as number)));
+        && (frame.changed_seq as number) >= 0 && (frame.changed_seq as number) <= (frame.head as number)))
+      && (frame.changed_entry === undefined || (frame.changed_entry === true && frame.changed_seq !== undefined));
   }
   if (frame.kind === "human_request") {
     const event = frame.event as Record<string, unknown> | null;
@@ -61,7 +62,8 @@ export class PeerHubTransport implements HubTransport {
   private readonly subscription: { unsubscribe(): void };
   private readonly heartbeat: ReturnType<typeof setInterval>;
   private readonly onError: (error: unknown) => void;
-  private readonly headHandlers = new Set<(key: HubStreamKey, head: number, version: number | null, changedSeq?: number) => Promise<void>>();
+  private readonly headHandlers = new Set<(key: HubStreamKey, head: number, version: number | null, changedSeq?: number,
+    changedEntry?: boolean) => Promise<void>>();
   private readonly humanHandlers = new Set<(event: HumanRequestEvent) => void>();
   private readonly lossHandlers = new Set<(reason: HubPeerLossReason) => Promise<void>>();
   private readonly lastByEpoch = new Map<string, number>();
@@ -103,8 +105,11 @@ export class PeerHubTransport implements HubTransport {
     if (!input.key.startsWith("log:")) return;
     for (const frame of input.frames) {
       if (frame.kind === "trace") continue;
-      this.send({ kind: "head", key: input.key, head: input.head ?? frame.seq, log_version: null,
-        ...(frame.kind === "patch" || input.changed ? { changed_seq: frame.seq } : {}) });
+      // A re-emitted whole row is marked so the receiver can read it back; a
+      // patch only invalidates (the receiver cannot rebuild a row from a delta).
+      const change = frame.kind === "patch" ? { changed_seq: frame.seq }
+        : input.changed ? { changed_seq: frame.seq, changed_entry: true as const } : {};
+      this.send({ kind: "head", key: input.key, head: input.head ?? frame.seq, log_version: null, ...change });
     }
   }
 
@@ -116,7 +121,8 @@ export class PeerHubTransport implements HubTransport {
     return { unsubscribe() {} };
   }
 
-  onRemoteHead(handler: (key: HubStreamKey, head: number, version: number | null, changedSeq?: number) => Promise<void>): { unsubscribe(): void } {
+  onRemoteHead(handler: (key: HubStreamKey, head: number, version: number | null, changedSeq?: number,
+    changedEntry?: boolean) => Promise<void>): { unsubscribe(): void } {
     this.headHandlers.add(handler);
     return { unsubscribe: () => { this.headHandlers.delete(handler); } };
   }
@@ -170,7 +176,9 @@ export class PeerHubTransport implements HubTransport {
       for (const handler of this.lossHandlers) await handler(reason);
     }
     if (frame.kind === "head") {
-      for (const handler of this.headHandlers) await handler(frame.key, frame.head, frame.log_version, frame.changed_seq);
+      for (const handler of this.headHandlers) {
+        await handler(frame.key, frame.head, frame.log_version, frame.changed_seq, frame.changed_entry === true);
+      }
     } else if (frame.kind === "human_request") {
       for (const handler of this.humanHandlers) handler(frame.event);
     }

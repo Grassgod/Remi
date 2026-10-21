@@ -62,8 +62,15 @@ export interface HubTransport {
    */
   subscribe(handler: (input: HubTransportPublishInput) => void): { unsubscribe(): void };
 
-  /** Peer adapters deliver pointers, never log row bodies or trace frames. */
-  onRemoteHead?(handler: (key: HubStreamKey, head: number, logVersion: number | null, changedSeq?: number) => Promise<void>): { unsubscribe(): void };
+  /**
+   * Peer adapters deliver pointers, never log row bodies or trace frames.
+   *
+   * `changedSeq` names a passed row the peer changed in place; `changedEntry` says
+   * the peer re-emitted that row whole (a Chat turn card), so the receiver may
+   * read it back instead of only invalidating it.
+   */
+  onRemoteHead?(handler: (key: HubStreamKey, head: number, logVersion: number | null, changedSeq?: number,
+    changedEntry?: boolean) => Promise<void>): { unsubscribe(): void };
   onHumanRequest?(handler: (event: HumanRequestEvent) => void): { unsubscribe(): void };
   publishHumanRequest?(event: HumanRequestEvent): void;
   onPossibleLoss?(handler: (reason: HubPeerLossReason) => Promise<void>): { unsubscribe(): void };

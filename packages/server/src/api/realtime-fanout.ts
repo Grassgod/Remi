@@ -52,6 +52,12 @@ import {
   PEER_REALTIME_TOPIC,
   type PeerChannel,
 } from "./peer/peer-channel.js";
+import { createLogger } from "@shared/logger.js";
+
+const log = createLogger("realtime-fanout");
+
+/** A peer `chat:done` this far behind its commit is logged as a warning. */
+export const PEER_CHAT_DONE_SLOW_MS = 1_000;
 
 /**
  * Which registries this process holds.
@@ -114,10 +120,11 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
     }
   };
 
-  const deliverWorkspaceEvent = (event: PeerWorkspaceEvent): void => {
+  /** Returns the browser sockets handed the event, or null when this role serves none. */
+  const deliverWorkspaceEvent = (event: PeerWorkspaceEvent): number | null => {
     if (deliversToDaemon) options.onDaemonWorkspaceEvent?.(event);
-    if (!deliversToBrowser) return;
-    notifyBrowserWorkspaceEvent(
+    if (!deliversToBrowser) return null;
+    return notifyBrowserWorkspaceEvent(
       registries.browser,
       registries.browserUser,
       event,
@@ -142,9 +149,11 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
         if (task) deliverTaskEvent({ type: envelope.payload.type, task });
         return;
       }
-      case "workspace_event":
-        deliverWorkspaceEvent(envelope.payload.event);
+      case "workspace_event": {
+        const sockets = deliverWorkspaceEvent(envelope.payload.event);
+        if (sockets !== null && envelope.payload.event.type === "chat:done") logPeerChatDone(envelope.payload.event, sockets);
         return;
+      }
       default:
         return;
     }
@@ -184,6 +193,32 @@ export function createRealtimeFanout(options: RealtimeFanoutOptions): RealtimeFa
     deliverRemote,
     forwardToPeer,
   };
+}
+
+/**
+ * One line per finished Chat turn that crossed from the other process.
+ *
+ * `chat:done` is the signal that settles a browser's pending turn, so its
+ * delivery is the thing to see when a split deployment shows a finished turn as
+ * still running: `lag_ms` is the time since the terminal transaction stamped the
+ * event (the peer channel is loopback, so both processes read one host clock)
+ * and `sockets` how many of the session creator's sockets on this process
+ * received it. Zero
+ * sockets with a small lag points at the browser's socket, a large lag at the
+ * peer channel (see its `peer delivery failed` warnings).
+ */
+function logPeerChatDone(event: PeerWorkspaceEvent, sockets: number): void {
+  const committedAt = Date.parse(String(event.payload.created_at ?? ""));
+  const lagMs = Number.isFinite(committedAt) ? Math.max(0, Date.now() - committedAt) : null;
+  const data = {
+    event: "peer_chat_done",
+    chat_session_id: event.chatSessionId ?? event.payload.chat_session_id ?? null,
+    task_id: event.payload.task_id ?? null,
+    lag_ms: lagMs,
+    sockets,
+  };
+  if (lagMs !== null && lagMs >= PEER_CHAT_DONE_SLOW_MS) log.warn("peer chat:done delivered late", data);
+  else log.info("peer chat:done delivered", data);
 }
 
 /**

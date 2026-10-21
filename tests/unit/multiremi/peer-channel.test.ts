@@ -1,7 +1,7 @@
 // MUL-462: the sending half of the peer channel — batching by count and by real
 // serialized bytes, ordering, backoff, the queue caps, splitting, degradation,
 // dedupe on retry, and the fact that `MULTIREMI_PEER_URL` unset means "inert".
-import { afterEach, beforeEach, describe, expect, it, jest } from "bun:test";
+import { afterEach, beforeEach, describe, expect, it, jest, spyOn } from "bun:test";
 import { Hono } from "hono";
 import { registerPeerRoutes } from "../../../packages/server/src/api/peer/peer-routes.js";
 import {
@@ -404,6 +404,43 @@ describe("peer channel — sending", () => {
     expect(channel.stats().sent).toBe(1);
     expect(channel.healthy()).toBe(true);
     expect(peer.payloads()).toHaveLength(1);
+  });
+
+  it("logs a failed run once, then every tenth attempt, and its recovery with the stall", async () => {
+    const peer = fakePeer();
+    channel = createPeerChannel({ url: "http://peer:6120", secret: "s", fetchImpl: peer.fetchImpl, minBackoffMs: 1, maxBackoffMs: 2 });
+    const warn = spyOn(console, "warn").mockImplementation(() => {});
+    const info = spyOn(console, "log").mockImplementation(() => {});
+    const lines = (spy: typeof warn, text: string) => spy.mock.calls.filter(call => String(call[0]).includes(text));
+    try {
+      peer.goOffline();
+      channel.forwardRealtime("workspace_event", { event: { type: "chat:done", workspaceId: "local", payload: {} } });
+      await waitFor(() => channel!.stats().failed >= 12, "twelve failed attempts");
+      const failures = lines(warn, "peer delivery failed");
+      const attempts = failures.map(call => (call[1] as { attempt: number }).attempt);
+      expect(attempts.slice(0, 2)).toEqual([1, 10]);
+      expect(attempts.every(attempt => attempt === 1 || attempt % 10 === 0)).toBe(true);
+      expect(failures[0]![1]).toMatchObject({ event: "peer_delivery_failed", topic: PEER_REALTIME_TOPIC, batch_seq: 1,
+        events: 1, retry_in_ms: 1, error: "peer offline" });
+      expect(lines(info, "peer delivery recovered")).toEqual([]);
+      peer.goOnline();
+      await waitForBatches(1);
+      const recovered = lines(info, "peer delivery recovered");
+      expect(recovered).toHaveLength(1);
+      expect(recovered[0]![1]).toMatchObject({ event: "peer_delivery_recovered", batch_seq: 1 });
+      expect((recovered[0]![1] as { failed_attempts: number }).failed_attempts).toBeGreaterThanOrEqual(12);
+      expect((recovered[0]![1] as { stalled_ms: number }).stalled_ms).toBeGreaterThanOrEqual(0);
+
+      // A healthy link logs nothing more.
+      const warned = lines(warn, "peer delivery failed").length;
+      channel.forwardRealtime("workspace_event", { event: { type: "chat:done", workspaceId: "local", payload: {} } });
+      await waitForBatches(2);
+      expect(lines(warn, "peer delivery failed")).toHaveLength(warned);
+      expect(lines(info, "peer delivery recovered")).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+      info.mockRestore();
+    }
   });
 
   it("backs off from 1s toward 10s instead of hammering a dead peer", async () => {
