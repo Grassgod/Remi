@@ -1053,6 +1053,62 @@ describe("live turn handoff", () => {
     } finally { view.unmount(); client.clear(); }
   });
 
+  /** The reply row as the server writes it when the attempt ends: failure and elapsed time stamped on it. */
+  const endedReply = (seq: number, n: number, body: string, failure: string | null, revision = 1) => row({
+    seq, id: `reply-${n}`, revision, kind: "message", sender_type: "agent", message_kind: "reply", task_id: `turn-${n}`, body_md: body,
+    metadata: { failure_reason: failure, elapsed_ms: failure ? 8_000 : 20_000 },
+  });
+  /** What each change to the list leaves on screen: the live answer and the persisted one, never both. */
+  function watchAnswers(container: HTMLElement, persisted: string) {
+    const seen = new Set<string>();
+    const observer = new MutationObserver(() => {
+      seen.add(`${!!container.querySelector("[data-chat-live-final]")}/${container.textContent!.includes(persisted)}`);
+    });
+    observer.observe(container, { subtree: true, childList: true, characterData: true, attributes: true });
+    return { seen, stop: () => observer.disconnect() };
+  }
+
+  it("ends the running turn's live view in the render its completed reply row lands, before the card", () => {
+    const { client, replica, view, content, held, live } = setup([ask(1, "Question")]);
+    try {
+      expect(live()).toEqual([expect.stringContaining("LIVE_1")]);
+      const answers = watchAnswers(view.container, "PERSISTED_1");
+      // The pending task still says running: chat:done and the finished card are late.
+      act(() => replica.setWindow("cs-1", [ask(1, "Question"), endedReply(3, 1, "PERSISTED_1", null)]));
+      expect(view.container.querySelector("[data-chat-live-turn]")).toBeNull();
+      expect(view.container.querySelector("[data-chat-live-final]")).toBeNull();
+      expect(view.container).not.toHaveTextContent("LIVE_1");
+      expect(view.container).toHaveTextContent("PERSISTED_1");
+      // The card lands, then the pending task settles: one answer throughout, and nothing held.
+      act(() => replica.setWindow("cs-1", [ask(1, "Question"), card(2, 1, "completed"), endedReply(3, 1, "PERSISTED_1", null)]));
+      view.rerender(content(settled));
+      expect(held()).toEqual([]);
+      expect(view.container.querySelector("[data-chat-live-turn]")).toBeNull();
+      expect(view.container.textContent!.split("PERSISTED_1")).toHaveLength(2);
+      answers.stop();
+      expect([...answers.seen]).not.toContain("true/true");
+      expect([...answers.seen]).not.toContain("false/false");
+    } finally { view.unmount(); client.clear(); }
+  });
+
+  it("keeps a running retry live beside the failed attempt's reply row, until the retry's reply rewrites it", () => {
+    // A retry runs on the same turn, and the failed attempt's reply row stays in the log meanwhile.
+    const failed = endedReply(3, 1, "FAILED_1", "agent_error");
+    const { client, replica, view, live } = setup([ask(1, "Question"), failed]);
+    try {
+      expect(live()).toEqual([expect.stringContaining("LIVE_1")]);
+      expect(view.container.querySelector('[data-perf-key="reply-1"]')).not.toBeNull();
+      // The retry's completion rewrites the same row in place.
+      const answers = watchAnswers(view.container, "PERSISTED_1");
+      act(() => replica.setWindow("cs-1", [ask(1, "Question"), endedReply(3, 1, "PERSISTED_1", null, 2)]));
+      expect(view.container.querySelector("[data-chat-live-turn]")).toBeNull();
+      expect(view.container).toHaveTextContent("PERSISTED_1");
+      expect(view.container).not.toHaveTextContent("LIVE_1");
+      answers.stop();
+      expect([...answers.seen]).not.toContain("true/true");
+    } finally { view.unmount(); client.clear(); }
+  });
+
   it.each(["failed", "cancelled"])("hands a turn that ended %s over to its notice", (status) => {
     const { client, replica, view, content, held } = setup([ask(1, "Question")]);
     try {

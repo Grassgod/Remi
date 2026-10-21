@@ -32,4 +32,28 @@ describe("turnOutcomeShown", () => {
     // A retry: the failed attempt's card and reply are in the log while the new attempt runs.
     expect(turnOutcomeShown([card({ status: "failed", final_entry_id: "reply-1" }, "att-1"), reply()], turn, true)).toBe(false);
   });
+
+  it("takes the turn's completed reply row as the outcome without its card, running or not", () => {
+    const completed = reply({ metadata: { failure_reason: null, elapsed_ms: 20_000 } });
+    expect(turnOutcomeShown([completed], turn)).toBe(true);
+    expect(turnOutcomeShown([completed], turn, true)).toBe(true);
+    expect(turnOutcomeShown([reply({ message_kind: "final", metadata: { failure_reason: null, elapsed_ms: 20_000 } })], turn)).toBe(true);
+    // The card can still be the failed attempt's when the retry's reply lands.
+    expect(turnOutcomeShown([card({ status: "failed", final_entry_id: "reply-1" }, "att-1"), completed], turn)).toBe(true);
+    // Another turn's reply, a deleted one, or no turn id to match is not this turn's outcome.
+    expect(turnOutcomeShown([reply({ task_id: "turn-0", metadata: { failure_reason: null, elapsed_ms: 1 } })], turn)).toBe(false);
+    expect(turnOutcomeShown([reply({ deleted_at: "2026-10-20T00:00:00Z", metadata: { failure_reason: null, elapsed_ms: 1 } })], turn)).toBe(false);
+    expect(turnOutcomeShown([completed], { taskId: "att-2", turnId: null })).toBe(false);
+    // The attempt's own terminal card still decides: the reply must be the row it names.
+    expect(turnOutcomeShown([card({ status: "completed", final_entry_id: "reply-9" }), completed], turn)).toBe(false);
+  });
+
+  it("keeps a running retry live beside the failed attempt's reply row it reuses", () => {
+    const failed = reply({ metadata: { failure_reason: "agent_error", elapsed_ms: 8_000 } });
+    expect(turnOutcomeShown([failed], turn)).toBe(false);
+    expect(turnOutcomeShown([card({ status: "running" }), failed], turn)).toBe(false);
+    expect(turnOutcomeShown([card({ status: "failed", final_entry_id: "reply-1" }, "att-1"), failed], turn)).toBe(false);
+    // A reply row without the completion stamp (an answer to a decision) is not the outcome either.
+    expect(turnOutcomeShown([reply({ metadata: { failure_reason: null } })], turn)).toBe(false);
+  });
 });

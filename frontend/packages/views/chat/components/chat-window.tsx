@@ -65,7 +65,7 @@ import {
 } from "@multiremi/core/chat";
 import { isQueueDeliveryUnconfirmed, queueErrorCode } from "@multiremi/core/chat/queue";
 import { ChatMessageList } from "./chat-message-list";
-import { contextRingSource, type HeldRingUsage } from "../lib/turn-card";
+import { contextRingSource, turnOutcomeShown, type HeldRingUsage, type TurnLogRow } from "../lib/turn-card";
 import { ChatContextUsage } from "./chat-context-usage";
 import type { SessionLogEntry } from "@multiremi/core/replica";
 import { useTurnTrace } from "../../common/task-transcript/use-task-trace";
@@ -383,6 +383,21 @@ export function ChatWindow({
       void readLogTail(replicaRef.current);
     }
   }, [activeSessionId, pendingTaskId, qc, wsId, readLogTail, chatVisible]);
+  // The running turn's reply can reach the log before anything moves its
+  // pending task on (a late or lost chat:done), and the list then already shows
+  // the reply instead of the live view. Read the pending task once for that
+  // attempt, so the stop button, the sidebar and the context ring follow within
+  // a round trip instead of the 10s poll.
+  const pendingTurnId = pendingTask?.turn_id ?? null;
+  const pendingOutcomeShown = useMemo(() => !!pendingTaskId && !pendingTaskId.startsWith("optimistic-")
+    && turnOutcomeShown(logSnapshot.entries as readonly TurnLogRow[], { taskId: pendingTaskId, turnId: pendingTurnId }),
+  [logSnapshot.entries, pendingTaskId, pendingTurnId]);
+  const outcomeReadFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pendingOutcomeShown || !displayedSessionId || !pendingTaskId || outcomeReadFor.current === pendingTaskId) return;
+    outcomeReadFor.current = pendingTaskId;
+    void qc.invalidateQueries({ queryKey: chatKeys.pendingTask(displayedSessionId) });
+  }, [pendingOutcomeShown, displayedSessionId, pendingTaskId, qc]);
 
   const createSession = useCreateChatSession();
   const markRead = useMarkChatSessionRead();
