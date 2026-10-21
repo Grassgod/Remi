@@ -42,6 +42,20 @@ API/store 测试可参考 [issues API 测试](tests/unit/multiremi/multiremi-api
 
 [PR2大夹具](tests/fixtures/multiremi/first-screen-hotspots-pr2-fixture.ts)的 `attachmentOnly: true` 仅用于附件上传、权限和ETag功能场景，保留所需身份、Issue和Chat；未传该选项的golden、query-count和benchmark仍使用原默认规模。不得用小夹具替代规模回归或更新golden来掩盖变化。
 
+### PostgreSQL 覆盖范围
+
+双 dialect 套件默认在 SQLite 和 PostgreSQL 上都跑。[postgres-scope](tests/helpers/postgres-scope.ts) 是唯一的例外清单：列入的套件只跳过 PostgreSQL 一侧，SQLite 仍跑全部用例，每项附一行理由。只有 PostgreSQL 用例与 SQLite 是同一个业务场景、断言不区分 dialect 时才可列入；有下列任一情况就必须保留 PostgreSQL：
+
+- 断言或分支依赖 dialect、SQL 方言差异、catalog/EXPLAIN/PRAGMA、trigger 或 sequence；
+- 锁、事务深度、savepoint、回滚，或在事务中注入故障；
+- 并发、竞态、多连接、Worker 或子进程；
+- 迁移、历史 schema 或回填；
+- 控制时钟，或依赖过期、lease、提醒、心跳、空闲天数等时间戳比较；
+- 同步 PG bridge、read pool、回复大小上限、语句/查询计数或 golden；
+- 文件里有专门的 PostgreSQL 用例块，或曾因 PostgreSQL 缺陷修复过（`git log` 中提到 postgres/PG 的修复提交）。
+
+接入方式：`pendingTurnBackendTests` 传 `file: import.meta.path`，自写循环用 `backendsInScope(import.meta.path, [...])`；不在清单里的文件两种写法都保留两个 dialect。[架构守卫](tests/arch/postgres-scope.test.ts)要求清单中的文件存在、理由只占一行、经上述入口接入，且只有清单内的文件使用这些入口；它还按文件名和内容信号（锁/回滚、数据库故障注入、并发/进程、迁移、catalog/trigger、时钟与时间戳、read pool/回复上限/语句计数/reopen）拒绝条目。命中信号时把套件留在双 dialect，不要放宽信号。守卫不读 git 历史，新增条目时需人工核对上面最后一条。
+
 ## 真实服务与手动验证
 
 | 根脚本 | 验证内容 | 运行前准备 |

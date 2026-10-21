@@ -174,4 +174,4 @@ pendingTurnBackendTests("Issue done rule", fixture => {
     }
     expect(store.listIssues({ workspaceId: "local" }).filter(issue => issue.title === "Born done")).toEqual([]);
   });
-}, { isolation: "snapshot" });
+}, { isolation: "snapshot", file: import.meta.path });

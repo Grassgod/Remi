@@ -4,6 +4,7 @@ import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/post
 import { MultiremiStore } from "@multiremi/store.js";
 import { createReusableStoreDatabase } from "../../helpers/reusable-store-database.js";
 import { createPostgresStoreTemplate } from "../../helpers/postgres-store-template.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 import { createSqliteStoreSnapshotFactory } from "../../helpers/sqlite-store-snapshot.js";
 import { createResponsibleTestIssue } from './helpers.js';
 import type { CreateIssueInput, MultiremiIssue } from '@multiremi/contracts/types.js';
@@ -40,13 +41,16 @@ const sqliteSnapshots = createSqliteStoreSnapshotFactory();
  * Context subscriptions left alive, worker startup, SQL schema changes or
  * environment/clock/UUID injection. Case transactions are never wrapped in a
  * rollback: afterCommit, savepoints, lock order and depth remain real.
+ * `file` (the caller's `import.meta.path`) applies tests/helpers/postgres-scope.ts:
+ * a listed suite runs on SQLite only; any other suite keeps both dialects.
  */
 export function pendingTurnBackendTests(
   name: string,
   tests: (fixture: () => PendingTurnTestFixture, backend: "SQLite" | "PostgreSQL") => void,
-  options: { isolation?: "fresh" | "snapshot" | "committed-baseline" } = {},
+  options: { isolation?: "fresh" | "snapshot" | "committed-baseline"; file?: string } = {},
 ): void {
-  for (const backend of ["SQLite", "PostgreSQL"] as const) {
+  const dialects = ["SQLite", "PostgreSQL"] as const;
+  for (const backend of options.file ? backendsInScope(options.file, dialects) : dialects) {
     const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
     describe.skipIf(backend === "PostgreSQL" && !adminUrl)(`${name} (${backend})`, () => {
       let admin: Bun.SQL | undefined;

@@ -7,6 +7,7 @@ import { basename, join, relative } from "node:path";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 import { conversationLogKindForSessionEvent } from "@multiremi/store/conversation-log-mirror.js";
 import type { ConversationLogEntry } from "@multiremi/contracts/conversation-log";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
@@ -98,7 +99,7 @@ function expectNoSeqHole(store: MultiremiStore, sessionId: string): void {
   expect(eventSeqs).toEqual(Array.from({ length: eventSeqs.length }, (_, index) => index + 1));
 }
 
-for (const backend of ["sqlite", "postgres"] as const) {
+for (const backend of backendsInScope(import.meta.path, ["sqlite", "postgres"] as const)) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-402 delegation_report log mirror (${backend})`, () => {
     stores[backend].install();
     for (const [terminal, withComment] of [["completed", true], ["failed", false], ["cancelled", false]] as const) {
@@ -155,7 +156,7 @@ async function startDelegatedChild(store: MultiremiStore, f: ReturnType<typeof f
   store.buildTaskSessionProjection(child.id); store.startTask(child.id);
   return child;
 }
-for(const backend of ["sqlite","postgres"] as const) {
+for (const backend of backendsInScope(import.meta.path, ["sqlite", "postgres"] as const)) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`Canonical delegation report replay (${backend})`,()=>{
     stores[backend].install();
     for(const terminal of ["completed","failed","cancelled"] as const)it(`replays ${terminal} without another report or wake`,async()=>withStore(backend,async store=>{

@@ -66,4 +66,4 @@ pendingTurnBackendTests('MUL-506 message operations and dispatch',fixture=>{
     expect(f.store.listMessages(`auto_${issueAuto.id}`)[0]?.body_md).toBe('Issue request');
   });
 
-}, { isolation: "snapshot" });
+}, { isolation: "snapshot", file: import.meta.path });

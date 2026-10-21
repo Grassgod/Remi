@@ -3,6 +3,7 @@ import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, sentTask, taskRequestPath } from "./unified-test-paths.js";
 import { describe, expect, it } from "bun:test";
 import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
@@ -153,7 +154,7 @@ function expectDowngradedMessage(store: MultiremiStore, result: any, source: Mul
   expect(message.metadata.delivery_turn_id).toBeUndefined();
 }
 
-for (const backend of ["sqlite", "postgres"] as const) {
+for (const backend of backendsInScope(import.meta.path, ["sqlite", "postgres"] as const)) {
   const timeout = backend === "postgres" ? 180_000 : 15_000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-510 universal delegation (${backend})`, () => {
     stores[backend].install();

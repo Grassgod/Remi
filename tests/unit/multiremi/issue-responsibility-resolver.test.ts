@@ -96,4 +96,4 @@ pendingTurnBackendTests("Issue responsibility resolver", fixture => {
       unresolved: [{ issueId: unassigned.id, reason: "execution_owner_missing" }],
       chain: [{ issueId: unassigned.id, executionOwner: null }, { issueId: f.root.id, executionOwner: { id: f.owner.id } }] });
   });
-}, { isolation: "snapshot" });
+}, { isolation: "snapshot", file: import.meta.path });

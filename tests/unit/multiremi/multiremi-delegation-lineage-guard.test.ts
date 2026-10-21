@@ -17,6 +17,7 @@ import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 
 
@@ -130,7 +131,7 @@ const FORGED_SPELLINGS: Array<[string, Record<string, unknown>]> = [
   ["nested data", { data: { parentTaskId: "TARGET", parent_task_id: "TARGET" } }],
 ];
 
-for (const backend of ["sqlite", "postgres"] as const) {
+for (const backend of backendsInScope(import.meta.path, ["sqlite", "postgres"] as const)) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 lineage guard (${backend})`, () => {
     stores[backend].install();
     it("drops every parent_task_id spelling a member PAT sends to the Session task route", async () => {

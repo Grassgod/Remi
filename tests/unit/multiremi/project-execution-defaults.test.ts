@@ -3,9 +3,10 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 
 const adminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-for (const backend of ["sqlite", "postgres"] as const) {
+for (const backend of backendsInScope(import.meta.path, ["sqlite", "postgres"] as const)) {
   describe.skipIf(backend === "postgres" && !adminUrl)(`Project execution defaults (${backend})`, () => {
     async function run(check: (store: MultiremiStore, db: SqlDatabase) => Promise<void>) {
       let db: SqlDatabase | undefined;

@@ -24,10 +24,11 @@ import type { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiTask } from "@multiremi/contracts/types.js";
 import { createResponsibleTestIssue } from "./helpers.js";
 import { traceBackfillBackends, type OpenedStore } from "./trace-backfill-backends.js";
+import { backendsInScope } from "../../helpers/postgres-scope.js";
 
 const TIMEOUT = 60_000;
 const DAEMON = "fixture-activity";
-const backends = await traceBackfillBackends("taskactivity");
+const backends = backendsInScope(import.meta.path, await traceBackfillBackends("taskactivity"));
 
 afterAll(async () => {
   for (const backend of backends) await backend.dispose();
