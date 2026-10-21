@@ -115,18 +115,15 @@ export class ChatRepo {
   }
 
   /**
-   * Whether a chat has ever had this id, in any workspace. A deleted chat
-   * leaves its log (soft-deleted) and execution records under the id, so a
-   * client-made id must name none of them, or a new chat would take them
-   * over. Every chat writes its head row on create and every turn writes a
-   * log row, so the log also covers the chat's turns.
+   * Whether a chat has ever had this id, in any workspace; a client-made id
+   * must name none, or a new chat would take over what an old one left. The
+   * log covers deleted chats: every chat writes its head row at seq 0 on
+   * create, every turn writes a log row before the turn itself, and deleting
+   * a chat only soft-deletes its rows (`deleted_at`), so they stay.
    */
   isChatSessionIdUsed(id: string): boolean {
     if (this.getChatSession(id)) return true;
-    return [
-      "SELECT session_id FROM multiremi_conversation_log WHERE session_id = ? LIMIT 1",
-      "SELECT id FROM multiremi_turn_execution_records WHERE chat_session_id = ? LIMIT 1",
-    ].some((sql) => this.ctx.db.query(sql).get(id));
+    return !!this.ctx.db.query("SELECT session_id FROM multiremi_conversation_log WHERE session_id = ? LIMIT 1").get(id);
   }
 
   /** Caller owns the transaction, including any accompanying Chat binding. */
