@@ -12,7 +12,8 @@
  *   2. serves that bundle and a host document from a local HTTP server, so the
  *      page is a real document with a real origin;
  *   3. drives it with Playwright + Chromium and MUL-384's recorder installed
- *      through `addInitScript`, exactly as `zero-jump-check.ts` does;
+ *      through `addInitScript`, exactly as the CI `zero-jump-check.ts` did
+ *      before it was removed on 2026-10-21;
  *   4. measures three scenarios — append 20 rows, grow a row above the viewport,
  *      resize the container — and judges each with `computeJumps`.
  *

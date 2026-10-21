@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 /**
- * Deterministic fixture for the MUL-394 zero-jump check.
+ * Deterministic fixture built for the MUL-394 zero-jump check. That check and
+ * its CI job were removed on 2026-10-21; the fixture stays because the other
+ * browser checks (`chat-log-check.ts`, `issue-log-check.ts`,
+ * `task-trace-dialog-check.ts`, `durable-trace-browser-check.ts`) and some
+ * `tests/manual/mul395-*` scripts still seed it.
  *
- * The plan (§5) fixes the shapes the check must exercise, so this file owns them
- * in one place and the check itself stays about measurement and verdicts:
+ * The plan (§5) fixed the shapes the check had to exercise, so this file owns
+ * them in one place:
  *
  *  - a short issue with 3 comments;
  *  - the F398 assignment with a long description, 20 queued runs and 60 updates;
