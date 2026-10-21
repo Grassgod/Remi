@@ -85,7 +85,7 @@ describe("application compose stack", () => {
       expect(job.steps[restore].with.key).toContain("runner.os");
       expect(job.steps[restore].with.key).toContain("1.3.14");
       expect(job.steps[restore].with.key).toContain("hashFiles('bun.lock')");
-      if (["frontend-zero-jump", "frontend-replica"].includes(jobName)) {
+      if (jobName === "frontend-replica") {
         expect(job.steps[install].if).toBe("steps.relevant.outputs.run == 'true'");
         expect(job.steps[restore].if).toBe(job.steps[install].if);
       } else {

@@ -8,6 +8,13 @@ repository wiki list change ([ADR 0002](0002-repository-wiki-list-without-bodies
 The two hooks it describes are implemented by MUL-450
 (`views/common/use-anchored-reveal.ts`, `views/common/use-stick-to-bottom.ts`).
 
+**2026-10-21:** the CI zero-jump gate (the `frontend-zero-jump` job running
+`tests/integration/zero-jump-check.ts`, S7) was removed by user decision. The
+design rule and the decisions below stand unchanged, but CI no longer enforces
+them; mentions of S7 or CI enforcement below describe the gate as it was. The
+`data-perf-*` contract and S1 (`frontend/scripts/perf/page-speed.ts`) remain for
+manual measurement.
+
 ## Context
 
 The issue detail page renders the title, description, sub-issues, published

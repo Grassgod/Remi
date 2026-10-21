@@ -23,8 +23,9 @@ operator starts the separately approved cutover.
    reveal behavior, Issue and Chat lists, and lazy task trace readers.
 5. Publish B5 and C12 in that same release: remove the old task/chat reads,
    frames, frontend fetches, and CLI implementations. Check the route snapshot,
-   CLI capability manifest, CI zero-jump and replica jobs, and the independent
-   Issue/Chat/trace browser matrix before declaring the cutover complete.
+   CLI capability manifest, CI replica job (the zero-jump job was removed on
+   2026-10-21), and the independent Issue/Chat/trace browser matrix before
+   declaring the cutover complete.
 
 Deleting the old tables is a separate last step owned by B. It requires a fresh
 backup and explicit approval; it is not part of this release checklist.

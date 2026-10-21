@@ -59,6 +59,8 @@ describe("release workflows", () => {
     expect(ci.jobs.build.if).toBe("always()");
     expect(ci.jobs.build.needs).toContain("backend-evidence");
     expect(ci.jobs.build.needs).toContain("backend-retry");
+    // `build` is the aggregate gate: every other job except the candidate packager feeds it.
+    expect([...ci.jobs.build.needs].sort()).toEqual(Object.keys(ci.jobs).filter(name => !["build", "candidate-package"].includes(name)).sort());
     const summary = ci.jobs.build.steps[0].run;
     expect(summary).toContain("result == expected");
     expect(summary).toContain("verified-retry");
