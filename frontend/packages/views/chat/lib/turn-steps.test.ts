@@ -273,17 +273,15 @@ describe("live label", () => {
 
 describe("fold headers", () => {
   const turn = traceTurn();
-  it("reads working, then working for, then worked for once the final starts", () => {
-    const start = Date.parse(turn.started_at);
-    expect(liveFoldHeader(turn, [], start + 999)).toEqual({ kind: "working" });
-    expect(liveFoldHeader(turn, [], start + 1000)).toEqual({ kind: "working_for", ms: 1000 });
-    expect(liveFoldHeader(turn, [message("msg:f", "Hi", "final", { started_at: at(12) })], start + 99_000))
+  it("has no header while the turn works, then reads worked for once the final starts", () => {
+    expect(liveFoldHeader(turn, [])).toBeNull();
+    expect(liveFoldHeader(turn, [message("msg:f", "Hi", "final", { started_at: at(12) })]))
       .toEqual({ kind: "worked_for", ms: 12_000 });
   });
 
   it("reads stopped after for a cancelled turn and worked for for one that ended without a final", () => {
-    expect(liveFoldHeader({ ...turn, status: "cancelled", duration_ms: 4000 }, [], 0)).toEqual({ kind: "stopped_after", ms: 4000 });
-    expect(liveFoldHeader({ ...turn, status: "failed", completed_at: at(7) }, [], 0)).toEqual({ kind: "worked_for", ms: 7000 });
+    expect(liveFoldHeader({ ...turn, status: "cancelled", duration_ms: 4000 }, [])).toEqual({ kind: "stopped_after", ms: 4000 });
+    expect(liveFoldHeader({ ...turn, status: "failed", completed_at: at(7) }, [])).toEqual({ kind: "worked_for", ms: 7000 });
   });
 
   it("titles a finished card by worked_ms, falling back to elapsed_ms", () => {

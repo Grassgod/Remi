@@ -44,7 +44,6 @@
     "turn_retry_new_session": "在新会话中重试",
     "loading_older": "正在载入更早消息…",
     "expand_older": "展开更早 30 条",
-    "earliest": "已到最早消息",
     "sending": "发送中…",
     "sent": "已发送",
     "send_failed": "发送失败 ·",

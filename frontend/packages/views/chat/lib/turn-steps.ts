@@ -486,25 +486,22 @@ export type FoldHeader =
   | { kind: "steps" };
 
 /**
- * The live fold's title (Codex "Working" / "Working for" / "Worked for"):
- * under a second "Working", then "Working for {t}" until the first final reply
- * starts, then "Worked for {final.started_at - turn.started_at}". A cancelled
- * turn reads "Stopped after {t}"; a turn that ended without a final reply
- * reads "Worked for" its duration.
+ * The live fold's title, or null while the turn works and its final reply has
+ * not started: then there is no header at all and the steps show inline (the
+ * Codex app). Once the first final item starts it reads "Worked for
+ * {final.started_at - turn.started_at}". A cancelled turn reads "Stopped
+ * after {t}"; a turn that ended without a final reply reads "Worked for" its
+ * duration.
  */
 export function liveFoldHeader(
   turn: { started_at: string; status: string; completed_at: string | null; duration_ms: number | null },
   finals: readonly TraceAgentMessageItem[],
-  now: number,
-): FoldHeader {
+): FoldHeader | null {
+  if (finals.length === 0 && turn.status === "running") return null;
   const start = parseTime(turn.started_at);
   if (start === null) return { kind: "steps" };
   const finalStart = parseTime(finals[0]?.started_at);
   if (finalStart !== null) return { kind: "worked_for", ms: Math.max(0, finalStart - start) };
-  if (turn.status === "running") {
-    const elapsed = Math.max(0, now - start);
-    return elapsed < 1000 ? { kind: "working" } : { kind: "working_for", ms: elapsed };
-  }
   const end = parseTime(turn.completed_at);
   const duration = turn.duration_ms ?? (end !== null ? Math.max(0, end - start) : null);
   if (duration === null) return { kind: "steps" };

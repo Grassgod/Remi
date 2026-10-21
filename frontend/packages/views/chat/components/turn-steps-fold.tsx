@@ -23,7 +23,7 @@ import {
   liveLabel,
   type FoldHeader,
 } from "../lib/turn-steps";
-import { useStickyLabel, useTickingNow } from "./live-hooks";
+import { useStickyLabel } from "./live-hooks";
 import { SUBAGENT_SPIN, SubagentTraceContext, type SubagentTraceSource } from "./subagent-context";
 import { SubagentCompletionRows } from "./subagent-completion-row";
 import { scrollToSubagentRow } from "./subagent-step-row";
@@ -47,20 +47,26 @@ export function useFoldHeaderText(): (header: FoldHeader) => string {
   };
 }
 
+/**
+ * Steps under a header and its hairline. A null `title` draws no header: the
+ * steps show inline (the live turn before its reply, which the caller keeps
+ * open) in the same panel, so they fold away in place once a header comes.
+ */
 export function StepsFold({ kind, title, open, onOpenChange, disabled, children }: {
   kind: "live" | "finished";
-  title: ReactNode;
+  title: ReactNode | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   disabled?: boolean;
   children: ReactNode;
 }) {
+  const headed = title !== null;
   return (
     <ChainOfThought open={open} onOpenChange={onOpenChange} data-chat-steps={kind}>
-      <ChainOfThoughtHeader disabled={disabled} data-chat-steps-header>{title}</ChainOfThoughtHeader>
+      {headed && <ChainOfThoughtHeader disabled={disabled} data-chat-steps-header>{title}</ChainOfThoughtHeader>}
       {/* The panel clips; an 8px side gutter keeps the rows' focus rings whole. */}
       <ChainOfThoughtContent className="-mx-2 px-2">
-        <div className="pt-3 pb-1">{children}</div>
+        <div className={headed ? "pt-3 pb-1" : "pb-1"}>{children}</div>
       </ChainOfThoughtContent>
     </ChainOfThought>
   );
@@ -104,16 +110,19 @@ function RevealListener({ attemptId, onReveal }: { attemptId: string; onReveal: 
 }
 
 /**
- * The turn that is still running, below the log: the steps fold and, once it
- * starts, the final reply. While the agent works the fold reads "Working" /
- * "Working for {t}" and stays open; when the first final item starts it
- * reads "Worked for {t}" and folds away, without waiting for the turn to end.
- * While background subagents run the header adds 「· N 个后台子代理运行中」
- * (not forced open), and subagents that end after the reply started get a
- * completion row under it. A legacy (v1) trace shows nothing.
+ * The turn that is still running, below the log: its steps and, once it
+ * starts, the final reply. While the agent works there is no header and no
+ * hairline: the steps and the live line ("Thinking" or the current step) show
+ * inline, as in the Codex app; the running strip names any subagents at work.
+ * When the first final item starts the steps fold away under "Worked for {t}",
+ * without waiting for the turn to end; while background subagents run that
+ * header adds 「· N 个后台子代理运行中」 (not forced open), and subagents that end
+ * after the reply started get a completion row under it. A turn that ends
+ * without a final reply reads "Worked for" / "Stopped after" {t} above its
+ * open steps. A legacy (v1) trace shows nothing.
  *
  * `frozen`: the turn has ended and the view only waits for its rows (see
- * `useLiveTurnHandoff`); it keeps what it shows and its clock stops.
+ * `useLiveTurnHandoff`); it keeps what it shows.
  */
 export function LiveTurnSteps({ trace, sessionId = null, frozen = false }: {
   trace: Pick<TurnTraceView, "turn" | "items">;
@@ -129,8 +138,6 @@ export function LiveTurnSteps({ trace, sessionId = null, frozen = false }: {
   const steps = useMemo(() => buildTurnSteps(items, { resolveBackgroundTask }), [items, resolveBackgroundTask]);
   const finalStarted = steps.finals.length > 0;
   const running = !!turn && turn.status === "running" && !finalStarted;
-  const start = turn ? Date.parse(turn.started_at) : NaN;
-  const now = useTickingNow(running && !frozen, Number.isFinite(start) ? start : null);
   const label = useStickyLabel(running ? liveLabel(steps) : null);
   const [userOpen, setUserOpen] = useState<boolean | null>(null);
   const headerText = useFoldHeaderText();
@@ -140,17 +147,20 @@ export function LiveTurnSteps({ trace, sessionId = null, frozen = false }: {
   const source = useMemo<SubagentTraceSource | null>(() => turn
     ? { sessionId, attemptId: turn.id, turnId: turn.turn_id ?? undefined, live: true } : null, [sessionId, turn?.id, turn?.turn_id]);
   if (!turn || !source) return null;
-  const open = userOpen ?? !finalStarted;
+  // Null while the agent works: no header, and the steps stay open inline.
+  const fold = liveFoldHeader(turn, steps.finals);
+  const open = fold === null || (userOpen ?? !finalStarted);
   const showFold = steps.processCount > 0 || !finalStarted;
   const background = backgroundRunningCount(items, finalStarted);
-  const header = headerText(liveFoldHeader(turn, steps.finals, now));
+  const header = fold && headerText(fold);
   return (
     <SubagentTraceContext.Provider value={source}>
       <div data-chat-live-turn={frozen ? "held" : ""} className="space-y-3">
-        {hasSubagents && <RevealListener attemptId={turn.id} onReveal={() => setUserOpen(true)} />}
+        {/* Inline steps need only the scroll; opening would pin the fold open once the reply starts. */}
+        {hasSubagents && <RevealListener attemptId={turn.id} onReveal={() => { if (fold) setUserOpen(true); }} />}
         {showFold && (
           <StepsFold kind="live" open={open} onOpenChange={setUserOpen}
-            title={background > 0 ? <>{header}<BackgroundRunningSuffix count={background} /></> : header}>
+            title={header !== null && background > 0 ? <>{header}<BackgroundRunningSuffix count={background} /></> : header}>
             <TurnStepList steps={steps} items={items} live={running && label ? { label, blockKey: liveBlockKey(steps, label) } : undefined} />
           </StepsFold>
         )}
