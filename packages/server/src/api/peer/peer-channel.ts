@@ -63,6 +63,9 @@ import {
   recordPeerFailure,
   recordPeerOversizeDropped,
 } from "../../observability/request-metrics.js";
+import { createLogger } from "@shared/logger.js";
+
+const log = createLogger("peer-channel");
 
 /** Topic the realtime fanout publishes on. */
 export const PEER_REALTIME_TOPIC = "realtime";
@@ -313,6 +316,8 @@ class HttpPeerChannel implements PeerChannel {
   private inflight: { seq: number; batch: QueuedPeerEvent[]; body: string } | null = null;
   private nextBatchSeq = 1;
   private consecutiveFailures = 0;
+  /** When the current run of failed POSTs began; null while the link delivers. */
+  private failingSince: number | null = null;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private closed = false;
   private sent = 0;
@@ -635,11 +640,15 @@ class HttpPeerChannel implements PeerChannel {
     timer.unref?.();
   }
 
-  private scheduleRetry(): void {
-    if (this.closed || this.retryTimer) return;
-    const delay = this.consecutiveFailures <= 1
+  private retryDelayMs(): number {
+    return this.consecutiveFailures <= 1
       ? this.minBackoffMs
       : Math.min(this.maxBackoffMs, this.minBackoffMs * 2 ** (this.consecutiveFailures - 1));
+  }
+
+  private scheduleRetry(): void {
+    if (this.closed || this.retryTimer) return;
+    const delay = this.retryDelayMs();
     const timer = setTimeout(() => {
       this.retryTimer = null;
       this.schedule();
@@ -726,12 +735,28 @@ class HttpPeerChannel implements PeerChannel {
         const startedAt = performance.now();
         try {
           await this.post(body);
-        } catch {
+        } catch (error) {
           // Keep the already frozen body and back off. close() may have cleared
           // the slot during this await; a late failure must never recreate it.
           this.failed += 1;
           this.consecutiveFailures += 1;
+          this.failingSince ??= Date.now();
           recordPeerFailure();
+          // Everything queued behind this batch waits out the backoff, realtime
+          // events (chat:done included) and hub pointers alike: say so once per
+          // run, then every tenth attempt.
+          if (!this.closed && (this.consecutiveFailures === 1 || this.consecutiveFailures % 10 === 0)) {
+            log.warn("peer delivery failed", {
+              event: "peer_delivery_failed",
+              topic: batch[0]?.topic ?? null,
+              batch_seq: batchSeq,
+              events: batch.length,
+              queued: this.queue.length,
+              attempt: this.consecutiveFailures,
+              retry_in_ms: this.retryDelayMs(),
+              error: (error instanceof Error ? error.message : String(error)).slice(0, 200),
+            });
+          }
           this.scheduleRetry();
           return;
         }
@@ -742,6 +767,16 @@ class HttpPeerChannel implements PeerChannel {
         // now, so a retry can never be followed by a reuse of its number.
         this.inflight = null;
         this.nextBatchSeq = batchSeq + 1;
+        if (this.failingSince !== null) {
+          log.info("peer delivery recovered", {
+            event: "peer_delivery_recovered",
+            failed_attempts: this.consecutiveFailures,
+            stalled_ms: Date.now() - this.failingSince,
+            batch_seq: batchSeq,
+            queued: this.queue.length,
+          });
+          this.failingSince = null;
+        }
         this.consecutiveFailures = 0;
         this.sent += batch.length;
         this.batches += 1;

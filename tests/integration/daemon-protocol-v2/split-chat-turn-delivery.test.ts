@@ -115,6 +115,9 @@ describe("split ui/runtime: a finished Chat turn reaches a browser on the ui pro
         "task:completed on the ui socket", SPLIT_DELIVERY_BOUND_MS);
       expect(frames().some(({ frame }) => frame.payload.id === reply.id)).toBe(true);
       expect(Math.max(card()!.at, done()!.at) - completedAt).toBeLessThan(SPLIT_DELIVERY_BOUND_MS);
+      // The ui process reports the cross-process chat:done and the socket it reached.
+      await waitFor(() => /peer chat:done delivered[\s\S]*sockets: 1/.test(ui!.logs()), "ui chat:done diagnostic", SPLIT_DELIVERY_BOUND_MS);
+      expect(ui.logs()).toContain(`task_id: "${attemptId()}"`);
       expect(h.errors).toEqual([]);
     } catch (error) {
       console.error(`split delivery stage=${stage} events=${JSON.stringify(events.map(({ event }) => [event.type,

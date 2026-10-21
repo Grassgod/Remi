@@ -36,6 +36,18 @@ and opaque topics that cannot fit one event are refused and counted as
 active retry bytes are outside backlog eviction. Health reports queue,
 inflight, dropped, degraded and RTT counters.
 
+One queue carries both topics, so a failed POST holds every later event,
+hub pointers and `chat:done` alike, until its retry succeeds. The sender logs
+`peer delivery failed` (`event: peer_delivery_failed`, with topic, batch,
+attempt, backoff and error) on the first failure of a run and every tenth
+attempt after it, and `peer delivery recovered` with the failed attempts and
+`stalled_ms` once the link delivers again. A browser-serving process logs each
+`chat:done` that arrived from the peer (`event: peer_chat_done`) with `lag_ms`
+since the terminal transaction stamped it and `sockets`, the creator's sockets
+on this process that received it; it is a warning from 1 s of lag. Zero
+sockets with a small lag points at the browser connection, a large lag at the
+channel.
+
 ## Role Resolution
 
 [Startup configuration](../../packages/server/src/config/startup-env.ts) is the
@@ -47,4 +59,7 @@ prevents downstream role environment reads.
 
 Validation lives in the [protocol tests](../../tests/unit/multiremi/peer-channel.test.ts),
 [fanout tests](../../tests/unit/multiremi/realtime-fanout.test.ts) and the
-architecture guard.
+architecture guard. The [split Chat turn test](../../tests/integration/daemon-protocol-v2/split-chat-turn-delivery.test.ts)
+runs a real daemon, a runtime API and a ui API in its own process over one
+database, and checks that a finished turn's card and `chat:done` reach a
+browser socket on the ui process.
