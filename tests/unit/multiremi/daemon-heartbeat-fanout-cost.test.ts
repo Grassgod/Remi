@@ -1,13 +1,19 @@
 import { createResponsibleTestIssue } from './helpers.js';
-import { afterEach, expect, setSystemTime, spyOn, test } from "bun:test";
+import { afterEach, beforeAll, beforeEach, describe, expect, setSystemTime, spyOn, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { FEISHU_CONCIERGE_ATTACHMENT_PROTOCOL_VERSION } from "@multiremi/contracts/types.js";
 import type { DaemonProtocolLayer } from "@multiremi/api/daemon-protocol/index.js";
 import { startMultiremiServer } from "../../fixtures/daemon-protocol.js";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import { resetMultiremiTestEnv } from "./helpers.js";
+
+// Every fleet opens its database with this bot key set; warm the migrated
+// template under the same environment (registered first, so it runs first).
+const FLEET_KEY = Buffer.alloc(32, 52).toString("base64");
+beforeAll(() => { process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = FLEET_KEY; });
+useMigratedHotspotDatabases();
 
 const cleanups: Array<() => Promise<void>> = [];
 const previousEncryptionKey = process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY;
@@ -67,10 +73,18 @@ async function pendingOnDisconnectedRuntime(f: Awaited<ReturnType<typeof fleet>>
   expect(f.store.hasPendingTaskOffers("local")).toBe(true);
 }
 
-async function fleet() {
-  process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = Buffer.alloc(32, 52).toString("base64");
+/** The fleet's own database, opened under the fleet's environment. Cases that
+ * freeze the clock open it first, so only the fleet itself runs at the fixed
+ * time and the (cloned, already migrated) database stays outside the freeze. */
+async function openFleetDatabase() {
+  process.env.MULTIREMI_FEISHU_BOT_ENCRYPTION_KEY = FLEET_KEY;
   const database = await openHotspotDatabase();
   cleanups.push(() => database.dispose());
+  return database;
+}
+
+async function fleet(opened?: Awaited<ReturnType<typeof openFleetDatabase>>) {
+  const database = opened ?? await openFleetDatabase();
   const store = new MultiremiStore(database.db);
   store.ensureLocalWorkspace();
   const runtimeIds = Array.from({ length: 8 }, (_, index) => `rt_cost_${index}`);
@@ -120,9 +134,18 @@ async function fleet() {
   return { store, layer, sessions, runtimeIds, frames, status, heartbeat, agent, database: database.db };
 }
 
-test("eight unchanged concierge reports refresh timestamps without downlinks, offers or usage scans", async () => {
+// The two fixed-clock cases build their fleet in a hook with its own budget:
+// database, eight Runtimes and four handshakes are setup, not the behaviour
+// under the default 5 s test budget (it used to sit near it on PostgreSQL).
+describe("fixed clock", () => {
+let f: Awaited<ReturnType<typeof fleet>>;
+beforeEach(async () => {
+  const database = await openFleetDatabase();
   setSystemTime(new Date("2026-10-08T06:00:00Z"));
-  const f = await fleet();
+  f = await fleet(database);
+}, 30_000);
+
+test("eight unchanged concierge reports refresh timestamps without downlinks, offers or usage scans", async () => {
   const before = f.store.listFeishuBotRuntimeStatuses("local").find(status => status.runtimeId === f.runtimeIds[0])!.reportedAt;
   const snapshots = spyOn(f.store, "pendingRuntimeRequests");
   const claims = spyOn(f.store, "claimTask");
@@ -143,6 +166,38 @@ test("eight unchanged concierge reports refresh timestamps without downlinks, of
     expect(claims).not.toHaveBeenCalled();
     expect(f.store.listFeishuBotRuntimeStatuses("local").find(status => status.runtimeId === f.runtimeIds[0])!.reportedAt).not.toBe(before);
   } finally { snapshots.mockRestore(); claims.mockRestore(); }
+});
+
+test("enqueue pushes immediately and released capacity retries only its daemon before cooldown", async () => {
+  // The clock never advances (beforeEach): neither the periodic heartbeat nor retry/sweep deadlines can dispatch.
+  const task = f.store.createTask({ agentId: f.agent.id, prompt: "dispatch from enqueue" });
+  await f.layer.drain();
+  const offers = () => f.frames[0]!.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id);
+  expect(offers()).toHaveLength(1);
+  const first = offers()[0]!;
+  expect(first.rt).toBe(f.runtimeIds[0]);
+  expect(first.p.requesting_user_name).toBe(f.store.getUser("local")!.name);
+  await f.heartbeat(0, true, 1);
+  await f.layer.drain();
+  await f.sessions[0]!.handleMessage(JSON.stringify({ v: 2, t: "res", re: String(first.seq), ack: first.seq,
+    p: { ok: false, code: "capacity" } }));
+  await f.layer.drain();
+  expect(f.store.getTaskIdentity(task.id)?.status).toBe("queued");
+
+  const claims = spyOn(f.store, "claimTask");
+  try {
+    await countSql(f.database, f.layer, () => f.heartbeat(0, true, 1));
+    expect(claims).not.toHaveBeenCalled();
+    expect(offers()).toHaveLength(1);
+
+    const sql = await countSql(f.database, f.layer, () => f.heartbeat(0, true, 0));
+    expect([...new Set(claims.mock.calls.map(args => args[0]))].sort()).toEqual(f.runtimeIds.slice(0, 2));
+    expect(offers()).toHaveLength(2);
+    expect(offers()[1]!.rt).toBe(f.runtimeIds[0]);
+    expect(f.frames.slice(1).flat().some(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toBe(false);
+    expect(historicalAggregates(sql)).toEqual([]);
+  } finally { claims.mockRestore(); }
+});
 });
 
 test("unchanged SSH status heartbeats stay local; a changed endpoint still reconciles the mesh", async () => {
@@ -218,39 +273,6 @@ test("a directory request reaches its runtime without querying or offering on ot
     expect(f.frames[0]!.some(frame => frame.t === "runtime.directory_scan" && frame.p.id === requestId)).toBe(true);
     expect(f.frames.slice(1).flat().some(frame => frame.t === "runtime.directory_scan" && frame.p.id === requestId)).toBe(false);
   } finally { snapshots.mockRestore(); claims.mockRestore(); }
-});
-
-test("enqueue pushes immediately and released capacity retries only its daemon before cooldown", async () => {
-  // The clock never advances: neither the periodic heartbeat nor retry/sweep deadlines can dispatch.
-  setSystemTime(new Date("2026-10-08T06:00:00Z"));
-  const f = await fleet();
-  const task = f.store.createTask({ agentId: f.agent.id, prompt: "dispatch from enqueue" });
-  await f.layer.drain();
-  const offers = () => f.frames[0]!.filter(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id);
-  expect(offers()).toHaveLength(1);
-  const first = offers()[0]!;
-  expect(first.rt).toBe(f.runtimeIds[0]);
-  expect(first.p.requesting_user_name).toBe(f.store.getUser("local")!.name);
-  await f.heartbeat(0, true, 1);
-  await f.layer.drain();
-  await f.sessions[0]!.handleMessage(JSON.stringify({ v: 2, t: "res", re: String(first.seq), ack: first.seq,
-    p: { ok: false, code: "capacity" } }));
-  await f.layer.drain();
-  expect(f.store.getTaskIdentity(task.id)?.status).toBe("queued");
-
-  const claims = spyOn(f.store, "claimTask");
-  try {
-    await countSql(f.database, f.layer, () => f.heartbeat(0, true, 1));
-    expect(claims).not.toHaveBeenCalled();
-    expect(offers()).toHaveLength(1);
-
-    const sql = await countSql(f.database, f.layer, () => f.heartbeat(0, true, 0));
-    expect([...new Set(claims.mock.calls.map(args => args[0]))].sort()).toEqual(f.runtimeIds.slice(0, 2));
-    expect(offers()).toHaveLength(2);
-    expect(offers()[1]!.rt).toBe(f.runtimeIds[0]);
-    expect(f.frames.slice(1).flat().some(frame => frame.t === "task.offer" && frame.p.attempt_id === task.id)).toBe(false);
-    expect(historicalAggregates(sql)).toEqual([]);
-  } finally { claims.mockRestore(); }
 });
 
 test("model changes check only their runtime and empty claims do not hydrate historical usage", async () => {
