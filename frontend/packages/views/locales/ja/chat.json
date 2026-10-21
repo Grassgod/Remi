@@ -44,7 +44,6 @@
     "turn_retry_new_session": "新しいセッションで再試行",
     "loading_older": "古いメッセージを読み込み中…",
     "expand_older": "以前のメッセージを30件表示",
-    "earliest": "チャットの開始",
     "sending": "送信中…",
     "sent": "送信済み",
     "send_failed": "送信失敗 ·",

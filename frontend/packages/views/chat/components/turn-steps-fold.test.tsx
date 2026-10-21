@@ -28,6 +28,12 @@ registerChatStore(createChatStore({ storage: {
 
 const header = () => document.querySelector<HTMLButtonElement>("[data-chat-steps-header]")!;
 const isOpen = () => header().hasAttribute("data-panel-open");
+/** The working phase: the steps show inline, with no header text and no hairline. */
+const expectInline = () => {
+  expect(document.querySelector("[data-chat-steps-header]")).toBeNull();
+  expect(document.querySelector('[data-slot="chain-of-thought-row"]')).toBeNull();
+  expect(document.querySelector('[data-chat-steps="live"]')).toHaveAttribute("data-open");
+};
 const running = { status: "in_progress" as const, completed_at: null };
 
 function renderLive(turn: TraceTurn, items: TraceItem[]) {
@@ -40,43 +46,48 @@ describe("live fold header", () => {
   beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(new Date(T0)); });
   afterEach(() => { vi.useRealTimers(); });
 
-  it("reads 处理中 under a second, then ticks 已处理 each second, expanded", () => {
+  it("shows only the live line while the agent works, with no header, hairline or clock", () => {
     renderLive(traceTurn(), []);
-    expect(header()).toHaveTextContent("处理中");
-    expect(isOpen()).toBe(true);
-    act(() => { vi.advanceTimersByTime(999); });
-    expect(header()).toHaveTextContent("处理中");
-    act(() => { vi.advanceTimersByTime(1); });
-    expect(header()).toHaveTextContent("已处理 1s");
-    act(() => { vi.advanceTimersByTime(4000); });
-    expect(header()).toHaveTextContent("已处理 5s");
-    // Nothing is running yet: the trailing line says the agent is thinking.
+    expectInline();
+    // Nothing is running yet: the line says the agent is thinking.
     expect(document.querySelector("[data-step-live-line]")).toHaveTextContent("正在思考");
+    act(() => { vi.advanceTimersByTime(5000); });
+    expectInline();
+    expect(screen.queryByText(/处理中|已处理/)).toBeNull();
   });
 
-  it("switches to 用时 and folds away when the first final item starts, before the turn ends", () => {
+  it("shows the step rows inline while the agent works, then folds them under 用时 when the first final item starts", () => {
     const view = renderLive(traceTurn(), [command("cmd_1", [read("a.ts")])]);
     act(() => { vi.advanceTimersByTime(9000); });
-    expect(header()).toHaveTextContent("已处理 9s");
+    expectInline();
+    expect(document.querySelector('[data-step-row="cmd_1:0"]')).toHaveTextContent("已读取 a.ts");
+    expect(document.querySelector("[data-step-live-line]")).toHaveTextContent("正在思考");
     view.update(traceTurn(), [command("cmd_1", [read("a.ts")]), message("msg:f", "答案", "final", { ...running, started_at: at(7) })]);
     expect(header()).toHaveTextContent("用时 7s");
+    expect(document.querySelector('[data-chat-steps="live"] [data-slot="chain-of-thought-row"]')).not.toBeNull();
     expect(isOpen()).toBe(false);
+    expect(document.querySelector("[data-step-live-line]")).toBeNull();
     expect(document.querySelector("[data-chat-live-final]")).toHaveTextContent("答案");
     act(() => { vi.advanceTimersByTime(5000); });
     expect(header()).toHaveTextContent("用时 7s");
   });
 
   it("keeps the reader's own choice once they toggle the fold", () => {
-    const view = renderLive(traceTurn(), [command("cmd_1", [read("a.ts")])]);
-    fireEvent.click(header());
+    const steps = [command("cmd_1", [read("a.ts")])];
+    const view = renderLive(traceTurn(), [...steps, message("msg:f", "答", "final", { ...running, started_at: at(2) })]);
     expect(isOpen()).toBe(false);
     fireEvent.click(header());
-    view.update(traceTurn(), [command("cmd_1", [read("a.ts")]), message("msg:f", "答案", "final", { started_at: at(2) })]);
     expect(isOpen()).toBe(true);
+    view.update(traceTurn(), [...steps, message("msg:f", "答案", "final", { ...running, started_at: at(2) })]);
+    expect(isOpen()).toBe(true);
+    fireEvent.click(header());
+    view.update(traceTurn(), [...steps, message("msg:f", "答案。", "final", { started_at: at(2) })]);
+    expect(isOpen()).toBe(false);
   });
 
   it("shows only the reply when a final starts with nothing before it, and stops after a cancel", () => {
-    const view = renderLive(traceTurn(), [message("msg:f", "你好", "final", { started_at: at(1) })]);
+    // Thinking draws no step: a turn without process items has no fold once the reply starts.
+    const view = renderLive(traceTurn(), [reasoning("rsn:1", "**Planning**"), message("msg:f", "你好", "final", { started_at: at(1) })]);
     expect(document.querySelector("[data-chat-steps]")).toBeNull();
     expect(document.querySelector("[data-chat-live-final]")).toHaveTextContent("你好");
     view.update(traceTurn({ status: "cancelled", duration_ms: 3000 }), [command("cmd_1", [read("a.ts")])]);
@@ -188,9 +199,12 @@ describe("background subagents (PR 5 §6.3-6.4)", () => {
   const background = (id: string, name: string, overrides = {}) =>
     subagent(id, name, { name, background: true, ...running, started_at: at(2), ...overrides });
 
-  it("adds 「· N 个后台子代理运行中」 to the header without forcing the fold open", () => {
+  it("adds 「· N 个后台子代理运行中」 to the 用时 header once the reply starts, without forcing the fold open", () => {
     const view = renderLive(traceTurn(), [background("sa:1", "Explore"), message("msg:1", "Started it.")]);
-    expect(header()).toHaveTextContent("已处理 30s · 1 个后台子代理运行中");
+    // Before the reply there is no header to carry it (the running strip names the subagent); its row shows inline.
+    expectInline();
+    expect(document.querySelector("[data-fold-background-running]")).toBeNull();
+    expect(document.querySelector('[data-subagent-row="sa:1"]')).not.toBeNull();
     // The caller only waits: no thinking line under the steps.
     expect(document.querySelector("[data-step-live-line]")).toBeNull();
     // After the reply starts the fold folds away and the suffix stays.
@@ -252,6 +266,27 @@ describe("background subagents (PR 5 §6.3-6.4)", () => {
     act(() => { useChatStore.getState().revealSubagent("att_1", "sa:1"); });
     expect(isOpen()).toBe(true);
     view.unmount();
+  });
+
+  it("scrolls to the inline row when the strip reveals a subagent before the reply, leaving the fold to close when it starts", () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: scrollIntoView });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue({ height: 20, width: 100 } as DOMRect);
+    try {
+      const view = renderLive(traceTurn(), [background("sa:1", "Explore"), message("msg:1", "Started it.")]);
+      act(() => { useChatStore.getState().revealSubagent("att_1", "sa:1"); });
+      act(() => { vi.advanceTimersByTime(400); });
+      expectInline();
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.contexts[0]).toBe(document.querySelector('[data-chat-live-turn=""] [data-subagent-row="sa:1"]'));
+      // The reveal opened nothing, so the steps still fold away under the header.
+      view.update(traceTurn(), [background("sa:1", "Explore"), message("msg:f", "Answer", "final", { started_at: at(20) })]);
+      expect(isOpen()).toBe(false);
+      view.unmount();
+    } finally {
+      vi.restoreAllMocks();
+      delete (HTMLElement.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 
   it("does not replay an old reveal when the fold mounts again", () => {

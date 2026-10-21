@@ -45,7 +45,6 @@
     "turn_retry_new_session": "Retry in new session",
     "loading_older": "Loading older messages…",
     "expand_older": "Show 30 earlier messages",
-    "earliest": "Start of chat",
     "sending": "Sending…",
     "sent": "Sent",
     "send_failed": "Failed to send ·",

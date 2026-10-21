@@ -45,7 +45,6 @@
     "turn_retry_new_session": "새 세션에서 재시도",
     "loading_older": "이전 메시지를 불러오는 중…",
     "expand_older": "이전 메시지 30개 보기",
-    "earliest": "첫 메시지입니다",
     "sending": "보내는 중…",
     "sent": "전송됨",
     "send_failed": "전송 실패 ·",

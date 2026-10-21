@@ -302,11 +302,12 @@ export function ChatMessageList({
       <ChatRunningStrip sessionId={sessionId} doorbells={doorbells}
         items={showLiveTimeline && liveTraceId ? liveTrace.items : undefined}
         source={showLiveTimeline && liveTraceId ? { sessionId, attemptId: liveTraceId, turnId: pendingTask?.turn_id, live: true } : null} />
-      <div className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
-        {hasOlderMessages ? <button type="button" data-chat-earlier disabled={!visible || isFetchingOlderMessages}
+      {/* Empty at the start of the chat, but kept: the row sets the top spacing. */}
+      <div data-chat-earlier-row className="flex h-10 items-center justify-center text-xs text-muted-foreground max-md:h-12">
+        {hasOlderMessages && <button type="button" data-chat-earlier disabled={!visible || isFetchingOlderMessages}
           onClick={loadOlder} className="h-full hover:text-foreground">
           {isFetchingOlderMessages ? t(($) => $.message_list.loading_older) : t(($) => $.message_list.expand_older)}
-        </button> : t(($) => $.message_list.earliest)}
+        </button>}
       </div>
     </>}
     renderEntry={({ entry }) => {

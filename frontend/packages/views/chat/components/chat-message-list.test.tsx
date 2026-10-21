@@ -137,6 +137,16 @@ describe("cached message observer visibility", () => {
     view.unmount(); client.clear();
   });
 
+  it("says nothing at the start of the chat but keeps the row that spaces the top", () => {
+    const view = renderList([], null, false, null);
+    try {
+      const row = view.container.querySelector<HTMLElement>("[data-chat-earlier-row]")!;
+      expect(row).toHaveClass("h-10");
+      expect(row).toBeEmptyDOMElement();
+      expect(view.container.querySelector("[data-chat-earlier]")).toBeNull();
+    } finally { view.unmount(); }
+  });
+
   it.each(["live", "assistant"])("loads only a visible live task, keeps terminal reply trace lazy (%s)", async (kind) => {
     const taskId = "tsk_visibility";
     const getTaskTrace = vi.fn(async () => turnPage(traceTurn({ id: taskId }), []));
@@ -950,7 +960,9 @@ describe("live turn steps", () => {
       // The strip shares one sticky block with the background-task notices (PR 6).
       expect(strip.closest<HTMLElement>("[data-chat-running-strip]")!.className).toContain("sticky");
       expect(strip.querySelector('[data-strip-chip="sa:1"]')).not.toBeNull();
-      // Its row in the live fold opens the panel on the live attempt.
+      // Before the reply the live steps have no header to name the subagent: the strip does.
+      expect(view.container.querySelector("[data-chat-live-turn] [data-chat-steps-header]")).toBeNull();
+      // Its row in the live steps opens the panel on the live attempt.
       fireEvent.click(view.container.querySelector<HTMLButtonElement>('[data-chat-live-turn] [data-subagent-row="sa:1"]')!);
       expect(useChatStore.getState().subagentPanel).toMatchObject({ sessionId: "cs-1", attemptId: TASK_ID, live: true, path: ["sa:1"] });
     } finally { view.unmount(); client.clear(); }
