@@ -52,7 +52,6 @@
     "tests/integration/runtime-profile-model-discovery.test.ts": 2.002895193000091,
     "tests/integration/multiremi-daemon-chat-project.test.ts": 16.991173003999982,
     "tests/integration/platform-precheck-readonly.test.ts": 15.978754886000184,
-    "tests/integration/daemon-real-home-isolation.test.ts": 114.87234622800001,
     "tests/integration/runtime-claude-profile.test.ts": 0.9978044210001826,
     "tests/integration/multiremi-release.test.ts": 0.06919394599995576,
     "tests/unit/agent-execution-groups-api.test.ts": 9.400320010999916,
