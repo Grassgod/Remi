@@ -1,6 +1,6 @@
 import { createResponsibleTestIssue, testWorkspaceMember } from './helpers.js';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { MultiremiIssue, MultiremiSystemEvent } from "@multiremi/contracts/types.js";
@@ -38,22 +38,46 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     let database: string;
     const probes: Bun.Subprocess<"ignore", "pipe", "pipe">[] = [];
     const preparedEventIds=new Map<string,Set<string>>();
+    // Migrated once per suite, outside the 5 s case hooks: a file-backed SQLite
+    // migration commits (and syncs) hundreds of times, and the first PostgreSQL
+    // case used to migrate the shared database inside its beforeEach. Each SQLite
+    // case still gets its own file and connection; the probes open that file.
+    let templateDirectory: string | undefined;
+    let sqliteTemplate: string | undefined;
+
+    function migrate(target: SqlDatabase): void {
+      try { new MultiremiStore(target).ensureLocalWorkspace(); }
+      finally { target.close(); }
+    }
 
     beforeAll(async () => {
-      if (dialect !== "postgres") return;
+      if (dialect === "sqlite") {
+        templateDirectory = mkdtempSync(join(tmpdir(), "mul452-template-"));
+        sqliteTemplate = join(templateDirectory, "store.sqlite");
+        migrate(openSqliteDatabase(sqliteTemplate));
+        // Closed and checkpointed: the main file is the whole database.
+        if (existsSync(`${sqliteTemplate}-wal`) || existsSync(`${sqliteTemplate}-journal`)) {
+          throw new Error("SQLite template left a journal behind");
+        }
+        return;
+      }
       const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
       try {
         await admin.unsafe(`CREATE DATABASE ${PG_DATABASE}`);
       } finally {
         await admin.end();
       }
-    });
+      const url = new URL(PG_ADMIN_URL);
+      url.pathname = `/${PG_DATABASE}`;
+      migrate(new PostgresSyncDatabase(url.toString()));
+    }, 60_000);
 
     beforeEach(() => {
       directory = mkdtempSync(join(tmpdir(), "mul452-replay-"));
       const url = new URL(PG_ADMIN_URL);
       url.pathname = `/${PG_DATABASE}`;
       database = dialect === "postgres" ? url.toString() : join(directory, "store.sqlite");
+      if (dialect === "sqlite") copyFileSync(sqliteTemplate!, database);
       openStore();
       store.ensureLocalWorkspace();
     });
@@ -68,6 +92,7 @@ for (const dialect of ["sqlite", "postgres"] as const) {
     });
 
     afterAll(async () => {
+      if (templateDirectory) rmSync(templateDirectory, { recursive: true, force: true });
       if (dialect !== "postgres") return;
       const admin = new Bun.SQL(PG_ADMIN_URL, { max: 1 });
       try {

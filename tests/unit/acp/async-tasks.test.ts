@@ -149,19 +149,36 @@ describe("AcpProvider background-task registry", () => {
 });
 
 describe("AcpProvider.settleAsyncTasks", () => {
-  it("replays, stops every running task in parallel, and yields until none runs", async () => {
-    const agent = fakeAgent("claude", { prompts: [[
-      task({ id: "a", event: "spawned" }), task({ id: "b", event: "spawned" }), chunk("Two running."), { resolve: "end_turn" },
-    ]] });
-    await collect(agent.provider.sendStream("go", { chatId: "chat" }));
-    const started = Date.now();
-    const events = await collect(agent.provider.settleAsyncTasks({ chatId: "chat", stopRunning: true, timeoutMs: 3_000 }));
-    expect(Date.now() - started).toBeLessThan(2_500);
-    expect(events.filter((event) => event.sessionUpdate === "async_task_state_update")).toHaveLength(2);
-    expect(events.filter((event) => event.sessionUpdate === "notice")).toHaveLength(2);
-    expect(agent.provider.listAsyncTasks({ chatId: "chat" }).map((t) => [t.state, t.stop?.by, t.stop?.outcome]))
-      .toEqual([["stopped", "remi", "stopped"], ["stopped", "remi", "stopped"]]);
-  });
+  // The bridge answers a stop before it writes the notice and `stopped` frame, and a
+  // reader can see the answer alone. Settle ends once every stop is answered (the
+  // registry holds the outcome the daemon records); frames still in flight are kept
+  // between prompts and replayed by the next stream, so none is lost or doubled.
+  for (const framesDelayMs of [0, 300]) {
+    it(`replays, stops every running task in parallel, and yields until none runs (stop frames +${framesDelayMs} ms)`, async () => {
+      const agent = fakeAgent("claude", { asyncTaskStopFramesDelayMs: framesDelayMs, prompts: [[
+        task({ id: "a", event: "spawned" }), task({ id: "b", event: "spawned" }), chunk("Two running."), { resolve: "end_turn" },
+      ]] });
+      await collect(agent.provider.sendStream("go", { chatId: "chat" }));
+      const started = Date.now();
+      const events = await collect(agent.provider.settleAsyncTasks({ chatId: "chat", stopRunning: true, timeoutMs: 3_000 }));
+      expect(Date.now() - started).toBeLessThan(2_500);
+      // The answered stops are final; the task state follows its `stopped` frame.
+      expect(agent.provider.listAsyncTasks({ chatId: "chat" }).map((t) => [t.stop?.by, t.stop?.outcome]))
+        .toEqual([["remi", "stopped"], ["remi", "stopped"]]);
+      const count = (kind: string) => events.filter((event) => event.sessionUpdate === kind).length;
+      const replay = async () => events.push(...await collect(agent.provider.settleAsyncTasks({ chatId: "chat", stopRunning: false, timeoutMs: 0 })));
+      for (const deadline = Date.now() + 5_000; count("async_task_state_update") < 2 || count("notice") < 2;) {
+        if (Date.now() > deadline) throw new Error("Timed out waiting for the stop frames");
+        await Bun.sleep(20);
+        await replay();
+      }
+      await replay();
+      expect(count("async_task_state_update")).toBe(2);
+      expect(count("notice")).toBe(2);
+      expect(agent.provider.listAsyncTasks({ chatId: "chat" }).map((t) => [t.state, t.stop?.by, t.stop?.outcome]))
+        .toEqual([["stopped", "remi", "stopped"], ["stopped", "remi", "stopped"]]);
+    });
+  }
 
   it("waits drainMs for a late announcement, then ends at the timeout while it runs", async () => {
     const agent = fakeAgent("codex", { prompts: [[chunk("ok"), { resolve: "end_turn" }, { delayMs: 300, ...task({ id: "late", event: "spawned" }) }]] });

@@ -1,6 +1,9 @@
 import { expect, it } from "bun:test";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
 
+// Three daemon generations of two co-resident providers each, plus a stale-runtime
+// recovery hello in between: 3.3-4.0 s on CI, so it gets the 15 s the other
+// multi-start harness cases in this directory use rather than the 5 s default.
 it("keeps the implicit daemon identity across two providers, stale runtime recovery and complete instance replacement", async () => {
   let injectStale = false;
   const oldId = "rt_deleted_identity_probe";
@@ -41,4 +44,4 @@ it("keeps the implicit daemon identity across two providers, stale runtime recov
     }
     expect(h.layer.registry.size).toBe(1);
   } finally { await h.dispose(); }
-});
+}, 15_000);

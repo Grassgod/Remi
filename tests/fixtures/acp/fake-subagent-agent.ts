@@ -82,6 +82,8 @@ export interface FakeSubagentConfig {
   logEnv?: string[];
   /** A cancelled prompt resolves `cancelled` this long after `session/cancel` (a slow bridge). */
   cancelDelayMs?: number;
+  /** A successful `_session/async_task/stop` sends its notice and `stopped` frame this long after the answer. */
+  asyncTaskStopFramesDelayMs?: number;
 }
 
 const config = JSON.parse(process.env.FAKE_SUBAGENT_CONFIG_FILE
@@ -283,9 +285,14 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       log({ kind: "async_task_stop", id, stopped });
       if (!stopped) return ok({ stopped: false });
       task!.running = false;
+      // The answer goes first; its frames are separate writes, so a reader can see the answer alone.
       ok({ stopped: true });
-      update(ROOT, { sessionUpdate: "notice", severity: "info", title: "Task stopped by user" });
-      update(task!.session, { sessionUpdate: "async_task_state_update", asyncTaskId: id, state: "stopped" });
+      const frames = () => {
+        update(ROOT, { sessionUpdate: "notice", severity: "info", title: "Task stopped by user" });
+        update(task!.session, { sessionUpdate: "async_task_state_update", asyncTaskId: id, state: "stopped" });
+      };
+      if (config.asyncTaskStopFramesDelayMs) setTimeout(frames, config.asyncTaskStopFramesDelayMs);
+      else frames();
       return;
     }
     default:
