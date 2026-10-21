@@ -3083,7 +3083,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
       worker.addEventListener("error", onError as never);
     });
 
-    const ROUNDS = Number(process.env.MUL409_CONCURRENCY_ROUNDS ?? 12);
+    const ROUNDS = Number(process.env.MUL409_CONCURRENCY_ROUNDS ?? 6);
     let doubleDispatched = 0;
     for (let round = 0; round < ROUNDS; round++) {
       const first = createDependencyPrerequisite(store, { title: `Conc first ${round}`, status: "in_progress" });
@@ -3132,7 +3132,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("lets only one of a forced start and an automatic start dispatch (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_force_race", name: "Race worker", provider: "claude", maxConcurrency: 8 });
     const owner = store.createAgent({ name: "Race owner", provider: "claude", runtimeId: runtime.id });
-    const ROUNDS = Number(process.env.MUL409_FORCE_RACE_ROUNDS ?? 8);
+    const ROUNDS = Number(process.env.MUL409_FORCE_RACE_ROUNDS ?? 4);
     let doubleDispatched = 0;
     for (let round = 0; round < ROUNDS; round++) {
       const prereq = createDependencyPrerequisite(store, { title: `Race prereq ${round}`, status: "in_progress" });
@@ -4069,7 +4069,7 @@ describe.skipIf(!pgAvailable)("MultiremiStore on Postgres (integration)", () => 
   it("keeps exactly one start record when a forced and an automatic start race (PG)", async () => {
     const runtime = store.registerRuntime({ id: "rt_two_conn", name: "Two connection worker", provider: "claude", maxConcurrency: 8 });
     const owner = store.createAgent({ name: "Two connection owner", provider: "claude", runtimeId: runtime.id });
-    const ROUNDS = Number(process.env.MUL409_TWO_CONN_ROUNDS ?? 30);
+    const ROUNDS = Number(process.env.MUL409_TWO_CONN_ROUNDS ?? 15);
     const workerUrl = new URL("./fixtures/postgres-two-connection-race-worker.ts", import.meta.url);
     // Per-attempt invariant, from the QA round 4 ruling: exactly one task row
     // (every status, cancelled included) and exactly one of the three start

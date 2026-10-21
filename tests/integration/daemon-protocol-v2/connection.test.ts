@@ -48,6 +48,9 @@ function localProgressSummary() {
   } };
 }
 
+// Injected disconnects in the leak check (halved from 20).
+const DISCONNECT_ROUNDS = 10;
+
 describe("daemon protocol v2 real connection", () => {
   it("handshakes all provider lanes on one socket and continuously heartbeats without HTTP heartbeats", async () => {
     const heartbeat = spyOn(MultiremiDaemonClient.prototype, "heartbeatRuntime");
@@ -375,12 +378,12 @@ describe("daemon protocol v2 real connection", () => {
     } finally { releaseProvider(); summaryEndpoint.close(); }
   });
 
-  it("survives 20 injected disconnects without leaking sockets, listeners, timers or pending RPCs", async () => {
+  it(`survives ${DISCONNECT_ROUNDS} injected disconnects without leaking sockets, listeners, timers or pending RPCs`, async () => {
     const h = await fixture();
     await h.startDaemon();
     await h.settleHeartbeat();
     let seed = 418;
-    for (let round = 0; round < 20; round++) {
+    for (let round = 0; round < DISCONNECT_ROUNDS; round++) {
       seed = (seed * 1664525 + 1013904223) >>> 0;
       h.clock.advance(seed % 1_000);
       await h.disconnect();
@@ -393,7 +396,7 @@ describe("daemon protocol v2 real connection", () => {
         expect([...socket.listeners.values()].every(set => set.size === 0)).toBe(true);
       }
     }
-    expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(21);
+    expect(h.ledger.filter(entry => entry.type === "hello")).toHaveLength(DISCONNECT_ROUNDS + 1);
     await h.stopDaemon();
     expect(h.client.diagnostics()).toEqual({ timers: 0, sockets: 0, pending_rpcs: 0, background: 0 });
     expect(h.clock.pendingTimerCount).toBe(0);

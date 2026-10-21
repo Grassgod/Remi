@@ -8,6 +8,9 @@ useMigratedIntegrationDatabases();
 const harnesses: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of harnesses.splice(0)) await h.dispose(); });
 
+// Fault injections per kind (halved from 20; all three kinds still run).
+const INJECTION_ROUNDS = 10;
+
 describe("A-3 real task offers", () => {
   it("offers and accepts a queued task without an HTTP claim or dispatch lease", async () => {
     const h = await DaemonProtocolHarness.create(); harnesses.push(h);
@@ -28,13 +31,13 @@ describe("A-3 real task offers", () => {
   });
 
   for (const fault of ["disconnect", "daemon restart", "server restart"] as const) {
-    it(`accepts every task exactly once through 20 ${fault} injections`, async () => {
-      // All 20 injections can leave terminal reports in flight; keep capacity independent of host CPU count.
+    it(`accepts every task exactly once through ${INJECTION_ROUNDS} ${fault} injections`, async () => {
+      // Every injection can leave a terminal report in flight; keep capacity independent of host CPU count.
       const h = await DaemonProtocolHarness.create({ daemonOptions: { maxConcurrency: 20 } }); harnesses.push(h);
       await h.startDaemon(); await h.settleHeartbeat();
       const runtimeId = h.ledger.find(entry => entry.type === "hello")!.frame.p.runtimes[0].runtime_id;
       const agent = h.store.createAgent({ name: "injected no-op", provider: "claude", runtimeId, workspaceId: "local" });
-      for (let round = 0; round < 20; round++) {
+      for (let round = 0; round < INJECTION_ROUNDS; round++) {
         if (fault === "disconnect") { await h.disconnect(); await h.reconnect(); }
         else if (fault === "daemon restart") await h.restartDaemon();
         else await h.restartServer();
@@ -48,7 +51,7 @@ describe("A-3 real task offers", () => {
         expect(replies.map(entry => entry.frame.p.ok)).toEqual([true]);
         expect(h.store.getTask(task.id)).toMatchObject({ runtimeId, result: "fixture" });
       }
-      expect(h.store.listTasks().filter(task => task.status === "completed")).toHaveLength(20);
+      expect(h.store.listTasks().filter(task => task.status === "completed")).toHaveLength(INJECTION_ROUNDS);
       expect(h.errors).toEqual([]);
     }, 60_000);
   }

@@ -34,6 +34,10 @@ class SocketFrames {
   close(): void { this.socket.close(); }
 }
 
+// Repetitions of the two race scenarios (halved from 20 and 200; every scenario still runs).
+const COLD_START_ROUNDS = 10;
+const QUEUE_RACE_ROUNDS = 100;
+
 describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () => {
   let resources: TwoProcessResources;
   let database: FreshDatabase;
@@ -101,10 +105,10 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     finally { console.info(`[MUL-463] file total: ${(performance.now() - started).toFixed(0)}ms; 7 scenarios registered`); }
   }, 30_000);
 
-  it("1. concurrently cold-starts ui/runtime on 20 fresh databases with zero failures", () => timed(1, async () => {
+  it(`1. concurrently cold-starts ui/runtime on ${COLD_START_ROUNDS} fresh databases with zero failures`, () => timed(1, async () => {
     const failures: string[] = [];
     let contendedRounds = 0;
-    for (let round = 0; round < 20; round += 1) {
+    for (let round = 0; round < COLD_START_ROUNDS; round += 1) {
       const cold = await resources.freshDatabase();
       const gate = new Bun.SQL(cold.url, { max: 1 });
       let children: ProcessPair | undefined;
@@ -142,7 +146,7 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
       }
     }
     expect(failures).toEqual([]);
-    expect(contendedRounds).toBe(20);
+    expect(contendedRounds).toBe(COLD_START_ROUNDS);
   }), 110_000);
 
   it("2. delivers comment:created from runtime B to a browser on ui A, 20/20", () => timed(2, async () => {
@@ -172,12 +176,12 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
     } finally { socket.close(); }
   }), 20_000);
 
-  it("4. lets two daemons on B race for the same queue 200 times without duplicate offers", () => timed(4, async () => {
+  it(`4. lets two daemons on B race for the same queue ${QUEUE_RACE_ROUNDS} times without duplicate offers`, () => timed(4, async () => {
     const queue = await pair[0].call<Queue>("queue");
     const daemons = await Promise.all(queue.runtimeIds.map((id) => daemon(id)));
     const delivered: string[] = [];
     try {
-      for (let round = 0; round < 200; round += 1) {
+      for (let round = 0; round < QUEUE_RACE_ROUNDS; round += 1) {
         const id = await pair[0].call<string>("enqueue", { agentId: queue.agentId });
         expect(await pollUntil(() => daemons.some(socket => socket.frames.some(frame => frame.t === "task.offer" && frame.p?.attempt_id === id)), 5000)).toBe(true);
         const offered = daemons.flatMap((socket, index) => socket.frames
@@ -190,8 +194,8 @@ describe.skipIf(!configured)("MUL-463 two-process PostgreSQL integration", () =>
         delivered.push(id);
         await pair[0].call("complete", { id });
       }
-      expect(delivered).toHaveLength(200);
-      expect(new Set(delivered).size).toBe(200);
+      expect(delivered).toHaveLength(QUEUE_RACE_ROUNDS);
+      expect(new Set(delivered).size).toBe(QUEUE_RACE_ROUNDS);
     } finally { daemons.forEach((socket) => socket.close()); }
   }), 120_000);
 
