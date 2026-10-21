@@ -357,9 +357,9 @@ export class HubImpl implements ObservableLiveHub {
       this.enqueue(input.key, input.frames, "remote");
     });
     if (this.transport.onRemoteHead) {
-      this.peerSubscriptions.push(this.transport.onRemoteHead(async (key, head, version, changedSeq) => {
+      this.peerSubscriptions.push(this.transport.onRemoteHead(async (key, head, version, changedSeq, changedEntry) => {
         await this.applyRemoteHead(key, head, version);
-        if (changedSeq !== undefined) this.invalidateRemoteRevision(key, changedSeq);
+        if (changedSeq !== undefined) await this.applyRemoteChange(key, changedSeq, changedEntry === true);
       }));
     }
     if (this.transport.onHumanRequest) {
@@ -619,15 +619,76 @@ export class HubImpl implements ObservableLiveHub {
     }
   }
 
-  private invalidateRemoteRevision(key: HubStreamKey, seq: number): void {
+  /**
+   * The peer changed a row at a sequence this stream already passed.
+   *
+   * The pointer carries no row, so the change reaches subscribers the way the
+   * local path would deliver it. A whole row the peer re-emitted (a Chat turn
+   * card) is read back from the shared database and taken like a local revised
+   * entry: it goes to every subscriber past the position that lacks that
+   * revision, including one that subscribed after the row was written and so
+   * never received it from this hub. A patch, or a row that cannot be read here,
+   * invalidates the position instead.
+   */
+  private async applyRemoteChange(key: HubStreamKey, seq: number, wholeRow: boolean): Promise<void> {
+    const stream = this.ring.get(key);
+    if (wholeRow && stream && this.fill && seq <= stream.headSeq && this.passedBy(key, seq)) {
+      const frame = await this.readRow(key, seq);
+      if (frame && this.ring.get(key) === stream && !this.closed) {
+        this.forgetLogVersion(key, stream);
+        // Not the replay check of a local entry: the retained copy may already be
+        // this revision (a warm-up read it) while a subscriber that started past
+        // the position never got it. The flush skips whoever holds the revision.
+        const retained = stream.entries.find((entry) => entry.frame.seq === seq);
+        if (retained && frameRevision(frame) > frameRevision(retained.frame)) this.ring.replace(stream, frame);
+        this.queueLiveChange(key, frame);
+        this.scheduleFlushFor(key);
+        return;
+      }
+    }
+    this.invalidateRemoteRevision(key, seq);
+  }
+
+  /** The current whole row at `seq`, or null when the reader has none or failed. */
+  private async readRow(key: HubStreamKey, seq: number): Promise<HubFrame | null> {
+    try {
+      const frames = await this.fill!.readRange(key, seq - 1, seq);
+      return frames.find((frame) => frame.seq === seq && frame.kind === "entry") ?? null;
+    } catch (error) {
+      this.fillFailures += 1;
+      this.warn(`changed row read failed for ${key} seq ${seq}: ${errorText(error)}`);
+      return null;
+    }
+  }
+
+  /** Whether an active subscriber's cursor has passed `seq`: it holds that position or was told its gap. */
+  private passedBy(key: HubStreamKey, seq: number): boolean {
+    for (const subscriber of this.subscribers.get(key) ?? []) {
+      if (subscriber.active && subscriber.cursor >= seq) return true;
+    }
+    return false;
+  }
+
+  /** A write moved `log_version`; only the database can name the new one. */
+  private forgetLogVersion(key: HubStreamKey, stream: HubRingStream | undefined): void {
     const known = this.knownHeads.get(key);
     if (known) this.rememberHead(key, known.head, null);
+    if (stream) this.stampLogVersion(stream, stream.headSeq, null);
+  }
+
+  /**
+   * Make every subscriber past `seq` reread it, as the local path does for a
+   * subscriber without a base for the change. Delivery history cannot decide
+   * this: a browser that read its window over HTTP and subscribed after the row
+   * never received it from this hub, and a reread base is never delivered here.
+   */
+  private invalidateRemoteRevision(key: HubStreamKey, seq: number): void {
     const stream = this.ring.get(key);
+    this.forgetLogVersion(key, stream);
     if (!stream) return;
     this.ring.markStale(stream, seq);
-    this.stampLogVersion(stream, stream.headSeq, null);
     for (const subscriber of this.subscribers.get(key) ?? []) {
-      if (subscriber.active && this.hasDelivered(subscriber, seq)) this.deferChangeGap(subscriber, seq);
+      if (subscriber.active && subscriber.cursor >= seq) this.deferChangeGap(subscriber, seq);
     }
     this.scheduleFlushFor(key);
   }

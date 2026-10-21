@@ -57,7 +57,8 @@ trace 结束时，Hub 在最后一批数据之后发 `stream.closed`；零事件
 keyed Hub 与 `subscribeWithSink` 同样回放 `[fromSeq, head]`，低于流起点的请求被截断（log 为 0，trace 为 1）。
 Issue 日志首开先接受 SSR `initialLog` 或等待 CSR/locate 窗口，再以 `max(本地续传游标, window.head_seq + 1)` 订阅；窗口 head 是全流 head，不是定位窗口末行。窗口读取与订阅之间的缺口仍由 `onGap` 补读。message/turn 帧按 session、seq、id 和 revision 复用本会话当前/已知窗口的完整读侧元数据；未命中行在单窗容量内合并为范围读取；每次日志写入都会递增 `log_version`，范围读取通常比已加载窗口新，不因版本不同拒绝，行 revision 低于帧时才报错。ack 中的 `log_version` 只是新鲜度令牌，版本变化不清空副本、不重置续传游标；断开后丢弃旧异步水合结果。
 副本 leader 的 socket 同时承载其他标签页和同页其他日志（如 Issue 详情上的浮动 Chat）声明的会话，这些会话的帧也交给 leader 页的 `IssueLogReplica` 水合：一律经读取路由回读，不复用、也不登记为本会话窗口；其 `stream.gap` 只把该区间补读进共享副本，本会话的缺口才刷新本页窗口。
-`log:` 流中 seq 不超过 head 的 `entry` 若 revision 更高（Chat 轮卡片在轮次开始时即占位并隐藏，每次状态变化以完整 entry 重发），Hub 不再当作重放丢弃：替换 ring 中未失效的保留副本，并作为实时变更发给已越过该位置且未持有该 revision 的订阅；revision 相同或更低仍计为重放丢弃，背压暂停中的订阅改收 `stream.gap`，peer 收到带 `changed_seq` 的 head 指针后让已投递该行的订阅重读。缺口后等待中的同 seq entry 以更高 revision 替换。
+`log:` 流中 seq 不超过 head 的 `entry` 若 revision 更高（Chat 轮卡片在轮次开始时即占位并隐藏，每次状态变化以完整 entry 重发），Hub 不再当作重放丢弃：替换 ring 中未失效的保留副本，并作为实时变更发给已越过该位置且未持有该 revision 的订阅；revision 相同或更低仍计为重放丢弃，背压暂停中的订阅改收 `stream.gap`。缺口后等待中的同 seq entry 以更高 revision 替换。
+跨进程时 peer 只收到带 `changed_seq` 的 head 指针，按本地同一规则处理（[hub-core.ts](../../packages/server/src/api/hub/hub-core.ts) 的 `applyRemoteChange`）：整行重发的指针另带 `changed_entry`，接收进程有订阅越过该位置时从共享数据库读回该行，发给已越过该位置且未持有该 revision 的订阅，包括先经 HTTP 读窗口、从窗口 head 之后订阅而从未经本 Hub 收到该行的浏览器（Chat 的隐藏轮卡片正是如此）；patch 指针，或读不到该行时，所有已越过该位置的订阅收到 `stream.gap` 重读。是否越过以订阅游标判断，不以本 Hub 的投递记录判断：经 HTTP 读到的行和重读得到的基底都不在投递记录里。
 A-0 的裸 task id 与 daemon `trace.subscribe` 保持排他游标，Hub 内部以 `fromSeq + 1` 适配。
 真实 Hub 的空 log 使用 `head=-1`、`first_seq=0`；实际接收 seq 0 后 head 才为 0。
 

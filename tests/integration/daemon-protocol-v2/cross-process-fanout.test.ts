@@ -1,85 +1,8 @@
 import { createResponsibleTestIssue } from "../../unit/multiremi/helpers.js";
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
-import { join } from "node:path";
 import { createPeerChannel, type PeerFetch } from "../../../packages/server/src/api/peer/peer-channel.js";
-import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { DaemonProtocolHarness, startUiProcess, waitFor } from "./harness.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
-
-interface UiReply {
-  ready?: boolean;
-  op?: string;
-  port?: number;
-  taskId?: string;
-  requestId?: string;
-  steerId?: string;
-  daemonHookCalls?: number;
-  daemonSessions?: number;
-  stopped?: boolean;
-  error?: string;
-}
-
-async function startUiProcess(databasePath: string, runtimePort: number, secret: string) {
-  const child = Bun.spawn(["bun", join(import.meta.dir, "../../fixtures/daemon-protocol-v2/ui-process.ts"),
-    databasePath, String(runtimePort), secret], {
-    cwd: process.cwd(), stdin: "pipe", stdout: "pipe", stderr: "pipe",
-    env: { ...process.env },
-  });
-  const queued: UiReply[] = [];
-  const waiting: Array<(reply: UiReply) => void> = [];
-  let output = "";
-  const reader = child.stdout.getReader();
-  const readLoop = (async () => {
-    const decoder = new TextDecoder();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) return;
-      output += decoder.decode(value, { stream: true });
-      let newline: number;
-      while ((newline = output.indexOf("\n")) >= 0) {
-        const line = output.slice(0, newline);
-        output = output.slice(newline + 1);
-        if (!line.startsWith("MUL419 ")) continue;
-        const reply = JSON.parse(line.slice(7)) as UiReply;
-        const resolve = waiting.shift();
-        if (resolve) resolve(reply); else queued.push(reply);
-      }
-    }
-  })();
-  const next = async (): Promise<UiReply> => {
-    if (queued.length) return queued.shift()!;
-    return await Promise.race([
-      new Promise<UiReply>(resolve => waiting.push(resolve)),
-      Bun.sleep(10_000).then(() => { throw new Error("ui process control response timed out"); }),
-    ]);
-  };
-  const ready = await next();
-  if (!ready.ready || !ready.port) throw new Error(`ui process did not start: ${ready.error ?? "no ready frame"}`);
-  return {
-    port: ready.port,
-    async command(command: { op: string; runtimeId?: string; taskId?: string; agentId?: string;
-      issueId?: string; requestId?: string; humanToken?: string; status?: "timeout" | "cancelled" }): Promise<UiReply> {
-      child.stdin.write(`${JSON.stringify(command)}\n`);
-      await child.stdin.flush();
-      const reply = await next();
-      if (reply.error) throw new Error(`ui process ${command.op}: ${reply.error}`);
-      expect(reply.op).toBe(command.op);
-      return reply;
-    },
-    async close(): Promise<void> {
-      if (!child.killed) {
-        try {
-          await this.command({ op: "stop" });
-        }
-        catch { child.kill(); }
-      }
-      child.stdin.end();
-      const exited = await Promise.race([child.exited.then(() => true), Bun.sleep(1_000).then(() => false)]);
-      if (!exited) child.kill();
-      await child.exited;
-      await readLoop;
-    },
-  };
-}
 
 const harnesses: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of harnesses.splice(0)) await h.dispose(); });
