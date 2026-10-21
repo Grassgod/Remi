@@ -413,15 +413,26 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       await waitFor(() => expect(view.getByText("Cached reply")).toBeTruthy());
       // The follow-up queue is observed only inside the visible chat.
       await waitFor(() => expect(client.getQueryCache().find({ queryKey: chatKeys.queue("ws-1", sessionId) })?.isActive()).toBe(true));
+      // The cached task still says running while the log already holds its
+      // outcome, so the visible chat reads its pending task once (a late or
+      // lost chat:done). That read settles before the window is hidden; it is
+      // the only deferred key fetched so far.
+      await waitFor(() => expect(getPendingChatTask).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(client.getQueryCache().find({ queryKey: chatKeys.pendingTask(sessionId) })?.state.fetchStatus).toBe("idle"));
+      expect(startedKeys).toEqual([chatKeys.pendingTask(sessionId)]);
+      expect(listPendingChatTasks).not.toHaveBeenCalled();
+      startedKeys.length = 0;
       act(() => { useChatStore.getState().setOpen(false); });
       await act(async () => {});
       getSessionLog.mockClear();
       subscribeStream.mockClear();
       getChatQueue.mockClear();
+      getPendingChatTask.mockClear();
       await act(async () => {
         for (const [queryKey] of cached) await client.invalidateQueries({ queryKey, exact: true });
       });
       expect(startedKeys).toEqual([]);
+      expect(getPendingChatTask).not.toHaveBeenCalled();
       expect(getTaskTrace).not.toHaveBeenCalled();
       expect(listDecisionMessages).not.toHaveBeenCalled();
       expect(getIssue).not.toHaveBeenCalled();
@@ -440,6 +451,7 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
       expect(getSessionLog).not.toHaveBeenCalled();
       expect(subscribeStream).not.toHaveBeenCalled();
       expect(getChatQueue).not.toHaveBeenCalled();
+      expect(getPendingChatTask).not.toHaveBeenCalled();
       for (const queryKey of [workspaceKeys.members("ws-1"), projectKeys.list("ws-1")]) {
         expect(client.getQueryCache().find({ queryKey })?.isActive()).toBe(false);
       }
@@ -456,6 +468,10 @@ describe("complete shell observer guard (MUL-472 R1)", () => {
         }
       });
       expect(getTaskTrace).not.toHaveBeenCalled();
+      // Reopening reads the invalidated pending task once; the outcome read
+      // already happened for this attempt, so nothing reads it again.
+      await act(async () => {});
+      expect(getPendingChatTask).toHaveBeenCalledTimes(1);
       // The Chat log pool keeps the window across minimisation: reopening
       // repaints it, refreshes the tail once in the background and reconnects
       // the stream, never falling back to the removed page API.

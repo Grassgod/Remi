@@ -22,16 +22,31 @@ export interface LiveTurnRef {
 }
 
 /**
+ * Whether a reply row is the one a completed attempt wrote. The server writes
+ * a Chat turn's reply row when its current attempt ends (completed, or failed
+ * with no retry left) and stamps `failure_reason` and `elapsed_ms` on it; the
+ * row carries no attempt id. A retry runs on the same turn and reuses that
+ * row, and only a failed or cancelled turn can be retried, so the row it finds
+ * in the log is a failure (a cancel writes none). Completion rewrites the row
+ * in place with `failure_reason` cleared. Other reply rows of the turn (an
+ * answer to a decision) carry no `elapsed_ms`.
+ */
+function completedReply(row: TurnLogRow): boolean {
+  return row.metadata?.failure_reason == null && typeof row.metadata?.elapsed_ms === "number";
+}
+
+/**
  * Whether the log shows a turn's own outcome, so its live view can give way in
  * the same frame. The outcome is the attempt's terminal card (`task_id`, as
  * `contextRingSource` reads it) with the reply row its `final_entry_id` names:
  * a failed or cancelled card shows its notice itself and a card that names no
  * reply is the reply, but a card whose reply row is not loaded shows nothing.
  *
- * `replyByTurn` also accepts the turn's reply row when no card of the turn is
- * in the window (the reply row carries the turn id). Only for a turn that has
- * ended: a retry reuses the failed attempt's reply row, which is in the log
- * while the new attempt runs.
+ * Without that card, the turn's completed reply row (it carries the turn id) is
+ * the outcome too, running or not: the card can reach the log seconds after the
+ * row. A failed attempt's reply row is not, because a retry reuses it while the
+ * new attempt runs. `replyByTurn` accepts any reply row of the turn when no
+ * card of the turn is in the window; only for a turn that has ended.
  */
 export function turnOutcomeShown(rows: readonly TurnLogRow[], turn: LiveTurnRef, replyByTurn = false): boolean {
   const cards = rows.filter((row) => row.kind === "turn" && !row.deleted_at
@@ -42,8 +57,9 @@ export function turnOutcomeShown(rows: readonly TurnLogRow[], turn: LiveTurnRef,
     return card.metadata?.status === "failed" || card.metadata?.status === "cancelled" || typeof reply !== "string"
       || rows.some((row) => row.id === reply && row.kind === "message" && !row.deleted_at);
   }
-  return replyByTurn && !cards.length && !!turn.turnId && rows.some((row) => row.kind === "message" && !row.deleted_at
-    && row.task_id === turn.turnId && (row.message_kind === "reply" || row.message_kind === "final"));
+  return !!turn.turnId && rows.some((row) => row.kind === "message" && !row.deleted_at
+    && row.task_id === turn.turnId && (row.message_kind === "reply" || row.message_kind === "final")
+    && (completedReply(row) || (replyByTurn && !cards.length)));
 }
 
 /** The last live usage the ring showed, and the attempt it came from. */

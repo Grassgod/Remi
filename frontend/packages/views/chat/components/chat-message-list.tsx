@@ -266,7 +266,8 @@ export function ChatMessageList({
   const pendingTurnId = pendingTask?.turn_id ?? null;
   const logRows = snapshot.entries as readonly TurnLogRow[];
   // The running turn gives way once the log shows its outcome: a finished card
-  // with its reply row, or a failure notice.
+  // with its reply row, a failure notice, or its completed reply row alone (the
+  // card can land seconds later; ChatWindow then reads the pending task again).
   const pendingAlreadyPersisted = !!pendingTaskId && turnOutcomeShown(logRows, { taskId: pendingTaskId, turnId: pendingTurnId });
   const showLiveTimeline = !!pendingTaskId && !pendingAlreadyPersisted;
   // An optimistic pending id has no trace yet; the real id replaces it on dispatch.
