@@ -114,6 +114,18 @@ export class ChatRepo {
     return this.ctx.db.transaction(() => this.createChatSessionWithinTransaction(input))();
   }
 
+  /**
+   * Whether a chat has ever had this id, in any workspace; a client-made id
+   * must name none, or a new chat would take over what an old one left. The
+   * log covers deleted chats: every chat writes its head row at seq 0 on
+   * create, every turn writes a log row before the turn itself, and deleting
+   * a chat only soft-deletes its rows (`deleted_at`), so they stay.
+   */
+  isChatSessionIdUsed(id: string): boolean {
+    if (this.getChatSession(id)) return true;
+    return !!this.ctx.db.query("SELECT session_id FROM multiremi_conversation_log WHERE session_id = ? LIMIT 1").get(id);
+  }
+
   /** Caller owns the transaction, including any accompanying Chat binding. */
   createChatSessionWithinTransaction(input: CreateChatSessionInput): MultiremiChatSession {
     if (Object.hasOwn(input, "issueId") || Object.hasOwn(input, "issue_id")) {

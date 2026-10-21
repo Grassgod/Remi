@@ -1,14 +1,14 @@
 /** @vitest-environment jsdom */
 import type { ReactNode } from "react";
 import { act, renderHook } from "@testing-library/react";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSession } from "../types";
-import { chatKeys } from "./queries";
+import { chatKeys, chatSessionsOptions } from "./queries";
 import { ApiError } from "../api/http";
 import type { ChatQueue, QueuedChatMessage } from "../api/schemas/chat-queue";
 import {
-  useDeleteChatSession, useDeleteQueuedChatMessage, useEnqueueChatMessage, useMarkChatSessionRead,
+  useCreateChatSession, useDeleteChatSession, useDeleteQueuedChatMessage, useEnqueueChatMessage, useMarkChatSessionRead,
   useResumeChatQueue, useSteerQueuedChatMessage, useStopChatBackgroundTasks, useUpdateChatSession, useUpdateQueuedChatMessage,
 } from "./mutations";
 
@@ -19,9 +19,11 @@ const mock = vi.hoisted(() => ({
   steerQueuedChatMessage: vi.fn(), resumeChatQueue: vi.fn(),
   putQueueOutboxItem: vi.fn(), removeQueueOutboxItem: vi.fn(),
   stopChatBackgroundTasks: vi.fn(), listChatBackgroundTasks: vi.fn(),
+  createChatSession: vi.fn(), listChatSessions: vi.fn(),
 }));
 vi.mock("../api", () => ({ api: mock }));
 vi.mock("../hooks", () => ({ useWorkspaceId: () => mock.wsId }));
+vi.mock("../auth", () => ({ useAuthStore: (select: (state: unknown) => unknown) => select({ user: { id: "user-1" } }) }));
 vi.mock("../platform/workspace-storage", () => ({ getCurrentWsId: () => mock.wsId, getCurrentSlug: () => mock.slug }));
 vi.mock("./index", () => ({ useChatStore: { getState: () => ({
   activeSessionId: "chat-1", inputDrafts: { "chat-1": "unsent draft" },
@@ -132,6 +134,68 @@ describe("chat session mutations", () => {
     expect(qc.getQueryData(chatKeys.session("ws-1", "chat-1"))).toMatchObject({ has_unread: false, unread_count: 0 });
   });
 
+});
+
+describe("chat session creation", () => {
+  const input = { id: "chat_0123456789ab", agent_id: "agent-1", title: "Hello" };
+  const created: ChatSession = { ...session, id: input.id, title: "Hello", has_unread: false, unread_count: 0, updated_at: "2026-09-12T00:00:00Z" };
+  const ids = (key: readonly unknown[]) => qc.getQueryData<ChatSession[]>(key)?.map((item) => item.id);
+  /** The create, with the session list on screen (an active query the create reads again). */
+  const renderCreate = () => renderHook(() => ({ create: useCreateChatSession(), list: useQuery(chatSessionsOptions("ws-1")) }), { wrapper });
+
+  it("answers with the created chat while the session list read it starts still hangs", async () => {
+    mock.createChatSession.mockResolvedValue(created);
+    mock.listChatSessions.mockReturnValue(new Promise(() => {}));
+    const { result } = renderCreate();
+    await act(async () => { await expect(result.current.create.mutateAsync(input)).resolves.toEqual(created); });
+    expect(mock.listChatSessions).toHaveBeenCalledOnce();
+    expect(qc.getQueryState(chatKeys.sessions("ws-1"))?.fetchStatus).toBe("fetching");
+    expect(ids(chatKeys.sessions("ws-1"))).toEqual([input.id, "chat-1"]);
+    expect(qc.getQueryData(chatKeys.session("ws-1", input.id))).toEqual(created);
+  });
+
+  it("lists a chat with a client-made id before the server answers and takes it out when the create fails", async () => {
+    let reject!: (error: Error) => void;
+    mock.createChatSession.mockReturnValue(new Promise((_resolve, rejectPromise) => { reject = rejectPromise; }));
+    const { result } = renderHook(() => useCreateChatSession(), { wrapper });
+    let pending!: Promise<unknown>;
+    act(() => { pending = result.current.mutateAsync(input); });
+    expect(ids(chatKeys.sessions("ws-1"))).toEqual([input.id, "chat-1"]);
+    expect(qc.getQueryData<ChatSession[]>(chatKeys.sessions("ws-1"))?.[0]).toMatchObject({
+      id: input.id, workspace_id: "ws-1", agent_id: "agent-1", creator_id: "user-1", title: "Hello",
+      status: "active", origin: null, has_unread: false, project_id: null, runtime_workspace_id: null,
+    });
+    expect(ids(chatKeys.sessionList("ws-1", "active"))).toEqual([input.id, "chat-1"]);
+    expect(ids(chatKeys.sessionList("ws-1", "archived"))).toEqual([]);
+    expect(qc.getQueryData(chatKeys.session("ws-1", input.id))).toMatchObject({ id: input.id });
+    expect(ids(chatKeys.sessions("ws-2"))).toEqual(["chat-2"]);
+    await act(async () => {
+      reject(new Error("Chat session id has already been used"));
+      await expect(pending).rejects.toThrow("already been used");
+    });
+    expect(ids(chatKeys.sessions("ws-1"))).toEqual(["chat-1"]);
+    expect(ids(chatKeys.sessionList("ws-1", "active"))).toEqual(["chat-1"]);
+    expect(qc.getQueryData(chatKeys.session("ws-1", input.id))).toBeUndefined();
+  });
+
+  it("keeps the new chat when a list read already in flight answers without it", async () => {
+    let answer!: (sessions: ChatSession[]) => void;
+    mock.listChatSessions.mockReturnValueOnce(new Promise((resolve) => { answer = resolve; }));
+    mock.createChatSession.mockReturnValue(new Promise(() => {}));
+    const { result } = renderCreate();
+    await act(async () => { void qc.invalidateQueries({ queryKey: chatKeys.sessions("ws-1") }); });
+    expect(mock.listChatSessions).toHaveBeenCalledOnce();
+    act(() => { void result.current.create.mutateAsync(input); });
+    await act(async () => { answer([session]); });
+    expect(ids(chatKeys.sessions("ws-1"))).toEqual([input.id, "chat-1"]);
+  });
+
+  it("does not list a chat whose id the server makes until it answers", async () => {
+    mock.createChatSession.mockReturnValue(new Promise(() => {}));
+    const { result } = renderHook(() => useCreateChatSession(), { wrapper });
+    act(() => { void result.current.mutateAsync({ agent_id: "agent-1", title: "Hello" }); });
+    expect(ids(chatKeys.sessions("ws-1"))).toEqual(["chat-1"]);
+  });
 });
 
 const queued = (fields: Partial<QueuedChatMessage> = {}): QueuedChatMessage => ({

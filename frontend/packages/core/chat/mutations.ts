@@ -3,6 +3,7 @@ import { api } from "../api";
 import { toSafeErrorDetails } from "../api/http";
 import type { UpdateQueuedChatMessageInput } from "../api/endpoints/chat-queue";
 import type { ChatQueue, QueuedMessageAttachment } from "../api/schemas/chat-queue";
+import { useAuthStore } from "../auth";
 import { useWorkspaceId } from "../hooks";
 import { chatKeys } from "./queries";
 import { createLogger } from "../logger";
@@ -20,17 +21,34 @@ import {
   restoreBackgroundStopMarks,
 } from "./background-tasks";
 import { useChatStore } from "./index";
-import { removeChatSessionFromCache, updateChatSessionInCache } from "./session-cache";
+import { optimisticChatSession, removeChatSessionFromCache, sessionListHolds, updateChatSessionInCache } from "./session-cache";
 import { applyQueueItem, isQueueDeliveryUnconfirmed, queueErrorItem } from "./queue";
 
 const logger = createLogger("chat.mut");
 
+/**
+ * Creates a chat. With a client-made `id` the chat is in the lists at once
+ * (the caller can open it before the server answers); a failed create takes it
+ * out again. The promise settles with the create: the lists are read again
+ * behind it, and the caller never waits for that read.
+ */
 export function useCreateChatSession() {
   const qc = useQueryClient();
   const wsId = useWorkspaceId();
+  const userId = useAuthStore((s) => s.user?.id ?? "");
 
   return useMutation({
-    onMutate: () => ({ wsId }),
+    onMutate: (data: CreateChatSessionInput) => {
+      if (data.id) {
+        const session = optimisticChatSession(wsId, { ...data, id: data.id }, userId);
+        // A read already in flight of a list that shows the new chat would
+        // answer without it; cancelling restores that list synchronously.
+        void qc.cancelQueries({ queryKey: chatKeys.sessions(wsId), predicate: (query) => sessionListHolds(query.queryKey, session) });
+        qc.setQueryData<ChatSession[]>(chatKeys.sessions(wsId), previous => previous ?? []);
+        updateChatSessionInCache(qc, wsId, session);
+      }
+      return { wsId };
+    },
     mutationFn: (data: CreateChatSessionInput) => {
       logger.info("createChatSession.start", { agent_id: data.agent_id, titleLength: data.title?.length ?? 0 });
       return api.createChatSession(data);
@@ -40,8 +58,14 @@ export function useCreateChatSession() {
       updateChatSessionInCache(qc, wsId, session);
       logger.info("createChatSession.success", { sessionId: session.id, agentId: session.agent_id });
     },
-    onError: (err) => logger.error("createChatSession.error", err),
-    onSettled: (_data, _error, _variables, context) => qc.invalidateQueries({ queryKey: chatKeys.sessions(context?.wsId ?? wsId) }),
+    onError: (err, data, context) => {
+      logger.error("createChatSession.error", err);
+      if (data.id) removeChatSessionFromCache(qc, context?.wsId ?? wsId, data.id);
+    },
+    onSettled: (_data, _error, _variables, context) => {
+      // Not returned: a returned promise would hold the caller until the lists are read again.
+      void qc.invalidateQueries({ queryKey: chatKeys.sessions(context?.wsId ?? wsId) });
+    },
   });
 }
 

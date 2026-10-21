@@ -57,6 +57,8 @@ import {
   useUpdateQueuedChatMessage,
 } from "@multiremi/core/chat/mutations";
 import {
+  createChatSessionId,
+  DRAFT_NEW_SESSION,
   reconcileSettledPendingChatTask,
   useChatStore,
   withChatSendTimeout,
@@ -144,6 +146,12 @@ export function ChatWindow({
   }, [isPage, storedActiveSessionId, initialSessionId, onSessionChange]);
   const activeSessionId = isPage ? pageSessionId : storedActiveSessionId;
   const displayedSessionId = activeSessionId;
+  // A new chat opens at its first send, under an id made here, before the
+  // server has created it. Until the create answers, nothing reads that id:
+  // a read would 404, or cache an empty chat over the message being sent.
+  const [creatingSessionId, setCreatingSessionId] = useState<string | null>(null);
+  const sessionCreating = !!displayedSessionId && displayedSessionId === creatingSessionId;
+  const sessionReadsEnabled = chatVisible && !sessionCreating;
   const selectedAgentId = useChatStore((s) => s.selectedAgentId);
   // Where a new chat will run; the store resets it whenever a chat is opened or left.
   const draftProjectId = useChatStore((s) => s.draftProjectId);
@@ -196,7 +204,7 @@ export function ChatWindow({
     setLogSeed(logSeed);
   }
   const { replica, snapshot: logSnapshot, error: messagesError } = useChatLog(
-    displayedSessionId ?? "", logSeed.log, chatVisible,
+    displayedSessionId ?? "", logSeed.log, sessionReadsEnabled,
   );
   const replicaRef = useRef(replica);
   replicaRef.current = replica;
@@ -254,13 +262,13 @@ export function ChatWindow({
   const awaitingLog = displayedOptimistic.some((row) => row.status === "sending" || row.status === "unconfirmed")
     || (!!displayedSessionId && staleLogSessionId === displayedSessionId);
   useEffect(() => {
-    if (!chatVisible || !awaitingLog) return;
+    if (!sessionReadsEnabled || !awaitingLog) return;
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return;
       void readLogTail(replicaRef.current);
     }, CHAT_PENDING_REFETCH_INTERVAL_MS);
     return () => clearInterval(timer);
-  }, [chatVisible, awaitingLog, readLogTail]);
+  }, [sessionReadsEnabled, awaitingLog, readLogTail]);
 
   // Server-authoritative pending task. Survives refresh / reopen / session
   // switch because it's keyed on sessionId in the Query cache; WS events
@@ -268,7 +276,7 @@ export function ChatWindow({
   //
   // This is the SOLE source for pendingTaskId — no mirror in the store.
   const { data: pendingTask } = useQuery(
-    pendingChatTaskOptions(displayedSessionId ?? "", { enabled: chatVisible }),
+    pendingChatTaskOptions(displayedSessionId ?? "", { enabled: sessionReadsEnabled }),
   );
   const pendingTaskId = pendingTask?.task_id ?? null;
   // The context ring follows the running turn's live trace, the same one the
@@ -295,13 +303,15 @@ export function ChatWindow({
 
   // Archived sessions remain readable; restore them before sending. The list
   // holds only the user's own chats, so a chat opened by an automation run
-  // (reached from a run row or a shared link) is read by id instead.
+  // (reached from a run row or a shared link) is read by id instead. A chat
+  // being created is never read: its record is the one the create wrote into
+  // the cache, kept even if a list read lands without it.
   const listedSession = activeSessionId
     ? sessions.find((s) => s.id === activeSessionId)
     : undefined;
   const { data: fetchedSession, isLoading: fetchedSessionLoading } = useQuery({
     ...chatSessionOptions(wsId, activeSessionId ?? ""),
-    enabled: chatVisible && !!activeSessionId && !sessionsLoading && !listedSession,
+    enabled: chatVisible && !!activeSessionId && !sessionsLoading && !listedSession && !sessionCreating,
   });
   const currentSession = listedSession ?? fetchedSession ?? null;
   // Until the open chat's record arrives, the agent below is the composer's
@@ -315,9 +325,9 @@ export function ChatWindow({
   // server sends no count, and nothing is read.
   const sessionBackgroundTasks = currentSession?.id === displayedSessionId ? currentSession?.running_background_tasks ?? null : null;
   const backgroundTasks = useChatBackgroundTasks(displayedSessionId, {
-    enabled: chatVisible && (sessionBackgroundTasks ?? 0) > 0,
+    enabled: sessionReadsEnabled && (sessionBackgroundTasks ?? 0) > 0,
     // A count that drops to 0 under a list still showing a running task reads it once more.
-    visible: chatVisible,
+    visible: sessionReadsEnabled,
     expectRunning: sessionBackgroundTasks,
   });
   const backgroundTasksRunning = Math.max(sessionBackgroundTasks ?? 0, backgroundTasks.running);
@@ -456,7 +466,7 @@ export function ChatWindow({
     agent: chatAgent,
     agentPending: sessionAgentPending,
     sessionId: displayedSessionId,
-    enabled: chatVisible,
+    enabled: sessionReadsEnabled,
   });
 
   // Mount / unmount logging. ChatWindow lives in DashboardLayout, so this
@@ -509,44 +519,53 @@ export function ChatWindow({
   // get a session_id to hang the attachment on. Returns null when no agent
   // is available; callers must early-return in that case.
   //
+  // The id is made here (`createChatSessionId`), so a send can open the chat
+  // before the server answers; the create writes the chat into the session
+  // lists at once and takes it out if it fails.
+  //
   // Concurrent callers (e.g. user drops a file → handleUploadFile, then
   // quickly clicks send → handleSend) would each observe activeSessionId
   // === null and fire a separate createSession.mutateAsync, creating two
   // sessions and orphaning the attachment on the wrong one. The in-flight
-  // promise ref dedupes those races: the first caller starts the create,
-  // every subsequent caller awaits the same promise until it settles.
+  // creation ref dedupes those races: the first caller starts the create,
+  // every subsequent caller shares its id and awaits it until it settles.
   //
   // titleSeed is the first 50 chars of the user's message when called from
   // send; the upload path passes "" and we leave the title empty so the
   // session-dropdown's existing localized `window.untitled` fallback kicks
   // in. A follow-up task may back-fill the real title from the first user
   // message — until then this keeps the session list scannable across locales.
-  //
-  // The caller reveals a new session after its local row or upload is ready.
-  const sessionPromiseRef = useRef<Promise<string | null> | null>(null);
+  const creationRef = useRef<{ id: string; created: Promise<string> } | null>(null);
+  /** The chat just created on screen, whose composer takes over the new chat's draft. */
+  const adoptDraftRef = useRef<string | null>(null);
+  const beginSession = useCallback(
+    (titleSeed: string) => {
+      if (creationRef.current) return creationRef.current;
+      if (!activeAgent) return null;
+      const id = createChatSessionId();
+      const created = createSession.mutateAsync({
+        id,
+        agent_id: activeAgent.id,
+        ...(runtimeWorkspaceId ? { runtime_workspace_id: runtimeWorkspaceId } : {}),
+        title: titleSeed.slice(0, 50),
+        ...(draftProjectId ? { project_id: draftProjectId } : {}),
+      }).then((session) => session.id).finally(() => {
+        if (creationRef.current?.id === id) creationRef.current = null;
+      });
+      creationRef.current = { id, created };
+      return creationRef.current;
+    },
+    [activeAgent, createSession, runtimeWorkspaceId, draftProjectId],
+  );
   const ensureSession = useCallback(
     async (titleSeed: string): Promise<string | null> => {
+      // The chat being created, the one on screen while it is, exists once its create answers.
+      const creation = creationRef.current;
+      if (creation && (!activeSessionId || activeSessionId === creation.id)) return creation.created;
       if (activeSessionId) return activeSessionId;
-      if (!activeAgent) return null;
-      if (sessionPromiseRef.current) return sessionPromiseRef.current;
-
-      const promise = (async () => {
-        try {
-          const session = await createSession.mutateAsync({
-            agent_id: activeAgent.id,
-            ...(runtimeWorkspaceId ? { runtime_workspace_id: runtimeWorkspaceId } : {}),
-            title: titleSeed.slice(0, 50),
-            ...(draftProjectId ? { project_id: draftProjectId } : {}),
-          });
-          return session.id;
-        } finally {
-          sessionPromiseRef.current = null;
-        }
-      })();
-      sessionPromiseRef.current = promise;
-      return promise;
+      return beginSession(titleSeed)?.created ?? null;
     },
-    [activeSessionId, activeAgent, createSession, runtimeWorkspaceId, draftProjectId],
+    [activeSessionId, beginSession],
   );
 
   const handleUploadFile = useCallback(
@@ -554,7 +573,7 @@ export function ChatWindow({
       const sessionAtStart = useChatStore.getState().activeSessionId;
       const sessionId = await ensureSession("");
       if (!sessionId || getCurrentWsId() !== wsId) return null;
-      if (useChatStore.getState().activeSessionId === sessionAtStart)
+      if (sessionId !== sessionAtStart && useChatStore.getState().activeSessionId === sessionAtStart)
         setActiveSession(sessionId);
       return uploadWithToast(file, { chatSessionId: sessionId });
     },
@@ -609,7 +628,10 @@ export function ChatWindow({
   const handleSend = useCallback(async (content: string, attachmentIds?: string[], localAttachments?: Attachment[], mode: ChatSendMode = "send") => {
     if (!activeAgent) throw new Error("No agent available");
     const sessionAtStart = useChatStore.getState().activeSessionId;
-    const sessionId = await ensureSession(content);
+    // A new chat's first message does not wait for the chat: both are shown now (below).
+    const newChat = !activeSessionId || activeSessionId === creationRef.current?.id;
+    const creation = newChat && mode !== "queue" ? beginSession(content) : null;
+    const sessionId = creation ? creation.id : await ensureSession(content);
     if (!sessionId || getCurrentWsId() !== wsId) throw new Error("Chat workspace changed");
     if (mode === "queue") {
       // Queued (排队): the row waits outside the log until this turn completes.
@@ -642,9 +664,55 @@ export function ChatWindow({
       status: "sending",
     };
     setOptimisticRows((rows) => [...rows, row]);
-    if (useChatStore.getState().activeSessionId === sessionAtStart) setActiveSession(sessionId, activeAgent.id);
+    if (!creation) {
+      if (useChatStore.getState().activeSessionId === sessionAtStart) setActiveSession(sessionId, activeAgent.id);
+      await deliverRow(row);
+      return;
+    }
+    // As in Codex, the new chat opens at the send: its URL, its title and the
+    // message (sending) are shown while the server creates it; the message is
+    // posted once it exists. The draft's location is kept for a failed create.
+    const location = { projectId: draftProjectId, runtimeWorkspaceId };
+    setCreatingSessionId(sessionId);
+    setActiveSession(sessionId, activeAgent.id);
+    try {
+      await creation.created;
+    } catch (error) {
+      // Back to the new chat as it was; the composer puts the message back
+      // and says it was not sent. The create took its chat out of the lists.
+      setOptimisticRows((rows) => rows.filter((item) => item.clientId !== row.clientId));
+      setCreatingSessionId((id) => (id === sessionId ? null : id));
+      if (getCurrentWsId() === wsId && useChatStore.getState().activeSessionId === sessionId) {
+        setActiveSession(null);
+        setDraftLocation(location);
+      }
+      throw error;
+    }
+    if (useChatStore.getState().activeSessionId === sessionId) adoptDraftRef.current = sessionId;
+    setCreatingSessionId((id) => (id === sessionId ? null : id));
+    if (getCurrentWsId() !== wsId) {
+      setOptimisticRows((rows) => rows.filter((item) => item.clientId !== row.clientId));
+      throw new Error("Chat workspace changed");
+    }
     await deliverRow(row);
-  }, [activeAgent, ensureSession, setActiveSession, wsId, logSnapshot.head, deliverRow, enqueueMessage, refreshSession]);
+  }, [activeAgent, activeSessionId, beginSession, ensureSession, setActiveSession, setDraftLocation, draftProjectId, runtimeWorkspaceId,
+    wsId, logSnapshot.head, deliverRow, enqueueMessage, refreshSession]);
+
+  // Text typed while the chat was being created was kept as the new chat's
+  // draft. Once the composer shows the created chat (its effects run before
+  // this one), the draft moves to it, so no new-chat draft is left behind.
+  useEffect(() => {
+    const sessionId = adoptDraftRef.current;
+    if (!sessionId || sessionCreating) return;
+    adoptDraftRef.current = null;
+    if (sessionId !== displayedSessionId) return;
+    const store = useChatStore.getState();
+    const newChatKey = `${DRAFT_NEW_SESSION}:${store.selectedAgentId ?? ""}`;
+    const typed = store.inputDrafts[newChatKey];
+    if (!typed) return;
+    if (!store.inputDrafts[sessionId]) store.setInputDraft(sessionId, typed);
+    store.clearInputDraft(newChatKey);
+  }, [sessionCreating, displayedSessionId]);
 
   // Saves the queued message edited in the composer. A row that can no
   // longer change (released, deleted, or edited elsewhere) keeps the text as
@@ -1019,7 +1087,7 @@ export function ChatWindow({
        *  first agent-list response stays banner-free. */}
       {/* The Chat's own open questions stay answerable here whether or not a
        *  turn is in flight; the running turn's answered ones stay as its record. */}
-      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} open enabled={chatVisible} className={CHAT_DOCK_CLASS} />
+      <HumanRequestDock taskId={pendingTaskId} sessionId={displayedSessionId ?? undefined} turnId={pendingTask?.turn_id} open enabled={sessionReadsEnabled} className={CHAT_DOCK_CLASS} />
 
       {noAgent ? (
         <NoAgentBanner />
@@ -1032,7 +1100,7 @@ export function ChatWindow({
 
       {/* Input — disabled for legacy archived sessions; locked out entirely
        *  when there's no agent (the EmptyState above carries the CTA). */}
-      {activeSessionId && currentSession?.agent_id && chatVisible && (
+      {activeSessionId && currentSession?.agent_id && sessionReadsEnabled && (
         <ChatQueue
           key={`${wsId}:${activeSessionId}:${currentSession.agent_id}`}
           sessionId={activeSessionId}
@@ -1066,7 +1134,9 @@ export function ChatWindow({
         </div>
       )}
       <ChatInput
-        sessionId={activeSessionId}
+        // A chat being created is still a new chat to the composer: a failed
+        // create puts the message back into the same draft.
+        sessionId={sessionCreating ? null : activeSessionId}
         onSend={handleSend}
         onSaveQueueEdit={handleSaveQueueEdit}
         onUploadFile={handleUploadFile}
