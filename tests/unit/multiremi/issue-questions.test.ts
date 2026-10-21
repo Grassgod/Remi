@@ -873,4 +873,4 @@ pendingTurnBackendTests('one question through the responsibility chain', fixture
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'agent', id: h.leader.id })).toThrow('question_agent_current_turn_required');
     expect(() => h.store.answerQuestion(h.q.id, { expected_route_revision: 1, response: { answer: 'A' } }, { type: 'member', id: 'mem_other_workspace' })).toThrow('question_actor_workspace_mismatch');
   });
-});
+}, { isolation: "snapshot" });

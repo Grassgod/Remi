@@ -28,7 +28,9 @@ import {
   type FirstScreenHotspotsFixtureOptions,
 } from "../../fixtures/multiremi/first-screen-hotspots-fixture.js";
 import golden from "../../fixtures/multiremi/first-screen-hotspots-golden.json";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+
+useMigratedHotspotDatabases();
 
 let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 

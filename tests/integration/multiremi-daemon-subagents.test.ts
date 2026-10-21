@@ -3,7 +3,7 @@
 // fake-subagent-agent.ts) speaking the pinned bridges' wire shapes.
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
-import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
+import { openIntegrationDatabase, type IntegrationDatabase, useMigratedIntegrationDatabases } from "../helpers/integration-database.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,6 +18,8 @@ import { createResponsibleTestIssue } from "../unit/multiremi/helpers.js";
 import { DAEMON_MIN_CLI_VERSION } from "@multiremi/contracts/daemon-protocol.js";
 import { foldTraceLines, traceItems } from "../helpers/turn-trace.js";
 import type { FakeSubagentConfig, FakeSubagentStep } from "../fixtures/acp/fake-subagent-agent.js";
+
+useMigratedIntegrationDatabases();
 
 let database: IntegrationDatabase | null = null;
 let fixtureStore: MultiremiStore | null = null;

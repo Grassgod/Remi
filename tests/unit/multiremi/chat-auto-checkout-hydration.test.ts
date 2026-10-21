@@ -53,7 +53,7 @@ pendingTurnBackendTests("Read-only topic repository catalog", fixture => {
     expect(task).not.toHaveProperty("chatAutoCheckoutRepos");
     expect(daemonTaskClaimResponse(store, task)).not.toHaveProperty("chat_auto_checkout_repos");
   });
-});
+}, { isolation: "snapshot" });
 
 describe("Chat explicit automatic checkout catalog", () => {
   it("collects own and recursive Project repos, deduplicates, and uses workspace branch metadata only", () => {

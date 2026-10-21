@@ -133,4 +133,4 @@ function createStore(): MultiremiStore {
       expect(store.getMessage(item.id)?.session_id).toBe(expected);
     }
   });
-});
+}, { isolation: "snapshot" });

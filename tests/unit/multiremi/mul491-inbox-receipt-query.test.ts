@@ -6,7 +6,9 @@ import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
-import { conversationLogPgAdminUrl, withConversationLogStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl, withConversationLogStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
+
+useMigratedConversationLogStores();
 
 type Read = { sql: string; rows: number };
 const AUTH_TOKEN = "mul491-fixture-token";

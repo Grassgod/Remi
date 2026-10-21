@@ -117,4 +117,4 @@ pendingTurnBackendTests('MUL-506 provider input boundaries', fixture => {
         expect(f.store.getConversationLogEntryById(f.sent.turn_id!)?.metadata).toMatchObject({ event_count: Number.MAX_SAFE_INTEGER, tool_call_count: Number.MAX_SAFE_INTEGER,
           worked_ms: Number.MAX_SAFE_INTEGER, process_item_count: Number.MAX_SAFE_INTEGER });
     });
-});
+}, { isolation: "snapshot" });

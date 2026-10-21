@@ -6,6 +6,9 @@ import { AcpProvider } from "@acp/index.js";
 import { AcpClient } from "@acp/client.js";
 import type { SendMessageResult } from "@multiremi/contracts/unified-model.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const harnesses: DaemonProtocolHarness[] = [];
 const originalCodexHome = process.env.CODEX_HOME;

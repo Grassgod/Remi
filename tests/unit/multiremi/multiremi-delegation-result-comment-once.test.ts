@@ -10,11 +10,10 @@ import { requestMessageBody, taskRequestPath, sentTask, issueMessagesPath, turnA
  * once and hands it to the drain; this suite counts the SELECTs on the real
  * terminal path and asserts that bridge metadata and the inbox report agree.
  */
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import type { MultiremiStore } from "@multiremi/store.js";
+import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 import { reportFrame } from "../../fixtures/report-session.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
@@ -22,39 +21,22 @@ import { inboxReportBody } from "./inbox-test-assertions.js";
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
 let sequence = 0;
 
-/** The PG fixture creates and drops a database per case; see the sibling suite. */
+/** The PG fixture clones and drops a database per case; see the sibling suite. */
 const PG_TEST_TIMEOUT = 30_000;
 
 const RESULT_COMMENT_SELECT = "SELECT records.id FROM multiremi_issue_message_records records";
 
+// Each case is still a new database, connection and Store; only the cold
+// migration is shared (SQLite image / suite-owned PostgreSQL TEMPLATE).
+const stores = {
+  sqlite: migratedStoreBackend("sqlite", { prefix: "mul456f1r", fixture: "mul456-result-comment-once" }),
+  postgres: migratedStoreBackend("postgres", { prefix: "mul456f1r", fixture: "mul456-result-comment-once" }),
+};
+
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
-  if (backend === "sqlite") {
-    const db = openSqliteDatabase(":memory:");
-    try {
-      const store = new MultiremiStore(db);
-      store.ensureLocalWorkspace();
-      await run(store);
-    } finally {
-      db.close();
-    }
-    return;
-  }
-  const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
-  const name = `mul456f1r_${process.pid}_${++sequence}`;
-  const url = new URL(pgAdminUrl!);
-  url.pathname = `/${name}`;
-  let db: PostgresSyncDatabase | null = null;
-  try {
-    await admin.unsafe(`CREATE DATABASE ${name}`);
-    db = new PostgresSyncDatabase(url.toString());
-    const store = new MultiremiStore(db);
-    store.ensureLocalWorkspace();
-    await run(store);
-  } finally {
-    db?.close();
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end();
-  }
+  const opened = await stores[backend].open();
+  try { await run(opened.store); }
+  finally { await opened.close(); }
 }
 
 function fixture(store: MultiremiStore, daemonId?: string) {
@@ -619,6 +601,7 @@ async function runDelegateWakeupCoverageStillDrainsHistoryCase(store: MultiremiS
 
 for (const backend of ["sqlite", "postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 result comment resolved once (${backend})`, () => {
+    stores[backend].install();
     it("uses one id for the bridge metadata and inbox even when a later comment lands mid-transaction", async () => {
       await withStore(backend, async (store) => {
         const f = fixture(store);

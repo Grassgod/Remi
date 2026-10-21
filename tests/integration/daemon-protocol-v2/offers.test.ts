@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { MultiremiDaemonClient } from "@multiremi/client.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const harnesses: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of harnesses.splice(0)) await h.dispose(); });

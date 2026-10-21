@@ -49,4 +49,4 @@ pendingTurnBackendTests('MUL-506 Issue derivation and read progress',fixture=>{
     expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual({seq:4,offset:19});
     f.db.exec('ALTER TABLE multiremi_conversation_heads DROP COLUMN agent_read_state');foldAgentReadState(f.db);
     expect(f.store.getSessionAgentReadProgress(f.session.id,f.agent.id)).toEqual({seq:4,offset:19});});
-});
+}, { isolation: "snapshot" });

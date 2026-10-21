@@ -2,11 +2,13 @@ import { afterEach, expect, test } from "bun:test";
 import { MultiremiStore } from "@multiremi/store.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { taskPublicResponse } from "../../../packages/server/src/api/wire/tasks.js";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import { seedFirstScreenHotspotsFixture } from "../../fixtures/multiremi/first-screen-hotspots-fixture.js";
 import { firstScreenTaskUsage, seedFirstScreenTaskUsage } from "../../fixtures/multiremi/first-screen-task-usage-fixture.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+
+useMigratedHotspotDatabases();
 
 const databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 afterEach(async () => { for (const database of databases.splice(0)) await database.dispose(); });

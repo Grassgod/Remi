@@ -112,4 +112,4 @@ pendingTurnBackendTests('MUL-506 actual reader and provider checkpoints', fixtur
     expect(f.store.getSessionAgentReadProgress(f.session.id, f.agent.id)).toEqual(before);
     expect(f.lane()).toMatchObject({ cursor_seq: 0, cursor_offset: 32_000, provider_cursor_seq: 0 });
   });
-});
+}, { isolation: "snapshot" });

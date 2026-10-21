@@ -6,6 +6,9 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { DAEMON_HEARTBEAT_INTERVAL_MS, type DaemonHeartbeatPayload } from "@multiremi/contracts/daemon-protocol.js";
 import type { MultiremiDaemonSshMeshStatus } from "@multiremi/contracts/types.js";
 import { DaemonProtocolHarness } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const fixtures: DaemonProtocolHarness[] = [];
 afterEach(async () => { for (const h of fixtures.splice(0)) await h.dispose(); });
@@ -227,10 +230,13 @@ it("Q418-mesh: old v2 heartbeat does not write mesh, while explicit protocol zer
 });
 
 it("Q418-mesh: a real v2 daemon keeps its mesh report fresh beyond five minutes", async () => {
+  // Mesh is still disabled here and the key is read only when mesh keys are
+  // stored or read, so open the harness (an env-fingerprinted migrated
+  // database) before setting it.
+  const h = await fixture();
   const previousKey = process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY;
   process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY = randomBytes(32).toString("base64");
   try {
-    const h = await fixture();
     const id = runtimeId(h);
     h.store.setSshMeshEnabled("local", true, {
       privateKey: "fixture-private-key", publicKey: "ssh-ed25519 fixture", fingerprint: "SHA256:fixture",
@@ -264,10 +270,11 @@ it("Q418-mesh: a real v2 daemon keeps its mesh report fresh beyond five minutes"
 });
 
 it("Q418-mesh: v2 heartbeat completes a retirement rekey after the surviving daemon applies it", async () => {
+  // As above: mesh is disabled until setSshMeshEnabled below.
+  const h = await fixture();
   const previousKey = process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY;
   process.env.MULTIREMI_SSH_MESH_ENCRYPTION_KEY = randomBytes(32).toString("base64");
   try {
-    const h = await fixture();
     const id = runtimeId(h);
     const retired = h.store.registerRuntime({ name: "retiring fixture", provider: "codex",
       workspaceId: "local", daemonId: "dmn_retiring_fixture" });

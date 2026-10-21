@@ -22,11 +22,13 @@ import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js"
 import { readProcessDbCounters } from "@multiremi/observability/request-metrics.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { nullableString } from "@multiremi/store/helpers.js";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import {
   seedFirstScreenHotspotsFixture,
   type FirstScreenHotspotsFixture,
 } from "../../fixtures/multiremi/first-screen-hotspots-fixture.js";
+
+useMigratedHotspotDatabases();
 
 let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 let uploadRoots: string[] = [];

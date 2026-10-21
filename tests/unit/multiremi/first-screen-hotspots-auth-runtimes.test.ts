@@ -9,7 +9,9 @@ import type { SQLQueryBindings } from "bun:sqlite";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+
+useMigratedHotspotDatabases();
 
 let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 

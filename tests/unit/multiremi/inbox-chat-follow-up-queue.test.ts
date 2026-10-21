@@ -502,4 +502,4 @@ pendingTurnBackendTests('ADR 0020 Chat follow-up queue', fixture => {
     f.store.deleteChatSession(f.chat.id);
     expect(Number(f.db.query('SELECT COUNT(*) AS n FROM multiremi_queued_messages WHERE session_id=?').get(f.chat.id)?.n)).toBe(0);
   }, 120_000);
-});
+}, { isolation: "snapshot" });

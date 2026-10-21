@@ -20,13 +20,15 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
 import { TURN_CARD_BATCH_SIZE, projectTurnCards } from "@multiremi/store/turn-attempts.js";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import { installDeterministicIds } from "../../fixtures/multiremi/issue-detail-first-screen-fixture.js";
 import {
   readSessionLogWindowResponses,
   seedSessionLogWindowFixture,
 } from "../../fixtures/multiremi/session-log-window-fixture.js";
 import golden from "../../fixtures/multiremi/session-log-window-golden.json";
+
+useMigratedHotspotDatabases();
 
 let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 

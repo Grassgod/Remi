@@ -2,10 +2,10 @@ import { createResponsibleTestAutopilot } from './helpers.js';
 import { createResponsibleTestIssue } from './helpers.js';
 import { issueMessagesPath, requestMessageBody, sentTask, taskRequestPath } from "./unified-test-paths.js";
 import { describe, expect, it } from "bun:test";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
-import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiStore } from "@multiremi/store.js";
+import type { MultiremiStore } from "@multiremi/store.js";
 import { createId } from "@multiremi/ids.js";
 import { pairRoundTripLimit } from "@multiremi/store/repos/tasks-repo.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
@@ -16,35 +16,18 @@ import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.j
 import { inboxReportBody, inboxReportEntry } from "./inbox-test-assertions.js";
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-let sequence = 0;
 type Backend = "sqlite" | "postgres";
+// Every store is still a new database, connection and Store; only the cold
+// migration is shared (SQLite image / suite-owned PostgreSQL TEMPLATE).
+const stores = {
+  sqlite: migratedStoreBackend("sqlite", { prefix: "mul510", fixture: "mul510-universal-delegation" }),
+  postgres: migratedStoreBackend("postgres", { prefix: "mul510", fixture: "mul510-universal-delegation" }),
+};
 
 async function withStore(backend: Backend, run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>) {
-  if (backend === "sqlite") {
-    const db = openSqliteDatabase(":memory:");
-    try {
-      const store = new MultiremiStore(db);
-      store.ensureLocalWorkspace();
-      await run(store, db);
-    } finally { db.close(); }
-    return;
-  }
-  const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
-  const name = `mul510_${process.pid}_${++sequence}`;
-  const url = new URL(pgAdminUrl!);
-  url.pathname = `/${name}`;
-  let db: PostgresSyncDatabase | null = null;
-  try {
-    await admin.unsafe(`CREATE DATABASE ${name}`);
-    db = new PostgresSyncDatabase(url.toString());
-    const store = new MultiremiStore(db);
-    store.ensureLocalWorkspace();
-    await run(store, db);
-  } finally {
-    db?.close();
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end();
-  }
+  const opened = await stores[backend].open();
+  try { await run(opened.store, opened.db); }
+  finally { await opened.close(); }
 }
 
 function fixture(store: MultiremiStore, humanAssigned = false) {
@@ -173,6 +156,7 @@ function expectDowngradedMessage(store: MultiremiStore, result: any, source: Mul
 for (const backend of ["sqlite", "postgres"] as const) {
   const timeout = backend === "postgres" ? 180_000 : 15_000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-510 universal delegation (${backend})`, () => {
+    stores[backend].install();
     // Former task/session/rerun labels all resolved to the identical canonical
     // request after migration; exercise the real request once per terminal state.
     {
@@ -457,7 +441,8 @@ for (const backend of ["sqlite", "postgres"] as const) {
 
     for (const limit of [1, 2, 5]) {
       it(`real dispatch/terminal-return loop downgrades dispatch ${limit + 1} at L=${limit}`,
-        async () => withLimit(limit === 5 ? undefined : String(limit), () => withStore(backend, async store => {
+        // The limit is read per dispatch; open the store first so it reuses the migrated image.
+        async () => withStore(backend, store => withLimit(limit === 5 ? undefined : String(limit), async () => {
           const f = fixture(store);
           let source = f.source;
           for (let round = 0; round < limit; round++) {
@@ -510,9 +495,11 @@ for (const backend of ["sqlite", "postgres"] as const) {
         for (const value of [undefined, "0", "-1", "not-a-number", "1.5", "Infinity"]) {
           await withLimit(value, async () => expect(pairRoundTripLimit()).toBe(5));
         }
-        for (const limit of [1, 2, 5]) await withLimit(String(limit), async () => {
+        for (const limit of [1, 2, 5]) {
           for (const hops of [2 * limit - 1, 2 * limit, 2 * limit + 1]) {
-            await withStore(backend, async isolated => {
+            // The limit is read per dispatch, so the store opens before the env
+            // change and still reuses the migrated image (env is fingerprinted).
+            await withStore(backend, async isolated => withLimit(String(limit), async () => {
               const f = fixture(isolated);
               const source = await chain(isolated, f, hops);
               const before = isolated.listTasksForIssue(f.b.id).length;
@@ -522,9 +509,9 @@ for (const backend of ["sqlite", "postgres"] as const) {
               if (hops >= 2 * limit) expectDowngradedMessage(isolated, result, source, f.atlas.id);
               else expect(sourceTaskId(isolated, sentTask(isolated, result))).toBe(source.id);
               expect(isolated.listTasksForIssue(f.b.id).length).toBe(before + (hops < 2 * limit ? 1 : 0));
-            });
+            }));
           }
-        });
+        }
       }), timeout);
 
     it("a third agent, missing delegation or repeated agent ends only the current pair segment",
@@ -600,7 +587,7 @@ for (const backend of ["sqlite", "postgres"] as const) {
       }), timeout);
 
     it("canonical requests derive lineage from credentials and ignore forged continuation IDs",
-      async () => withLimit("2", () => withStore(backend, async store => {
+      async () => withStore(backend, store => withLimit("2", async () => {
         const f = fixture(store);
         let source = f.source;
         let previous: MultiremiTask | null = null;

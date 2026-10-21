@@ -320,4 +320,4 @@ function fixture() {
     }
     expect(store.getTask(task.id)).toMatchObject({ status: "dispatched", startedAt: null, result: null });
   });
-});
+}, { isolation: "snapshot" });

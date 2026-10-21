@@ -77,16 +77,35 @@ it("keeps handles, rows, listeners and the first Issue number independent while 
   }
 });
 
-it("falls back to a real empty-schema bootstrap when the environment differs", () => {
+it("bootstraps a separate image from an empty schema when the environment differs", () => {
   const factory = createSqliteStoreSnapshotFactory();
+  const applied = (db: ReturnType<typeof factory.create>["db"]) =>
+    db.query("SELECT applied_at FROM multiremi_schema_migrations WHERE id = ?").get(UNIFIED_MODEL_MIGRATION);
   const first = factory.create();
-  first.db.close();
-  process.env.MULTIREMI_OWNER_OPEN_ID = "sqlite_snapshot_alternate_owner";
-  const second = factory.create();
   try {
-    expect(factory.stats()).toMatchObject({ coldBootstraps: 2, clones: 1, freshFallbacks: 1 });
+    process.env.MULTIREMI_OWNER_OPEN_ID = "sqlite_snapshot_alternate_owner";
+    const second = factory.create();
+    try {
+      // Never a clone of the first environment's image: a real empty-schema
+      // bootstrap ran under the new environment, and the case cloned that image.
+      expect(factory.stats()).toMatchObject({ coldBootstraps: 2, clones: 2, freshFallbacks: 0 });
+      expect(applied(second.db)).not.toEqual(applied(first.db));
+      const again = factory.create();
+      try {
+        expect(applied(again.db)).toEqual(applied(second.db));
+      } finally { again.db.close(); }
+      if (ownerOpenId === undefined) delete process.env.MULTIREMI_OWNER_OPEN_ID;
+      else process.env.MULTIREMI_OWNER_OPEN_ID = ownerOpenId;
+      const back = factory.create();
+      try {
+        expect(applied(back.db)).toEqual(applied(first.db));
+      } finally { back.db.close(); }
+      expect(factory.stats()).toMatchObject({ coldBootstraps: 2, clones: 4, freshFallbacks: 0 });
+    } finally {
+      second.db.close();
+    }
   } finally {
-    second.db.close();
+    first.db.close();
   }
 });
 

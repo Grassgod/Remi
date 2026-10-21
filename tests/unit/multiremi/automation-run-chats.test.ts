@@ -375,7 +375,7 @@ pendingTurnBackendTests("automation run Chats", fixture => {
       expect(single.chat_session_id).toBe(run.chatSessionId!);
     });
   });
-});
+}, { isolation: "snapshot" });
 
 describe("Feishu messages into an archived Chat", () => {
   function feishuStore() {

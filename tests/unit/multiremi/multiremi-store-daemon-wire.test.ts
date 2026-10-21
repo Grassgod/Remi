@@ -38,7 +38,7 @@ pendingTurnBackendTests("Comment reply routing", fixture => {
     expect(store.getMessage(reply.id)?.reply_to_id).toBe(root.id);
     expect(store.listMessages(message.session_id, { thread: root.id }).map(entry => entry.id)).toEqual([root.id, reply.id]);
   });
-});
+}, { isolation: "snapshot" });
 
 async function readOfferHistory(app: ReturnType<typeof createMultiremiApp>, wire: any): Promise<Array<{
   body_md: string; metadata: Record<string, unknown>;

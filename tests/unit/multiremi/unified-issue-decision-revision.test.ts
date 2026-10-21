@@ -113,4 +113,4 @@ pendingTurnBackendTests("Historical Issue question revisions", fixture => {
     expect(f.store.getQuestion(f.decision.id)).toMatchObject({ status: 'closed', answer: null, wait_status: 'none' });
     expect(f.store.getQuestion(plain.id)).toBeNull();
   });
-});
+}, { isolation: "snapshot" });

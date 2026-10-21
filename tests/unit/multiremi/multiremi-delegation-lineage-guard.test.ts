@@ -13,51 +13,31 @@ import { issueMessagesPath, requestMessageBody, taskRequestPath, sentTask } from
  * pair, not the store alone. Every assertion also checks the *effect* the
  * forgery would have had: after T ends, the return must be there.
  */
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { describe, expect, it } from "bun:test";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
+import type { MultiremiStore } from "@multiremi/store.js";
+import { migratedStoreBackend } from "../../helpers/migrated-store-backends.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-let sequence = 0;
-
 /**
  * The PG fixture creates and drops a database per case; that exceeds bun's 5 s
  * default on a cold bridge, so these cases get room without slowing SQLite.
  */
 const PG_TEST_TIMEOUT = 30_000;
 
+// Each case is still a new database, connection and Store; only the cold
+// migration is shared (SQLite image / suite-owned PostgreSQL TEMPLATE).
+const stores = {
+  sqlite: migratedStoreBackend("sqlite", { prefix: "mul456f1", fixture: "mul456-lineage-guard" }),
+  postgres: migratedStoreBackend("postgres", { prefix: "mul456f1", fixture: "mul456-lineage-guard" }),
+};
+
 async function withStore(backend: "sqlite" | "postgres", run: (store: MultiremiStore) => Promise<void>): Promise<void> {
-  if (backend === "sqlite") {
-    const db = openSqliteDatabase(":memory:");
-    try {
-      const store = new MultiremiStore(db);
-      store.ensureLocalWorkspace();
-      await run(store);
-    } finally {
-      db.close();
-    }
-    return;
-  }
-  const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
-  const name = `mul456f1_${process.pid}_${++sequence}`;
-  const url = new URL(pgAdminUrl!);
-  url.pathname = `/${name}`;
-  let db: PostgresSyncDatabase | null = null;
-  try {
-    await admin.unsafe(`CREATE DATABASE ${name}`);
-    db = new PostgresSyncDatabase(url.toString());
-    const store = new MultiremiStore(db);
-    store.ensureLocalWorkspace();
-    await run(store);
-  } finally {
-    db?.close();
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end();
-  }
+  const opened = await stores[backend].open();
+  try { await run(opened.store); }
+  finally { await opened.close(); }
 }
 
 interface Fixture {
@@ -152,6 +132,7 @@ const FORGED_SPELLINGS: Array<[string, Record<string, unknown>]> = [
 
 for (const backend of ["sqlite", "postgres"] as const) {
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 lineage guard (${backend})`, () => {
+    stores[backend].install();
     it("drops every parent_task_id spelling a member PAT sends to the Session task route", async () => {
       for (const [label, forged] of FORGED_SPELLINGS) {
         await withStore(backend, async (store) => {

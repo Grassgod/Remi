@@ -108,4 +108,4 @@ pendingTurnBackendTests("MUL-509 moved Issue Session read parity", (fixture, bac
       }
     } finally { await pool.close(); }
   });
-});
+}, { isolation: "snapshot" });

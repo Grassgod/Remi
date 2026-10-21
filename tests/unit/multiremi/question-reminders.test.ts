@@ -86,4 +86,4 @@ pendingTurnBackendTests('persistent native Q reminders', fixture => {
     expect(h.store.claimFeishuBotOutbound('local', h.runtime.id, new Date(h.dueAt))?.kind).toBe('decision_reminder');
     expect(h.store.claimFeishuBotOutbound('local', h.runtime.id, new Date(h.dueAt))).toBeNull();
   });
-});
+}, { isolation: "snapshot" });

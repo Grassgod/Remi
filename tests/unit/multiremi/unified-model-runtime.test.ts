@@ -167,4 +167,4 @@ pendingTurnBackendTests('MUL-505 canonical runtime',fixture=>{
     expect(db.query('SELECT metadata,body_md FROM multiremi_conversation_log WHERE id=?').get(first.id)).toEqual({metadata:'{}',body_md:''});
   });
 
-});
+}, { isolation: "snapshot" });

@@ -263,4 +263,4 @@ pendingTurnBackendTests('MUL-493 QA blockers B1-B4', fixture => {
       expect(f.store.getSessionAgentReadProgress(target.session.id, f.concierge.id)).toEqual({ seq: 0, offset: 0 });
     } finally { server.stop(true); }
   }, 60_000);
-});
+}, { isolation: "snapshot" });

@@ -83,7 +83,9 @@ async function setup({ store }: PendingTurnTestFixture, delegated = false, under
   let question!: (params: ElicitationCreateParams) => Promise<ElicitationResult>;
   const provider = { setPermissionHandler: (h: typeof permission) => { permission = h; },
     setElicitationHandler: (h: typeof question) => { question = h; } } as MultiremiTaskProvider;
-  daemon.attachHumanInputHandlers(provider, attempt, new AbortController().signal, () => 1);
+  // The task signal the daemon's local decision wait listens to, like a cancelled task.
+  const taskAbort = new AbortController();
+  daemon.attachHumanInputHandlers(provider, attempt, taskAbort.signal, () => 1);
   client.startLane(lane);
   await until(() => client.connectionState() === "connected");
   await inbox.consumeTaskSteerMessages(attempt.id, offer.input_messages.map(m => m.id));
@@ -91,6 +93,13 @@ async function setup({ store }: PendingTurnTestFixture, delegated = false, under
   const { token } = await store.createTaskAccessToken(attempt, "local");
   return { store, rt, agent, parentLeader, issue, session, attempt, offer, dispatch, send, frames, inbox, feed, permission, question, client, lane,
     serverUrl: `http://127.0.0.1:${server.port}`,
+    /** Expire the pending decision, then end the daemon's local wait as task cancellation
+     * does instead of sleeping out humanRequestTimeoutMs. The real timeout path is covered
+     * by permission-decision.test.ts and multiremi-approval-e2e.test.ts. */
+    async expireDecision(messageId: string) {
+      await inbox.rpc("turn.decision.expire", { ...inbox.turnInput(attempt.id), message_id: messageId, status: "cancelled" });
+      taskAbort.abort();
+    },
     async readRange(from: number, to: number) {
       const response = await fetch(`http://127.0.0.1:${server.port}/api/sessions/${session.id}/messages?from=${from}&to=${to}`,
         { headers: { Authorization: `Bearer ${token}` } });
@@ -219,7 +228,7 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
         expect(() => h.store.answerMessageDecision(decision.id, { expected_route_revision: 1, sender: { type: "member", id: "mem_local_local" },
           body_md: optionId, response: { option_id: optionId } })).toThrow("invalid human response");
         expect(h.store.getTaskHumanRequest(decision.id)?.status).toBe("pending");
-        await h.inbox.rpc("turn.decision.expire", { ...h.inbox.turnInput(h.attempt.id), message_id: decision.id, status: "cancelled" });
+        await h.expireDecision(decision.id);
         expect(await result).toEqual({ outcome: "cancelled" });
         return;
       }
@@ -285,7 +294,7 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
           expect(() => h.store.answerMessageDecision(decision.id, { expected_route_revision: 1, sender: { type: "member", id: "mem_local_local" },
             body_md: body, response })).toThrow("invalid human response");
           expect(h.store.getTaskHumanRequest(decision.id)?.status).toBe("pending");
-          await h.inbox.rpc("turn.decision.expire", { ...h.inbox.turnInput(h.attempt.id), message_id: decision.id, status: "cancelled" });
+          await h.expireDecision(decision.id);
           expect(await result).toEqual({ action: "cancel" });
           return;
         }
@@ -454,4 +463,4 @@ pendingTurnBackendTests("decision callbacks over Store and native WS", fixture =
       expect(h.store.getTurn(h.offer.turn_id)?.input_to_seq).toBe(sent.message.seq);
     } finally { await h.close(); rmSync(workDir, { recursive: true, force: true }); }
   }, 120_000);
-});
+}, { isolation: "snapshot" });

@@ -6,9 +6,11 @@ import { describe, expect, it } from "bun:test";
 import { createCommitEventQueue } from "@multiremi/store/context.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import { daemonTaskClaimResponse } from "@multiremi/api/wire/tasks.js";
-import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore } from "./fixtures/conversation-log-store.js";
+import { conversationLogPgAdminUrl as pgAdminUrl, withConversationLogStore as withStore, useMigratedConversationLogStores } from "./fixtures/conversation-log-store.js";
 import type { MultiremiStore } from "@multiremi/store.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+
+useMigratedConversationLogStores();
 
 function sendIssueWake(store: MultiremiStore, db: SqlDatabase, sessionId: string, agentId: string,
   wake: "now" | "next_turn" | "inbox_only", body: string) {

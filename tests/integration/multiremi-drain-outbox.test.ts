@@ -5,7 +5,7 @@
 // messages; release restores claiming.
 import { disabledSshMeshRuntime } from "../helpers/ssh-mesh-isolation.js";
 import { afterEach, describe, expect, it } from "bun:test";
-import { openIntegrationDatabase, type IntegrationDatabase } from "../helpers/integration-database.js";
+import { openIntegrationDatabase, type IntegrationDatabase, useMigratedIntegrationDatabases } from "../helpers/integration-database.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,6 +19,8 @@ import { MultiremiStore } from "@multiremi/store.js";
 import { MultiremiTaskReportOutbox } from "@multiremi/worker/outbox.js";
 import { isTraceEvent } from "@multiremi/contracts/trace.js";
 import { applyTurnTraceEvents, EMPTY_TURN_TRACE } from "@shared/turn-trace.js";
+
+useMigratedIntegrationDatabases();
 
 let database: IntegrationDatabase | null = null;
 let workDir: string | null = null;

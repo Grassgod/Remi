@@ -219,4 +219,4 @@ pendingTurnBackendTests("MUL-508 C1/C2", (fixture) => {
       expect(f.audits()).toEqual([]);
     });
   }
-});
+}, { isolation: "snapshot" });

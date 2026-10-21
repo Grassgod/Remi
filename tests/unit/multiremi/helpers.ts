@@ -47,13 +47,25 @@ let previousUploadDir: string | undefined;
 let uploadDir: string | null = null;
 let previousFetch: typeof globalThis.fetch | null = null;
 
+/**
+ * Ordinary business store: a new handle and a new Store cloned from the
+ * migrated SQLite image (same as `createSnapshotStore`). The migration
+ * entrance still runs; a non-native clock/RNG, a changed environment or a
+ * missing migration report falls back to a cold migration automatically.
+ */
 export function createStore(): MultiremiStore {
+  return createSnapshotStore();
+}
+
+/** Cold migration from an empty database, for migration, empty-schema, seed-clock
+ * or startup-side-effect cases that must observe the first migration run. */
+export function createFreshStore(): MultiremiStore {
   db = openSqliteDatabase(":memory:");
   return new MultiremiStore(db);
 }
 
-// Lazy and opt-in: importing helpers never opens a snapshot database. Default
-// factories below retain empty-schema/seed-clock/startup behavior.
+// Lazy: importing helpers never opens a snapshot database; the image is built
+// by the first createStore()/createSnapshotStore() call of the process.
 const sqliteSnapshots = createSqliteStoreSnapshotFactory();
 
 /** Ordinary business tests only; retains an independent handle and new Store. */

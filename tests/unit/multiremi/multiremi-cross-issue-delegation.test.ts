@@ -1,16 +1,15 @@
 import { createResponsibleTestIssue } from './helpers.js';
 import { requestMessageBody, taskRequestPath, sentTask } from "./unified-test-paths.js";
-import { openSqliteDatabase } from "@multiremi/store/db/sqlite.js";
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { IssuesRepo } from "@multiremi/store/repos/issues-repo.js";
 import { createMultiremiApp } from "@multiremi/api.js";
-import { MultiremiStore } from "@multiremi/store.js";
-import { PostgresSyncDatabase, type SqlDatabase } from "@multiremi/store/db/postgres.js";
+import type { MultiremiStore } from "@multiremi/store.js";
+import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
+import { migratedStoreBackend, type MigratedStore } from "../../helpers/migrated-store-backends.js";
 import type { MultiremiIssue, MultiremiTask } from "@multiremi/contracts/types.js";
 import { inboxReportBody } from "./inbox-test-assertions.js";
 
 const pgAdminUrl = process.env.MULTIREMI_TEST_POSTGRES_URL;
-let sequence = 0;
 
 /** MUL-383 shape: one leader dispatch round against N child issues. */
 function fiveChildFixture(store: MultiremiStore) {
@@ -30,40 +29,12 @@ function fiveChildFixture(store: MultiremiStore) {
   return { leaderRuntime, workerRuntimes, leader, workers, squad, parent, children, leaderSession, leaderTask };
 }
 
-async function openStore(backend: "sqlite" | "postgres") {
-  if (backend === "sqlite") {
-    const db = openSqliteDatabase(":memory:");
-    try {
-      const store = new MultiremiStore(db);
-      store.ensureLocalWorkspace();
-      return { store, db, close: async () => db.close() };
-    } catch (error) {
-      db.close();
-      throw error;
-    }
-  }
-  const admin = new Bun.SQL(pgAdminUrl!, { max: 1 });
-  const name = `mul456i_${process.pid}_${++sequence}`;
-  const url = new URL(pgAdminUrl!);
-  url.pathname = `/${name}`;
-  let db: PostgresSyncDatabase | null = null;
-  try {
-    await admin.unsafe(`CREATE DATABASE ${name}`);
-    db = new PostgresSyncDatabase(url.toString());
-    const store = new MultiremiStore(db);
-    store.ensureLocalWorkspace();
-    return { store, db, close: async () => {
-      db?.close();
-      await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-      await admin.end();
-    } };
-  } catch (error) {
-    db?.close();
-    await admin.unsafe(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
-    await admin.end();
-    throw error;
-  }
-}
+// Each case is still a new database, connection and Store; only the cold
+// migration is shared (SQLite image / suite-owned PostgreSQL TEMPLATE).
+const stores = {
+  sqlite: migratedStoreBackend("sqlite", { prefix: "mul456i", fixture: "mul456-cross-issue-return" }),
+  postgres: migratedStoreBackend("postgres", { prefix: "mul456i", fixture: "mul456-cross-issue-return" }),
+};
 
 function fixture(store: MultiremiStore, db?: SqlDatabase) {
   const registerMembers = () => {
@@ -118,10 +89,11 @@ for (const backend of ["sqlite", "postgres"] as const) {
   // These PG scenarios do several writes; CI runner jitter is outside the behavior asserted below.
   const pgScenarioTimeout = backend === "postgres" ? 15000 : 5000;
   describe.skipIf(backend === "postgres" && !pgAdminUrl)(`MUL-456 cross-issue return (${backend})`, () => {
-    let opened: Awaited<ReturnType<typeof openStore>>;
+    stores[backend].install();
+    let opened: MigratedStore;
     // Keep cold database/bootstrap and teardown outside each behavior's existing
     // timeout; the transactional scenarios retain their original budgets.
-    beforeEach(async () => { opened = await openStore(backend); });
+    beforeEach(async () => { opened = await stores[backend].open(); });
     afterEach(async () => { await opened?.close(); });
     const withStore = async (_backend: typeof backend, run: (store: MultiremiStore, db: SqlDatabase) => Promise<void>) => {
       await run(opened.store, opened.db);

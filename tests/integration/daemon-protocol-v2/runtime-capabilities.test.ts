@@ -11,6 +11,9 @@ import {
 } from "@multiremi/contracts/types.js";
 import { runtimeCapabilitiesInFrame } from "../../fixtures/daemon-protocol.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const fixtures: DaemonProtocolHarness[] = [];
 const releaseProviders: Array<() => void> = [];

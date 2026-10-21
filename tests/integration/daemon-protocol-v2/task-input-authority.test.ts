@@ -2,6 +2,9 @@ import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-record
 import { afterEach, describe, expect, it, spyOn } from "bun:test";
 import { DaemonDownlinks } from "@multiremi/api/daemon-protocol/downlinks.js";
 import { DaemonProtocolHarness, waitFor } from "./harness.js";
+import { useMigratedIntegrationDatabases } from "../../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 const fixtures: DaemonProtocolHarness[] = [];
 async function fixture(workspace: "local" | "foreign") {

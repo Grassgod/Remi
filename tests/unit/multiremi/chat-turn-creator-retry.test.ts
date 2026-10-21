@@ -113,4 +113,4 @@ pendingTurnBackendTests("Chat creator turn retry", (fixture) => {
     expect(archived.data.code).toBe("chat_archived");
     expect(f.store.listTurnAttempts(live.turn.id)).toHaveLength(1);
   });
-});
+}, { isolation: "snapshot" });

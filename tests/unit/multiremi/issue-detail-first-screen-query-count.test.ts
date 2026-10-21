@@ -14,7 +14,7 @@ import { createResponsibleTestIssue, testWorkspaceMember } from './helpers.js';
 //      count, and `/api/issues/:id` must not re-load tasks/children/dependencies.
 import { afterEach, describe, expect, it } from "bun:test";
 import type { SQLQueryBindings } from "bun:sqlite";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import { createMultiremiApp } from "@multiremi/api.js";
 import type { SqlDatabase, SqlStatement } from "@multiremi/store/db/postgres.js";
 import { MultiremiStore } from "@multiremi/store.js";
@@ -24,6 +24,8 @@ import {
   seedIssueDetailFirstScreenFixture,
 } from "../../fixtures/multiremi/issue-detail-first-screen-fixture.js";
 import golden from "../../fixtures/multiremi/issue-detail-first-screen-golden.json";
+
+useMigratedHotspotDatabases();
 
 let databases: Array<Awaited<ReturnType<typeof openHotspotDatabase>>> = [];
 

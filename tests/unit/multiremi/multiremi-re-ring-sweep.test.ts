@@ -373,7 +373,7 @@ pendingTurnBackendTests("MUL-492 periodic re-ring", (fixture, backend) => {
     console.info("MUL-492 pending-hint page EXPLAIN", pagePlan);
     console.info("MUL-492 bounded log EXPLAIN", logPlan);
   });
-});
+}, { isolation: "snapshot" });
 
 
 unifiedModelBackendTests('MUL-492 historical sweep migration',fixture=>{

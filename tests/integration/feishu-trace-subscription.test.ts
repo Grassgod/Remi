@@ -9,6 +9,9 @@ import type { DaemonTraceTransport } from "@multiremi/worker/trace-transport.js"
 import { daemonTraceService } from "@multiremi/api/daemon-protocol/trace-handlers.js";
 import { DaemonProtocolHarness, waitFor } from "./daemon-protocol-v2/harness.js";
 import { TS, agentMessage, command, input, item, nativeHarness, read, reasoning, running, turn } from "../unit/connectors/feishu-native-harness.js";
+import { useMigratedIntegrationDatabases } from "../helpers/integration-database.js";
+
+useMigratedIntegrationDatabases();
 
 it("presents continuous CoT through a real local daemon/API disconnect, replaying from 0 past its checkpoint", async () => {
   const activeTaskIds: string[] = [];

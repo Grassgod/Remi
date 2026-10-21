@@ -56,4 +56,4 @@ pendingTurnBackendTests("D1 inbox transaction depth", fixture => {
       expect(inboxWakeSeq(db, tasks[0]!.id)).toBe(entry.seq);
     });
   }
-});
+}, { isolation: "snapshot" });

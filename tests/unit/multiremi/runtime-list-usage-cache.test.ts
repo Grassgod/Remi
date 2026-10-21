@@ -4,9 +4,11 @@ import { writeUsageSnapshot } from "@multiremi/store/usage-accounting.js";
 import { parseTaskUsageEntries } from "@multiremi/store/helpers.js";
 import { PostgresSyncDatabase } from "@multiremi/store/db/postgres.js";
 import { readProcessDbCounters } from "../../../packages/server/src/observability/request-metrics.js";
-import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { openHotspotDatabase, useMigratedHotspotDatabases } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
 import type { SqlDatabase } from "@multiremi/store/db/postgres.js";
 import { runTurnExecutionMutation } from "@multiremi/store/turn-execution-records.js";
+
+useMigratedHotspotDatabases();
 
 function seedUsageAttempt(db: SqlDatabase, id: string, agentId: string, runtimeId: string, status: string, usage: string | null) {
   const stamp = "2026-10-05T00:00:00Z";

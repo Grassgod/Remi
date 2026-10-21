@@ -286,4 +286,4 @@ pendingTurnBackendTests("read-only display log", fixture => {
     const range = await app.request(`/api/sessions/${sessionId}/messages?from=0&to=${sent.message.seq}`, { headers });
     expect(range.status).toBe(200); expect(store.getSessionAgentReadProgress(sessionId, agent.id).seq).toBe(sent.message.seq);
   });
-});
+}, { isolation: "snapshot" });

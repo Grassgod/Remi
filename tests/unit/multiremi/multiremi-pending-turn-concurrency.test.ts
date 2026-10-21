@@ -143,4 +143,4 @@ pendingTurnBackendTests("pending turn concurrency", (fixture, backend) => {
     }
   }, 40_000);
   }
-});
+}, { isolation: "snapshot" });
