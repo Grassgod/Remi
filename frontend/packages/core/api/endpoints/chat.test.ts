@@ -64,6 +64,15 @@ describe("ChatEndpoints contracts", () => {
     await expect(endpointsWithResponse({ created: true }).createChatSession({ agent_id: "agent-1" })).rejects.toBeInstanceOf(ApiContractError);
   });
 
+  it("creates a chat under the client-made id and rejects an answer under another id", async () => {
+    const own = { ...session, id: "chat_0123456789ab" };
+    await expect(endpointsWithResponse(own).createChatSession({ id: own.id, agent_id: "agent-1", title: "Chat" })).resolves.toEqual(own);
+    expect(fetch).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      body: JSON.stringify({ id: own.id, agent_id: "agent-1", title: "Chat" }),
+    }));
+    await expect(endpointsWithResponse(session).createChatSession({ id: own.id, agent_id: "agent-1" })).rejects.toBeInstanceOf(ApiContractError);
+  });
+
   it("sends an optional project only when creating the session", async () => {
     const linked = { ...session, project_id: "project-a" };
     await expect(endpointsWithResponse(linked).createChatSession({ agent_id: "agent-1", project_id: "project-a" })).resolves.toEqual(linked);

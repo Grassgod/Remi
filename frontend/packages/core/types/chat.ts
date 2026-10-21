@@ -37,6 +37,12 @@ export interface ChatSession {
 }
 
 export interface CreateChatSessionInput {
+  /**
+   * A client-made id (`createChatSessionId`), so the chat can be shown before
+   * the server answers. The server refuses a malformed id (400) and one that
+   * has ever been used (409).
+   */
+  id?: string;
   runtime_workspace_id?: string | null;
   agent_id: string;
   title?: string;

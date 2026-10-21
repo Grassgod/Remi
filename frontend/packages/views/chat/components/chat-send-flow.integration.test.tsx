@@ -9,7 +9,7 @@ import { ApiError } from "@multiremi/core/api";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import { ReplicaEnvProvider } from "@multiremi/core/platform/replica-env";
 import { CHAT_SEND_TIMEOUT_MS, createChatStore, registerChatStore } from "@multiremi/core/chat";
-import { CHAT_PENDING_REFETCH_INTERVAL_MS } from "@multiremi/core/chat/queries";
+import { CHAT_PENDING_REFETCH_INTERVAL_MS, chatKeys } from "@multiremi/core/chat/queries";
 import { clearChatLogPool } from "@multiremi/core/session-log/chat-log-pool";
 import { SessionLogEntrySchema, type LogWindowParams, type SessionLogRow, type SessionLogWindow } from "@multiremi/core/api/schemas/session-log";
 import type { ChatSession, SendChatMessageResponse } from "@multiremi/core/types";
@@ -29,7 +29,7 @@ import enMessages from "../../locales/en/messages.json";
  * explicitly, so no test depends on how fast the machine is.
  */
 const backend = vi.hoisted(() => ({
-  read: vi.fn(), send: vi.fn(), turn: vi.fn(), create: vi.fn(),
+  read: vi.fn(), send: vi.fn(), turn: vi.fn(), create: vi.fn(), list: vi.fn(), pending: vi.fn(),
   sessions: [] as ChatSession[],
 }));
 const socket = vi.hoisted(() => ({ subscribeStream: vi.fn(), onReconnect: vi.fn(() => () => {}) }));
@@ -59,9 +59,9 @@ vi.mock("@multiremi/core/api", async (importOriginal) => ({
     listAgents: async () => [{ id: "agent-a", name: "Alpha", archived_at: null, owner_id: "user-a" }],
     listMembers: async () => [{ id: "member-a", user_id: "user-a", role: "owner" }],
     listProjects: async () => ({ projects: [] }),
-    listChatSessions: async () => backend.sessions,
+    listChatSessions: backend.list,
     getChatSession: async (id: string) => backend.sessions.find((session) => session.id === id),
-    getPendingChatTask: async () => ({ supports_queue: true }),
+    getPendingChatTask: backend.pending,
     markChatSessionRead: async () => {},
     createChatSession: backend.create,
     sendChatMessage: backend.send,
@@ -156,6 +156,15 @@ let logs = chatLogs();
 const memberMessage = (body: string, clientId: string | null) => ({ kind: "message", sender_type: "member", sender_id: "member-a",
   to_type: "agent", to_agent_id: "agent-a", message_kind: "request", body_md: body, dedupe_key: clientId });
 
+type CreateInput = { id: string; agent_id: string; title?: string };
+/** The server's handling of a create: the chat, under the id the client made, and its log's head row. */
+function serverCreate(input: CreateInput): ChatSession {
+  const created = { ...existing, id: input.id, title: input.title ?? "" };
+  backend.sessions = [created, ...backend.sessions];
+  logs.write(created.id, { kind: "head", body_md: created.title });
+  return created;
+}
+
 /** A request the test answers later. */
 function gate<T>() {
   let resolve!: (value: T) => void;
@@ -213,6 +222,8 @@ const sentLabel = () => [...conversation()!.querySelectorAll<HTMLElement>('[aria
   .find((node) => node.textContent?.includes("Sent"));
 const submit = () => fireEvent.click(screen.getByRole("button", { name: /^(Send|Steer)$/ }));
 const sentClientId = (call = 0) => backend.send.mock.calls[call]![3] as string;
+/** The id the client made for the chat it created. */
+const createdId = (call = 0) => (backend.create.mock.calls[call]![0] as { id: string }).id;
 
 // Waits are on what the page shows; a slow runner gets room, the assertions stay the same.
 beforeAll(() => configure({ asyncUtilTimeout: 5000 }));
@@ -229,12 +240,9 @@ beforeEach(() => {
   backend.read.mockImplementation(async (id: string, params: LogWindowParams) => logs.read(id, params));
   backend.send.mockImplementation(async (id: string, body: string, _attachments: unknown, clientId: string) => accept(id, body, clientId));
   backend.turn.mockImplementation(async (turnId: string) => ({ task_id: `attempt-of-${turnId}`, turn_id: turnId, status: "queued", supports_queue: true }));
-  backend.create.mockImplementation(async (input: { agent_id: string; title?: string }) => {
-    const created = { ...existing, id: `chat-new-${backend.create.mock.calls.length}`, title: input.title ?? "" };
-    backend.sessions = [created, ...backend.sessions];
-    logs.write(created.id, { kind: "head", body_md: created.title });
-    return created;
-  });
+  backend.list.mockImplementation(async () => backend.sessions);
+  backend.pending.mockImplementation(async () => ({ supports_queue: true }));
+  backend.create.mockImplementation(async (input: CreateInput) => serverCreate(input));
   socket.subscribeStream.mockImplementation((_stream: string, id: string, handlers: StreamSubscriptionHandlers) => {
     streams.set(id, handlers);
     return { unsubscribe: vi.fn() };
@@ -380,7 +388,7 @@ describe("the composer follows the chat on screen", () => {
     await waitFor(() => expect(view.store.getState().inputDrafts["__new__:agent-a"]).toBe("After the nav link"));
     submit();
     await waitFor(() => expect(backend.send).toHaveBeenCalledOnce());
-    expect(backend.send.mock.calls[0]![0]).toBe("chat-new-1");
+    expect(backend.send.mock.calls[0]![0]).toBe(createdId());
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
     await pastDraftDebounce();
     expect(composerText()).toBe("");
@@ -397,10 +405,10 @@ describe("the composer follows the chat on screen", () => {
     await type("First message");
     await waitFor(() => expect(view.store.getState().inputDrafts["__new__:agent-a"]).toBe("First message"));
     submit();
-    await waitFor(() => expect(router.search).toBe("?session=chat-new-1"));
+    await waitFor(() => expect(router.search).toBe(`?session=${createdId()}`));
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
     // The created chat names the URL once, with no history entry or scroll jump.
-    expect(router.replace.mock.calls).toEqual([["/test/chat?session=chat-new-1", { scroll: false }]]);
+    expect(router.replace.mock.calls).toEqual([[`/test/chat?session=${createdId()}`, { scroll: false }]]);
     await pastDraftDebounce();
     expect(composerText()).toBe("");
     expect(view.store.getState().inputDrafts).toEqual({});
@@ -449,11 +457,116 @@ describe("the composer follows the chat on screen", () => {
     expect(composerText()).toBe("");
     await waitFor(() => expect(backend.send).toHaveBeenCalledOnce());
     act(() => { editor()!.commands.insertContent("Next thought"); });
-    await waitFor(() => expect(view.store.getState().inputDrafts["chat-new-1"]).toBe("Next thought"));
-    await act(async () => { post.resolve(accept("chat-new-1", "First message", sentClientId())); });
+    const created = createdId();
+    await waitFor(() => expect(view.store.getState().inputDrafts[created]).toBe("Next thought"));
+    await act(async () => { post.resolve(accept(created, "First message", sentClientId())); });
     await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
     expect(composerText()).toBe("Next thought");
-    expect(view.store.getState().inputDrafts["chat-new-1"]).toBe("Next thought");
+    expect(view.store.getState().inputDrafts[created]).toBe("Next thought");
+    expect(newChatDrafts(view.store.getState().inputDrafts)).toEqual([]);
+    view.unmount();
+  });
+});
+
+describe("a new chat opens at the send, before the server has created it", () => {
+  const CHAT_ID = /^chat_[0-9a-z]{12}$/;
+  const createInput = () => backend.create.mock.calls[0]![0] as CreateInput;
+  const readsOf = (mock: typeof backend.read, id: string) => mock.mock.calls.filter(([sessionId]) => sessionId === id);
+
+  it("shows the chat, its URL and the message sending while the create hangs, and sends once the chat exists", async () => {
+    const view = mountPage("/test/chat");
+    const create = gate<ChatSession>();
+    backend.create.mockImplementationOnce(() => create.promise);
+    await type("First message");
+    submit();
+    // In the same interaction: the URL names the new chat, the header its
+    // title, the conversation the message, sending; no empty state.
+    const id = view.store.getState().activeSessionId!;
+    expect(id).toMatch(CHAT_ID);
+    expect(router.search).toBe(`?session=${id}`);
+    expect(pageTitle()).toHaveTextContent("First message");
+    expect(conversation()).toHaveTextContent("First message");
+    expect(conversation()).toHaveTextContent("Sending…");
+    expect(screen.queryByText("Hi, I'm Alpha")).not.toBeInTheDocument();
+    expect(composerText()).toBe("");
+    await waitFor(() => expect(backend.create).toHaveBeenCalledOnce());
+    expect(createInput()).toEqual({ id, agent_id: "agent-a", title: "First message" });
+    // Nothing reads the chat before it exists, the fallback read included, and nothing is posted to it.
+    await advance(CHAT_PENDING_REFETCH_INTERVAL_MS);
+    expect(readsOf(backend.read, id)).toEqual([]);
+    expect(readsOf(backend.pending, id)).toEqual([]);
+    expect(socket.subscribeStream).not.toHaveBeenCalledWith(expect.anything(), id, expect.anything());
+    expect(backend.send).not.toHaveBeenCalled();
+    expect(conversation()).toHaveTextContent("Sending…");
+    // The server creates it: the message is posted to it, and its log is read.
+    await act(async () => { create.resolve(serverCreate(createInput())); });
+    await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
+    expect(backend.send.mock.calls[0]![0]).toBe(id);
+    await waitFor(() => expect(readsOf(backend.read, id).length).toBeGreaterThan(0));
+    expect(conversation()).toHaveTextContent("First message");
+    // The URL changed once, at the send.
+    expect(router.replace.mock.calls).toEqual([[`/test/chat?session=${id}`, { scroll: false }]]);
+    view.unmount();
+  });
+
+  it("does not wait for the session lists read again after the create", async () => {
+    const view = mountPage("/test/chat");
+    await waitFor(() => expect(backend.list).toHaveBeenCalled());
+    const listReads = backend.list.mock.calls.length;
+    // From here every list read hangs.
+    backend.list.mockImplementation(stall);
+    await type("Quick start");
+    submit();
+    await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
+    expect(backend.send.mock.calls[0]![0]).toBe(createdId());
+    // The lists are being read again behind the create; the chat keeps its record meanwhile.
+    expect(backend.list.mock.calls.length).toBeGreaterThan(listReads);
+    expect(pageTitle()).toHaveTextContent("Quick start");
+    view.unmount();
+  });
+
+  it("goes back to the new chat, its draft and its location when the create fails", async () => {
+    const view = mountPage("/test/chat");
+    let refuse!: (error: unknown) => void;
+    backend.create.mockImplementationOnce(() => new Promise((_resolve, reject) => { refuse = reject; }));
+    act(() => view.store.getState().setDraftLocation({ projectId: "project-a", runtimeWorkspaceId: null }));
+    await type("Will it fail?");
+    submit();
+    const id = view.store.getState().activeSessionId!;
+    expect(router.search).toBe(`?session=${id}`);
+    expect(conversation()).toHaveTextContent("Sending…");
+    await waitFor(() => expect(backend.create).toHaveBeenCalledOnce());
+    expect(createInput()).toEqual({ id, agent_id: "agent-a", title: "Will it fail?", project_id: "project-a" });
+    await act(async () => { refuse(new ApiError("Chat session id has already been used", 409, "Conflict", { error: "Chat session id has already been used" })); });
+    expect(await screen.findByText("Message was not sent. Your draft is saved; try again.")).toBeInTheDocument();
+    expect(router.search).toBe("");
+    expect(view.store.getState().activeSessionId).toBeNull();
+    expect(pageTitle()).toHaveTextContent("New chat");
+    expect(conversation()).toBeNull();
+    expect(composerText()).toBe("Will it fail?");
+    expect(view.store.getState().inputDrafts["__new__:agent-a"]).toBe("Will it fail?");
+    expect(view.store.getState().draftProjectId).toBe("project-a");
+    // The chat the create wrote into the cache is gone again.
+    expect(client.getQueryData<ChatSession[]>(chatKeys.sessions("workspace-a"))?.map((session) => session.id)).not.toContain(id);
+    expect(client.getQueryData(chatKeys.session("workspace-a", id))).toBeUndefined();
+    expect(backend.send).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  it("keeps what the user types while the chat is being created, as the created chat's draft", async () => {
+    const view = mountPage("/test/chat");
+    const create = gate<ChatSession>();
+    backend.create.mockImplementationOnce(() => create.promise);
+    await type("First message");
+    submit();
+    act(() => { editor()!.commands.insertContent("Follow-up"); });
+    await pastDraftDebounce();
+    await waitFor(() => expect(backend.create).toHaveBeenCalledOnce());
+    await act(async () => { create.resolve(serverCreate(createInput())); });
+    await waitFor(() => expect(conversation()).toHaveTextContent("Sent"));
+    const id = createdId();
+    expect(composerText()).toBe("Follow-up");
+    await waitFor(() => expect(view.store.getState().inputDrafts[id]).toBe("Follow-up"));
     expect(newChatDrafts(view.store.getState().inputDrafts)).toEqual([]);
     view.unmount();
   });

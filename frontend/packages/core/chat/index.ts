@@ -4,6 +4,7 @@ export { useRecentContextStore, selectRecentContexts } from "./recent-context-st
 export type { RecentContextEntry, RecentContextType } from "./recent-context-store";
 export { reconcileSettledPendingChatTask } from "./pending-task-reconciliation";
 export { CHAT_SEND_TIMEOUT_MS, ChatSendTimeoutError, withChatSendTimeout } from "./send";
+export { CHAT_SESSION_ID_PATTERN, createChatSessionId } from "./session-id";
 export type { PendingChatTaskRef } from "./pending-task-reconciliation";
 
 import type { createChatStore as CreateChatStoreFn } from "./store";

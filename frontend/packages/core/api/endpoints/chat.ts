@@ -57,6 +57,10 @@ export class ChatEndpoints {
       body: JSON.stringify(data),
     });
     const session = parseStrictResponse<ChatSession>(raw, ChatSessionSchema, { endpoint: "POST /api/chat/sessions" });
+    // The chat was already opened under this id.
+    if (data.id && session.id !== data.id) {
+      throw new ApiContractError("POST /api/chat/sessions", "Server did not keep the chat id");
+    }
     if (data.runtime_workspace_id && session.runtime_workspace_id !== data.runtime_workspace_id) {
       throw new ApiContractError("POST /api/chat/sessions", "Server did not retain the selected runtime workspace");
     }

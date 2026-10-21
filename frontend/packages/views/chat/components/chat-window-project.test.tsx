@@ -182,6 +182,8 @@ function mountFloatingOpen(open: boolean, activeSessionId: string | null = sessi
   return { ...result, store, client };
 }
 
+/** A new chat is created under an id the client made, in the server's format. */
+const newChatId = expect.stringMatching(/^chat_[0-9a-z]{12}$/);
 const session: ChatSession = {
   id: "chat-a", workspace_id: "workspace-a", agent_id: "agent-a", creator_id: "user-a",
   project_id: "project-a", title: "Chat", status: "active", has_unread: false, pinned: false, origin: null,
@@ -305,8 +307,10 @@ describe("ChatWindow plain HTTP sends", () => {
     expect(globalThis.crypto.randomUUID).toBeUndefined();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
 
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello" }));
+    // The chat's id is made with getRandomValues too.
+    const created = (backend.create.mock.calls[0]![0] as { id: string }).id;
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith(created, "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
     await waitFor(() => expect(backend.refresh).toHaveBeenCalledOnce());
   });
 
@@ -370,7 +374,7 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: /Local workbench/ }));
     expect(store.getState().draftProjectId).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
     // The page names a fixed location in its header; no picker is left to change it.
     expect(await screen.findByRole("group", { name: "Work location: Local workbench" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Work location:/ })).not.toBeInTheDocument();
@@ -383,7 +387,7 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Work location: Local workbench" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
   });
 
   it("creates a conversation with the selected draft project", async () => {
@@ -392,8 +396,9 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(await screen.findByRole("menuitem", { name: "Remi" }));
     expect(screen.getByRole("button", { name: "Work location: Remi" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
-    await waitFor(() => expect(backend.send).toHaveBeenCalledWith("chat-a", "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
+    const created = (backend.create.mock.calls[0]![0] as { id: string }).id;
+    await waitFor(() => expect(backend.send).toHaveBeenCalledWith(created, "Hello", undefined, expect.any(String), { signal: expect.any(AbortSignal) }));
     expect(await screen.findByRole("group", { name: "Project: Remi" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Project:/ })).not.toBeInTheDocument();
     // The created chat consumed the draft: the next new chat starts unbound.
@@ -404,7 +409,7 @@ describe("ChatWindow project settings", () => {
     const { client } = mount();
     await waitFor(() => expect(client.getQueryData(["workspaces", "workspace-a", "agents"])).toBeDefined());
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello" }));
   });
 
   it("can clear a project draft before creating a pure chat", async () => {
@@ -414,7 +419,7 @@ describe("ChatWindow project settings", () => {
     fireEvent.click(screen.getByRole("button", { name: "Work location: Remi" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: /No project/ }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello" }));
     // A started chat with nothing bound shows no location: the footer would
     // only restate that nothing is bound.
     await waitFor(() => expect(screen.queryByRole("button", { name: /^Work location:/ })).not.toBeInTheDocument());
@@ -521,7 +526,7 @@ describe("ChatWindow work location in the composer footer", () => {
     fireEvent.click(within(screen.getByTestId("composer-footer")).getByRole("button", { name: "Work location: No project" }));
     fireEvent.click(await screen.findByRole("menuitem", { name: /Local workbench/ }));
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
     expect(await within(screen.getByTestId("composer-footer")).findByRole("group", { name: "Work location: Local workbench" })).toBeInTheDocument();
     expect(store.getState().draftRuntimeWorkspaceId).toBeNull();
     // useDeleteChatSession and chat:session_deleted clear the active chat.
@@ -685,7 +690,7 @@ describe("ChatWindow page shell", () => {
     expect(store.getState().draftProjectId).toBe("project-a");
     expect(await screen.findByRole("button", { name: "Work location: Remi" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello", project_id: "project-a" }));
   });
 
   it("starts a chat bound to a sidebar group's local directory", async () => {
@@ -695,7 +700,7 @@ describe("ChatWindow page shell", () => {
     expect(store.getState().draftProjectId).toBeNull();
     expect(await screen.findByRole("button", { name: "Work location: Local workbench" })).toBeEnabled();
     fireEvent.click(screen.getByRole("button", { name: "Send test message" }));
-    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
+    await waitFor(() => expect(backend.create).toHaveBeenCalledWith({ id: newChatId, agent_id: "agent-a", title: "Hello", runtime_workspace_id: "rws-a" }));
   });
 
   it("waits 400ms before showing the first-load spinner", async () => {

@@ -271,19 +271,22 @@ function chatLog() {
 }
 
 it("shows a new chat's first message as sent and its reply without a reload", async () => {
-  const chatId = "chat-new";
-  const created: ChatSession = { ...session, id: chatId, title: "Hello from a new chat" };
+  // The client names the new chat; the server keeps that id.
+  let chatId = "";
+  let created: ChatSession | undefined;
   const row = (seq: number, fields: Record<string, unknown>) => SessionLogEntrySchema.parse({
     session_id: chatId, seq, id: `row-${seq}`, revision: 1, body_html: null, render_version: null,
     metadata: { attachments: [], reactions: [] }, ...fields,
   });
   const log = chatLog();
   let routeLog: IssueLogBootstrap | undefined;
-  backend.createChatSession.mockImplementation(async () => {
+  backend.createChatSession.mockImplementation(async (input: { id: string }) => {
+    chatId = input.id;
+    created = { ...session, id: chatId, title: "Hello from a new chat" };
     log.write(row(0, { kind: "head", body_md: created.title }));
     return created;
   });
-  backend.getChatSession.mockResolvedValue(created);
+  backend.getChatSession.mockImplementation(async () => created);
   backend.sendChatMessage.mockImplementation(async (_id: string, body: string, _attachments: unknown, clientId: string) => {
     // The page navigates to `?session=` before the send lands, so the route's
     // bootstrap read still holds an empty chat.
