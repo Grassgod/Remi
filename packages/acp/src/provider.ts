@@ -38,6 +38,7 @@ import { autonomousOrigin, isWorkspaceTrustPrompt, nativeAgentId, permissionAsQu
 import { accessConfigFor, type AcpAccessConfig } from "./access/index.js";
 import type { GatewayShimChannel, GatewayShimEvent, GatewayShimHost, GatewayShimListingFailure } from "./access/gateway-shim-types.js";
 import { GEMINI_USAGE_SOURCE, geminiObservationUsage } from "./gemini-request-usage.js";
+import { cursorHealthProblem, resolveCursorAgentExecutable } from "./cursor-install.js";
 import type {
   SessionNotification,
   SessionUpdate,
@@ -263,6 +264,7 @@ const DEFAULT_PERMISSION_MODE_BY_AGENT: Record<string, string | null> = {
   // `agent-full-access`. Without an entry here an unconfigured codex chat
   // stayed in codex's own initial mode and prompted for every tool call.
   codex: "bypassPermissions",
+  cursor: "agent",
 };
 const REMI_CLAUDE_AGENT_ACP_WRAPPER = "remi-claude-agent-acp";
 
@@ -608,6 +610,8 @@ export function resolveAcpExecutableForAgent(agentType: string, executable: stri
     try { return access.launch().executable; } catch { return fallback; }
   }
 
+  if (agentType === "cursor") return resolveCursorAgentExecutable() ?? fallback;
+
   if (agentType === "claude") {
     const envExecutable = process.env.REMI_CLAUDE_AGENT_ACP_EXECUTABLE?.trim();
     if (envExecutable) return envExecutable;
@@ -682,6 +686,10 @@ export function resolveAcpHealthCheckCommand(
 ): AcpHealthCheckCommand {
   const command = resolveAcpExecutableForAgent(agentType, executable, fallback);
   const access = accessConfigFor(agentType);
+  if (agentType === "cursor" && !executable?.trim()) {
+    const failure = cursorHealthProblem();
+    return failure ? { command, failure } : { command };
+  }
   if (access && !executable?.trim()) {
     // Never spawned at daemon start: the manifest, executables and machine policy are the check.
     const failure = access.healthProblem();
@@ -742,7 +750,7 @@ export class AcpProvider implements Provider {
 
   /** A requested model the agent cannot select fails instead of running another one. */
   private get _strictModel(): boolean {
-    return this._adapter.agentType === "codex" || this._access?.strictModel === true;
+    return this._adapter.agentType === "codex" || this._adapter.agentType === "cursor" || this._access?.strictModel === true;
   }
 
   get adapter(): AgentAdapter {
@@ -782,8 +790,8 @@ export class AcpProvider implements Provider {
 
   /**
    * Discover the bridge's live model catalog and each model's effort values.
-   * Both supported bridges rewrite `thought_level` after the `model` option is
-   * changed, so a single session must walk the model selector in order.
+   * Cursor supplies model parameters in one native catalog response. Bridges
+   * that rewrite `thought_level` on selection are queried through the selector.
    */
   async discoverModelCapabilities(): Promise<AcpModelCapability[]> {
     const chatId = `__capability_probe__:${Date.now()}:${Math.random().toString(36).slice(2)}`;
@@ -792,8 +800,30 @@ export class AcpProvider implements Provider {
       cwd: this._options.cwd ?? homedir(),
       permissionMode: null,
     });
-
     try {
+      if (this._adapter.agentType === "cursor") {
+        const initialModel = currentConfigValue(entry.configOptions, MODEL_OPTION_CATEGORY);
+        const models = await entry.client.listCursorModels();
+        return models.map((model) => {
+          const effortOption = selectConfigOption(model.configOptions, EFFORT_OPTION_CATEGORY);
+          const levels = effortOption ? flattenSelectOptions(effortOption).filter((level) => !isAcpDefaultSentinel(level.value)) : [];
+          const defaultLevel = effortOption?.currentValue;
+          return {
+            id: model.value,
+            label: model.name || model.value,
+            default: model.value === initialModel,
+            ...(isAcpDefaultSentinel(model.value) ? { providerDefault: true } : {}),
+            effort: {
+              status: levels.length ? "supported" as const : "unsupported" as const,
+              ...(defaultLevel && levels.some((level) => level.value === defaultLevel) ? { defaultLevel } : {}),
+              supportedLevels: levels.map((level) => ({
+                value: level.value, label: level.name || level.value,
+                ...(level.description ? { description: level.description } : {}),
+              })),
+            },
+          };
+        });
+      }
       // A refused or unreachable listing leaves the server's built-in fallback ids, not the gateway's models.
       const listing = entry.gateway?.fatal ?? entry.gateway?.listingFailure;
       if (listing) throw gatewaySessionFailure(this._adapter.agentType, listing, credentialsOf(this._options));
@@ -2401,7 +2431,8 @@ export class AcpProvider implements Provider {
       agentType: this._adapter.agentType,
       nativeSubagents: this._options.nativeSubagentSessions ? this._adapter.nativeSubagents ?? null : null,
       asyncTasks: this._asyncTasksRequested,
-      cwd,
+      // Cursor binds rules/skills to process.cwd; its tools use session cwd.
+      cwd: this._adapter.agentType === "cursor" ? this._options.providerHome ?? cwd : cwd,
       privateTmpDirectory: this._options.privateTmpDirectory,
       privateTmpPlatform: this._options.privateTmpPlatform,
       env,
@@ -2429,8 +2460,12 @@ export class AcpProvider implements Provider {
         addDirs.length && !officialAddDirs ? { ...(sessionMeta ?? {}), additionalRoots: addDirs } : sessionMeta;
       const additionalDirectories = officialAddDirs ? addDirs : undefined;
 
+      // Cursor loads existing account/API-key credentials at startup. Calling
+      // cursor_login here clears API-key auth and can open an interactive browser.
       const result = options?.sessionId
-        ? await client.resumeSession(options.sessionId, cwd, mcpServers, { additionalDirectories, _meta: meta })
+        ? this._adapter.agentType === "cursor"
+          ? await client.loadSession(options.sessionId, cwd, mcpServers, { additionalDirectories, _meta: meta })
+          : await client.resumeSession(options.sessionId, cwd, mcpServers, { additionalDirectories, _meta: meta })
         : await client.newSession({ cwd, mcpServers, additionalDirectories, _meta: meta });
 
       const entry: PoolEntry = {
@@ -2499,6 +2534,13 @@ export class AcpProvider implements Provider {
   private _resolveLaunch(): { executable: string; args: string[] | undefined; pinned: boolean } {
     const explicit = this._options.executable?.trim();
     const executable = resolveAcpExecutableForAgent(this._adapter.agentType, this._options.executable, this._adapter.defaultExecutable());
+    if (this._adapter.agentType === "cursor") {
+      if (!explicit) {
+        const problem = cursorHealthProblem();
+        if (problem) throw new Error(`[cursor_not_installed] ${problem}`);
+      }
+      return { executable, args: this._options.args?.length ? this._options.args : ["acp"], pinned: false };
+    }
     if (!this._access || explicit) return { executable, args: this._options.args, pinned: false };
     const pinned = this._access.launch();
     if (this._options.args?.length) {
@@ -2627,7 +2669,7 @@ export class AcpProvider implements Provider {
       if (requestedEffort === entry.appliedEffort) return;
       const result = await entry.client.setConfigOption(entry.acpSessionId, option.id, requestedEffort);
       if (result?.configOptions) entry.configOptions = result.configOptions;
-      if (this._adapter.agentType === "codex"
+      if ((this._adapter.agentType === "codex" || this._adapter.agentType === "cursor")
         && currentConfigValue(entry.configOptions, EFFORT_OPTION_CATEGORY) !== requestedEffort) {
         throw new Error(`[acp_effort_unacknowledged] ${this._adapter.agentType}: the agent did not select effort "${requestedEffort}"`);
       }

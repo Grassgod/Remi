@@ -119,10 +119,19 @@ describe("MachineCliUpdate", () => {
 
 describe("UpdateSection", () => {
   it("only renders provider-scoped Agent and ACP update actions", () => {
-    renderWithProviders(<UpdateSection runtimeId="rt-1" agentVersion="1.2.3" acpVersion="2.3.4" isOnline />);
+    renderWithProviders(<UpdateSection runtimeId="rt-1" provider="claude" agentVersion="1.2.3" acpVersion="2.3.4" isOnline />);
 
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update Agent" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Update ACP" })).toBeInTheDocument();
+  });
+
+  it("shows the installed Cursor version without unsupported update actions or a bridge row", () => {
+    renderWithProviders(<UpdateSection runtimeId="rt-cursor" provider="cursor" agentVersion="2026.10.22" acpVersion={null} isOnline />);
+
+    expect(screen.getByText("2026.10.22")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update Agent" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update ACP" })).not.toBeInTheDocument();
+    expect(screen.queryByText(enRuntimes.update.acp_label)).not.toBeInTheDocument();
   });
 });

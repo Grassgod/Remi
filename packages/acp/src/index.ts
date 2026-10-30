@@ -15,6 +15,14 @@
 // ── Provider ──────────────────────────────────────────────────
 export { createRuntimeProvider } from "./runtime-provider.js";
 export {
+  CURSOR_INSTALL_URL, CURSOR_PREPARE_COMMAND, CursorInstallError, anyCursorInstall, cursorHealthProblem, cursorInstallDir,
+  cursorInstallProblem, cursorPlatformKey, cursorRoot, ensureCursorAgent, installedCursor,
+  installedUserCursorAgentExecutable, resolveCursorAgentExecutable,
+} from "./cursor-install.js";
+export type { CursorInstallManifest, CursorLaunch, CursorLocation, EnsureCursorOptions } from "./cursor-install.js";
+export { CURSOR_PIN, CURSOR_PLATFORM_KEYS, cursorPinProblem, isCursorVersion } from "./runtime-versions.js";
+export type { CursorArtifact, CursorPin, CursorPlatformKey } from "./runtime-versions.js";
+export {
   ANTIGRAVITY_PREPARE_COMMAND,
   AntigravityInstallError,
   antigravityHealthProblem,
@@ -95,7 +103,7 @@ export { elicitationToQuestions, answersToElicitationContent } from "@shared/con
 export type { ElicitationQuestion } from "@shared/contracts/acp-elicitation.js";
 
 // ── Adapters ──────────────────────────────────────────────────
-export { AntigravityAdapter, ClaudeAdapter, CodexAdapter, createAdapter } from "./adapters/index.js";
+export { AntigravityAdapter, ClaudeAdapter, CodexAdapter, CursorAdapter, createAdapter } from "./adapters/index.js";
 export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@shared/contracts/acp-protocol.js";
 
 // ── Streaming meta types (used by connector stream handlers) ──

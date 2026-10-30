@@ -10,6 +10,9 @@ const ROOT = join(import.meta.dir, "../..");
 const HOME_CALL_LIMITS: Readonly<Record<string, number>> = {
   // ${REMI_HOME:-~/.remi}/acp/antigravity, like the npm bundles' prefix.
   "packages/acp/src/antigravity-install.ts": 1,
+  // Managed install default under ~/.remi plus read-only CLI discovery under
+  // ~/.local/bin; each task supplies its private configuration/data locations.
+  "packages/acp/src/cursor-install.ts": 2,
   "packages/acp/src/client.ts": 2,
   "packages/acp/src/provider.ts": 7,
   "packages/acp/src/provision.ts": 2,

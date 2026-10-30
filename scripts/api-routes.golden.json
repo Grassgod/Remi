@@ -4049,6 +4049,7 @@
           "claude": null,
           "codex": null,
           "antigravity": null,
+          "cursor": null,
           "model_discovery": false
         }
       }
@@ -12364,6 +12365,7 @@
           "claude": null,
           "codex": null,
           "antigravity": null,
+          "cursor": null,
           "model_discovery": false
         }
       }
@@ -22508,6 +22510,7 @@
         "claude": null,
         "codex": null,
         "antigravity": null,
+        "cursor": null,
         "modelDiscovery": false
       }
     },
@@ -30216,6 +30219,7 @@
         },
         "codex": null,
         "antigravity": null,
+        "cursor": null,
         "modelDiscovery": false
       }
     },

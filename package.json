@@ -37,6 +37,7 @@
     "release:prepare": "bun run scripts/release-runtime.ts prepare",
     "release:check": "bun run scripts/release-runtime.ts check",
     "release:pin-antigravity": "bun run scripts/release-runtime.ts pin-antigravity",
+    "release:pin-cursor": "bun run scripts/release-runtime.ts pin-cursor",
     "lock:clean": "bun run scripts/clean-lockfile.ts",
     "test": "bun run scripts/run-tests.ts",
     "docs:check": "node scripts/check-dev-context.mjs",

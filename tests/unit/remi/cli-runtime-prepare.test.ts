@@ -20,6 +20,16 @@ const installed = () => true;
 const absent = () => false;
 
 describe("resolveRuntimePrepareProviders", () => {
+  it("prepares Cursor when explicitly selected or detected", () => {
+    expect(resolveRuntimePrepareProviders({ explicit: "cursor", detect: noDetect })).toEqual(["cursor"]);
+    expect(resolveRuntimePrepareProviders({ detect: () => ["cursor", "claude"] })).toEqual(["cursor", "claude"]);
+  });
+  it("prepares an existing managed Cursor during a pin bump and respects an explicit different provider", () => {
+    expect(resolveRuntimePrepareProviders({ detect: () => [], cursorInstalled: installed })).toEqual(["cursor"]);
+    expect(resolveRuntimePrepareProviders({ configured: "codex", detect: noDetect, cursorInstalled: installed })).toEqual(["codex"]);
+    expect(resolveRuntimePrepareProviders({ explicit: "claude", detect: noDetect, cursorInstalled: installed })).toEqual(["claude"]);
+    expect(resolveRuntimePrepareProviders({ detect: () => [], cursorInstalled: absent })).toEqual([]);
+  });
   it("skips a detected antigravity that has never been installed", () => {
     expect(resolveRuntimePrepareProviders({ detect: () => ["claude", "codex", "antigravity", "claude"], antigravityInstalled: absent }))
       .toEqual(["claude", "codex"]);
@@ -45,7 +55,7 @@ describe("resolveRuntimePrepareProviders", () => {
     expect(resolveRuntimePrepareProviders({ explicit: ["antigravity"], detect: noDetect, antigravityInstalled: absent }))
       .toEqual(["antigravity"]);
     expect(() => resolveRuntimePrepareProviders({ explicit: ["claude", "agy"], detect: noDetect }))
-      .toThrow("--provider must be claude, codex or antigravity");
+      .toThrow("--provider must be claude, codex, antigravity or cursor");
   });
 
   it("accepts explicit bundled providers and ignores the configured one", () => {
@@ -77,7 +87,8 @@ describe("remi runtime prepare", () => {
       prepare: async (providers, options) => { prepared.push({ providers: [...providers], ...options }); },
       versions: (provider) => provider === "antigravity"
         ? { server: "1.4.0" }
-        : { acp: `${provider}-acp`, sdk: `${provider}-sdk`, executable: `${provider}-exe` },
+        : provider === "cursor" ? { executable: "/managed/cursor-agent" }
+          : { acp: `${provider}-acp`, sdk: `${provider}-sdk`, executable: `${provider}-exe` },
     };
     const registry = new CommandRegistry();
     registry.register(runtimePrepareCommandSpec(async () => deps));
@@ -111,6 +122,13 @@ describe("remi runtime prepare", () => {
     expect(prepared).toEqual([{ providers: ["antigravity"], acceptAntigravityTerms: true }]);
   });
 
+  it("prepares Cursor on an empty machine and reports its prepared executable", async () => {
+    const { prepared, done } = run(["--provider", "cursor"], { detected: [] });
+    expect(await done).toBe(true);
+    expect(prepared).toEqual([{ providers: ["cursor"], acceptAntigravityTerms: false }]);
+    expect(JSON.parse(stdout.join("\n"))).toEqual({ runtimes: [{ provider: "cursor", executable: "/managed/cursor-agent", verified: true }] });
+  });
+
   it("prepares explicit bundled providers even when antigravity is configured", async () => {
     const { prepared, done } = run(["--provider", "claude", "--provider", "codex"], { configured: "antigravity", detected: ["antigravity"] });
     expect(await done).toBe(true);
@@ -120,7 +138,7 @@ describe("remi runtime prepare", () => {
 
   it("fails on an unknown explicit provider before preparing anything", async () => {
     const { prepared, done } = run(["--provider", "gemini"], { detected: ["claude"] });
-    await expect(done).rejects.toThrow("--provider must be claude, codex or antigravity");
+    await expect(done).rejects.toThrow("--provider must be claude, codex, antigravity or cursor");
     expect(prepared).toEqual([]);
     expect(stdout).toEqual([]);
   });

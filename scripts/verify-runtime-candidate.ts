@@ -1,4 +1,8 @@
-import { dirname } from "node:path";
+import { spawnSync } from "node:child_process";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { AcpClient } from "../packages/acp/src/client.js";
+import { ensureCursorAgent } from "../packages/acp/src/cursor-install.js";
 import { ensureNode, patchCodexUsageBridge, patchClaudeUsageBridge } from "../packages/acp/src/provision.js";
 import { installRuntimeBundle, runtimeBundleBridge, runtimeBundlePrefix } from "../packages/acp/src/runtime-bundle.js";
 import { verifyAcpRuntime } from "../packages/acp/src/runtime-verify.js";
@@ -21,5 +25,29 @@ if (import.meta.main) {
       if (provider === "claude" && !patchClaudeUsageBridge(log, bridge)) throw new Error("Claude usage patch verification failed");
     }, versions);
     await verifyAcpRuntime(provider, runtimeBundleBridge(provider, runtimeBundlePrefix(provider, versions)));
+  }
+  log(`verifying Cursor CLI ${snapshot.cursor.version}`);
+  const cursor = await ensureCursorAgent({ pin: snapshot.cursor, log });
+  const version = spawnSync(cursor.executable, ["--version"], { env: process.env, encoding: "utf8", timeout: 15_000 });
+  if (version.status !== 0 || version.stdout.trim() !== snapshot.cursor.version) {
+    throw new Error(`Cursor CLI version check failed (expected ${snapshot.cursor.version})`);
+  }
+  const cwd = join(process.env.REMI_HOME!, "cursor-verify");
+  mkdirSync(cwd, { recursive: true });
+  const client = new AcpClient({
+    agentType: "cursor", executable: cursor.executable, args: cursor.args, cwd, inheritProcessGroup: true, log: () => {},
+  });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const initialized = await Promise.race([
+      (async () => { await client.start(); return client.initialize(); })(),
+      new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("Cursor ACP initialization timed out")), 15_000); }),
+    ]);
+    if (initialized.protocolVersion !== 1 || initialized.agentCapabilities?.loadSession !== true) {
+      throw new Error("Cursor ACP must support protocol version 1 and session loading");
+    }
+  } finally {
+    clearTimeout(timer);
+    await client.stop();
   }
 }

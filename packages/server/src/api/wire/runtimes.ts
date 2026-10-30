@@ -287,6 +287,7 @@ export function runtimeTaskActivityCompatibilityResponse(row: { hour: number; co
 function runtimeLaunchHeader(provider: string): string {
   if (provider === "claude") return "claude (stream-json)";
   if (provider === "codex") return "codex app-server";
+  if (provider === "cursor") return "cursor-agent acp";
   return "";
 }
 
@@ -301,6 +302,7 @@ export function relayForDaemonWire(store: MultiremiStore, workspaceId: string): 
     codex: engine(config.codex),
     // Daemons that predate the engine ignore the key.
     antigravity: engine(config.antigravity),
+    cursor: engine(config.cursor),
     model_discovery: config.modelDiscovery,
   };
 }

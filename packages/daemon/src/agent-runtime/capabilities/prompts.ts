@@ -6,7 +6,7 @@ export const promptsBlock: CapabilityBlock = {
   name: "prompts",
 
   ephemeral(ctx: EphemeralContext) {
-    return isSideConversation(ctx.task) && ctx.task.agent?.provider !== "codex"
+    return isSideConversation(ctx.task) && ctx.task.agent?.provider !== "codex" && ctx.task.agent?.provider !== "cursor"
       ? { systemPrompt: SIDE_CONVERSATION_INSTRUCTIONS }
       : {};
   },

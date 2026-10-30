@@ -441,8 +441,9 @@ export function daemonTaskClaimResponse(
     // task also carries no further fallback: the chain's single switch is spent
     // (MUL-336), so the daemon is never invited to bounce back to the primary.
     const executionAgent = agentAtTaskTarget(task.agent, task);
+    const clearFallback = task.provider === "cursor" ? task.fallbackSwitched : Boolean(task.executionModel);
     response.agent = daemonClaimAgentResponse(
-      task.executionModel ? { ...executionAgent, fallbackModel: null, fallbackThinkingLevel: null } : executionAgent,
+      clearFallback ? { ...executionAgent, fallbackModel: null, fallbackThinkingLevel: null } : executionAgent,
     );
   }
   if (task.issue) {

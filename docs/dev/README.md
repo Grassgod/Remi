@@ -32,6 +32,7 @@ summary: 按任务定位当前实现、约束和验证命令。
 | 实现侧边聊天（设计已接受，尚未实现） | [ADR 0024](../adr/0024-chat-side-chat-fork.md)、[Chat 契约](../chat.md#侧边聊天尚未实现) | 独立 Chat 会话加父链接、两个桥的原生分叉与原生历史复制（Codex 引用链）、`AGENTS.md` 边界说明、客人目录（不排锁、不驻留）、摘录退路与冷启动、多个标签与每个主对话 10 个上限、跟着主对话归档/恢复/删除、`chat.side` 能力位与 `task.side_fork` |
 | 改 turn 失败检测、备用模型恢复或能力排队切换 | [ADR 0010](../adr/0010-turn-failure-from-bridge-typed-session-failure.md) | AIR 失败 metadata、失败分类、单次切换、5 分钟能力等待与提交后事件 |
 | 修改 Antigravity 执行 | [Antigravity Runtime](../antigravity.md) | 按机器安装与条款同意、接入配置（环境、网关垫片、用量）、能力边界 |
+| 修改 Cursor 执行 | [Cursor CLI Runtime](../cursor.md) | Cursor Key 与后端端点、原生模型发现、私有指令目录、会话恢复与交互 |
 | 修改 Agent 模板或 Skill | [Agent 配置规范](../agent-config-spec.md) | 提示词结构、字段和元信息检查 |
 | 改工作台与通知 | [工作台/收件箱边界](../inbox-workbench-boundary.md) | 通知的触发条件与状态归属 |
 | 改 daemon 轮询节奏、心跳 ack 或插件 desired 协议 | [ADR 0001](../adr/0001-daemon-poll-cadence-and-desired-revision.md) | 已定的取舍、被否决的替代方案和回到源码的位置 |

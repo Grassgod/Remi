@@ -15,7 +15,7 @@ export const runtimeModelsKeys = {
 };
 
 const isCatalogPending = (data?: FleetModelsResponse) =>
-  data?.providers.some((entry) => entry.provider === "codex" && entry.model_catalog_status === "unknown") ?? false;
+  data?.providers.some((entry) => (entry.provider === "codex" || entry.provider === "cursor") && entry.model_catalog_status === "unknown") ?? false;
 
 // A pre-refresh snapshot cannot be cached as an authoritative catalog. Bound
 // recovery requests while discovery is pending; daemon WS events also invalidate
@@ -102,13 +102,13 @@ export function useFleetProviderModels(
   };
 }
 
-/** Relay catalogs constrain selection; older APIs and custom connections keep their behavior. */
+/** Cursor uses its Runtime catalog; Codex relay catalogs declare execution availability. */
 export function isModelCatalogRestricted(
   provider: string,
   models: RuntimeModel[],
   catalogStatus?: FleetProviderModels["model_catalog_status"],
 ): boolean {
-  return provider === "codex" && (catalogStatus === "ready" || catalogStatus === "unknown"
+  return provider === "cursor" || provider === "codex" && (catalogStatus === "ready" || catalogStatus === "unknown"
     || models.some((entry) => entry.execution_status !== undefined));
 }
 
@@ -118,7 +118,7 @@ export function isModelExecutionUnknown(
   models: RuntimeModel[],
   catalogStatus?: FleetProviderModels["model_catalog_status"],
 ): boolean {
-  if (provider !== "codex") return false;
+  if (provider !== "codex" && provider !== "cursor") return false;
   const status = models.find((entry) => entry.id === model.trim())?.execution_status;
   return status === "unknown" || (status === undefined && catalogStatus === "unknown");
 }
@@ -130,7 +130,8 @@ export function isModelUnavailable(
   models: RuntimeModel[],
   catalogStatus?: FleetProviderModels["model_catalog_status"],
 ): boolean {
-  if (provider !== "codex" || !model.trim()) return false;
+  if ((provider !== "codex" && provider !== "cursor") || !model.trim()) return false;
+  if (provider === "cursor" && catalogStatus === "error") return true;
   const entry = models.find((entry) => entry.id === model.trim());
   if (entry?.execution_status !== undefined) return entry.execution_status !== "available";
   if (catalogStatus === "unknown") return true;
@@ -155,6 +156,70 @@ export function isFallbackModelUnavailable(
 
 const POLL_INTERVAL_MS = 500;
 const POLL_TIMEOUT_MS = 30_000;
+
+type RuntimeModelDiscoveryResult =
+  | { status: "ready"; models: RuntimeModel[] }
+  | { status: "error"; reason: "failed" | "timeout" };
+
+/** Follow already-created discovery requests without starting another model probe. */
+export async function waitForRuntimeModelDiscovery(
+  requests: ReadonlyArray<{ runtime_id: string; request_id: string }>,
+  options: { signal?: AbortSignal; timeoutMs?: number; pollIntervalMs?: number } = {},
+): Promise<RuntimeModelDiscoveryResult> {
+  const { signal, timeoutMs = POLL_TIMEOUT_MS, pollIntervalMs = POLL_INTERVAL_MS } = options;
+  if (!requests.length) return { status: "error", reason: "failed" };
+  signal?.throwIfAborted();
+  const controller = new AbortController();
+  const onCancel = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", onCancel, { once: true });
+  let timedOut = false;
+  const timeout = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
+  const deadline = Date.now() + timeoutMs;
+  let pending = [...requests];
+  const models = new Map<string, RuntimeModel>();
+  try {
+    while (pending.length) {
+      controller.signal.throwIfAborted();
+      if (Date.now() >= deadline) return { status: "error", reason: "timeout" };
+      const results = await Promise.allSettled(pending.map((request) =>
+        api.getListModelsResult(request.runtime_id, request.request_id, controller.signal),
+      ));
+      controller.signal.throwIfAborted();
+      const next = [] as typeof pending;
+      for (const [index, result] of results.entries()) {
+        // Runtime output can contain credentials. Expose a stable failure category
+        // to UI callers rather than forwarding the CLI's raw diagnostic text.
+        if (result.status === "rejected") return { status: "error", reason: "failed" };
+        if (result.value.status === "timeout") return { status: "error", reason: "timeout" };
+        if (result.value.status === "failed") return { status: "error", reason: "failed" };
+        if (result.value.status === "completed") {
+          for (const model of result.value.models ?? []) models.set(model.id, model);
+        } else {
+          next.push(pending[index]!);
+        }
+      }
+      pending = next;
+      if (pending.length) {
+        await new Promise<void>((resolve, reject) => {
+          const onAbort = () => { clearTimeout(timer); reject(controller.signal.reason); };
+          const timer = setTimeout(() => {
+            controller.signal.removeEventListener("abort", onAbort);
+            resolve();
+          }, Math.max(0, Math.min(pollIntervalMs, deadline - Date.now())));
+          controller.signal.addEventListener("abort", onAbort, { once: true });
+        });
+      }
+    }
+    return { status: "ready", models: [...models.values()] };
+  } catch {
+    signal?.throwIfAborted();
+    return { status: "error", reason: timedOut ? "timeout" : "failed" };
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener("abort", onCancel);
+    controller.abort();
+  }
+}
 
 // resolveRuntimeModels initiates a list-models request against the daemon
 // (via heartbeat piggyback) and polls until the daemon reports back or

@@ -6,10 +6,10 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { BRIDGE_PACKAGE, RUNTIME_PIN } from "../../../packages/acp/src/runtime-versions.js";
 import {
-  ACP_REGISTRY_URL, checkRelease, checkReleaseSnapshot, latestRuntimeVersions, pinAntigravity, prepareRelease, SNAPSHOT_PATH,
+  ACP_REGISTRY_URL, checkRelease, checkReleaseSnapshot, latestRuntimeVersions, pinAntigravity, pinCursor, prepareRelease, SNAPSHOT_PATH,
   type RuntimeSnapshot,
 } from "../../../scripts/release-runtime.js";
-import type { AntigravityPin } from "../../../packages/acp/src/runtime-versions.js";
+import type { AntigravityPin, CursorPin } from "../../../packages/acp/src/runtime-versions.js";
 
 const sha = (fill: string) => fill.repeat(64);
 const agyUrl = (os: string, file: string, version = "1.3.0") => `https://dl.google.com/agy-extensions/releases/${os}/agy-acp-server-${version}-${file}.zip`;
@@ -22,11 +22,21 @@ const antigravity: AntigravityPin = {
     "linux-arm64": { url: agyUrl("linux", "linux-arm64"), sha256: sha("d"), bytes: 13, args: ["--uid="] },
   },
 };
+const cursorUrl = (os: string, arch: string, version = "2026.10.22-27dcf5f") => `https://downloads.cursor.com/lab/${version}/${os}/${arch}/agent-cli-package.tar.gz`;
+const cursor: CursorPin = {
+  version: "2026.10.22-27dcf5f",
+  artifacts: {
+    "darwin-arm64": { url: cursorUrl("darwin", "arm64"), sha256: sha("a"), bytes: 10 },
+    "darwin-x64": { url: cursorUrl("darwin", "x64"), sha256: sha("b"), bytes: 11 },
+    "linux-x64": { url: cursorUrl("linux", "x64"), sha256: sha("c"), bytes: 12 },
+    "linux-arm64": { url: cursorUrl("linux", "arm64"), sha256: sha("d"), bytes: 13 },
+  },
+};
 const baseline: RuntimeSnapshot = {
   schema: 1, preparedFor: "0.2.69", checkedAt: "2026-09-13T00:00:00.000Z",
   claude: { acp: "0.76.0", sdk: "0.3.270", executable: "2.1.270" },
   codex: { acp: "1.11.0", sdk: "0.154.0", executable: "0.154.0" },
-  antigravity,
+  antigravity, cursor,
 };
 const next = {
   claude: { acp: "0.77.0", sdk: "0.3.271", executable: "2.1.271" },
@@ -176,6 +186,49 @@ test("prepare carries the hand-pinned Antigravity block forward unchanged", asyn
   expect(JSON.parse(files(root)[1]!).antigravity).toEqual(antigravity);
 });
 
+test("prepare validates and preserves the Cursor pin in its candidate and written snapshot", async () => {
+  const root = repository();
+  const snapshot = await prepareRelease(root, "0.2.70", { latest: async () => next, verify: async (candidate) => {
+    expect(candidate.cursor).toEqual(cursor);
+  } });
+  expect(snapshot.cursor).toEqual(cursor);
+  expect(JSON.parse(files(root)[1]!).cursor).toEqual(cursor);
+  const malformed = { ...baseline, cursor: { ...cursor, artifacts: {} } };
+  writeFileSync(join(root, SNAPSHOT_PATH), JSON.stringify(malformed));
+  let verified = false;
+  await expect(prepareRelease(root, "0.2.70", { latest: async () => next, verify: async () => { verified = true; } }))
+    .rejects.toThrow("Invalid Cursor pin");
+  expect(verified).toBe(false);
+  expect(JSON.parse(files(root)[1]!)).toEqual(malformed);
+});
+
+test("check rejects malformed Cursor pins on release and ordinary commits", () => {
+  const artifact = cursor.artifacts["darwin-arm64"]!;
+  for (const pin of [
+    undefined,
+    { ...cursor, version: "latest" },
+    { ...cursor, version: "2026.02.30-27dcf5f" },
+    { ...cursor, artifacts: {} },
+    { ...cursor, artifacts: { "windows-x64": artifact } },
+    { ...cursor, artifacts: { "darwin-arm64": { ...artifact, url: artifact.url.replace("downloads.cursor.com", "mirror.example.com") } } },
+    { ...cursor, artifacts: { "darwin-arm64": { ...artifact, url: cursorUrl("darwin", "arm64", "2026.10.23-27dcf5f") } } },
+    { ...cursor, artifacts: { "darwin-arm64": { ...artifact, url: cursorUrl("linux", "arm64") } } },
+    { ...cursor, artifacts: { "darwin-arm64": { ...artifact, sha256: "ABC" } } },
+    { ...cursor, artifacts: { "darwin-arm64": { ...artifact, bytes: 0 } } },
+  ]) {
+    expect(() => checkReleaseSnapshot("0.2.69", { ...baseline, cursor: pin as CursorPin })).toThrow("Invalid Cursor pin");
+  }
+  const root = repository();
+  const git = (...args: string[]) => execFileSync("git", args, { cwd: root, encoding: "utf8" }).trim();
+  git("init", "--quiet");
+  git("add", ".");
+  git("-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--quiet", "-m", "baseline");
+  const baseRef = git("rev-parse", "HEAD");
+  expect(checkRelease(root, { baseRef })).toBe(false);
+  writeFileSync(join(root, SNAPSHOT_PATH), JSON.stringify({ ...baseline, cursor: { ...cursor, version: "latest" } }));
+  expect(() => checkRelease(root, { baseRef })).toThrow("Invalid Cursor pin");
+});
+
 test("check rejects a malformed Antigravity pin on every commit", () => {
   const artifact = antigravity.artifacts["darwin-arm64"]!;
   const invalid: Array<Record<string, unknown>> = [
@@ -255,4 +308,51 @@ test("pin-antigravity writes only the antigravity block and refuses a stale regi
   await expect(pinAntigravity(root, "1.5.0", { fetch: antigravityRegistry().fetcher })).rejects.toThrow("lists antigravity-acp 1.4.0");
   await expect(pinAntigravity(root, "1.3.9", { fetch: antigravityRegistry("1.3.9").fetcher })).rejects.toThrow("downgrade");
   await expect(pinAntigravity(root, "v1.4.0", { fetch: antigravityRegistry().fetcher })).rejects.toThrow("stable SemVer");
+});
+
+test("pin-cursor --dry-run hashes all four fixed official archives without writing files", async () => {
+  const root = repository(), before = files(root);
+  const calls: string[] = [];
+  const version = "2026.10.23-a1b2c3d";
+  const pin = await pinCursor(root, version, { dryRun: true, fetch: async (url) => {
+    calls.push(url);
+    return new Response(`archive:${url}`);
+  } });
+  expect(files(root)).toEqual(before);
+  expect(pin.version).toBe(version);
+  expect(calls.sort()).toEqual([
+    cursorUrl("darwin", "arm64", version), cursorUrl("darwin", "x64", version),
+    cursorUrl("linux", "arm64", version), cursorUrl("linux", "x64", version),
+  ].sort());
+  for (const artifact of Object.values(pin.artifacts)) {
+    const body = `archive:${artifact!.url}`;
+    expect(artifact!.sha256).toBe(createHash("sha256").update(body).digest("hex"));
+    expect(artifact!.bytes).toBe(Buffer.byteLength(body));
+  }
+});
+
+test("pin-cursor updates only its block and rejects invalid versions and date downgrades", async () => {
+  const root = repository();
+  const fetcher = async (url: string) => new Response(`archive:${url}`);
+  const pin = await pinCursor(root, "2026.10.23-a1b2c3d", { fetch: fetcher });
+  expect(JSON.parse(files(root)[1]!)).toEqual({ ...baseline, cursor: pin });
+  expect(JSON.parse(files(root)[0]!).version).toBe("0.2.69");
+  for (const version of ["latest", "v2026.10.23-a1b2c3d", "2026.10.23-a1b2c3d/other", "2026.02.30-a1b2c3d"]) {
+    await expect(pinCursor(root, version, { fetch: fetcher })).rejects.toThrow("date-hash version");
+  }
+  await expect(pinCursor(root, "2026.10.22-27dcf5f", { fetch: fetcher })).rejects.toThrow("downgrade");
+});
+
+test("pin-cursor leaves files unchanged on failed downloads and preserves concurrent edits", async () => {
+  const root = repository(), before = files(root);
+  await expect(pinCursor(root, "2026.10.23-a1b2c3d", { fetch: async () => new Response("", { status: 404 }) })).rejects.toThrow("404");
+  expect(files(root)).toEqual(before);
+  await expect(pinCursor(root, "2026.10.23-a1b2c3d", { fetch: async () => new Response("") })).rejects.toThrow("empty archive");
+  expect(files(root)).toEqual(before);
+  const concurrent = { ...baseline, checkedAt: "2026-10-29T00:00:00.000Z" };
+  await expect(pinCursor(root, "2026.10.23-a1b2c3d", { fetch: async (url) => {
+    writeFileSync(join(root, SNAPSHOT_PATH), JSON.stringify(concurrent));
+    return new Response(`archive:${url}`);
+  } })).rejects.toThrow("changed during pinning");
+  expect(JSON.parse(files(root)[1]!)).toEqual(concurrent);
 });

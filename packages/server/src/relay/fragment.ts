@@ -1,9 +1,9 @@
 import { parse as parseToml } from "smol-toml";
 
-export type RelayEngine = "claude" | "codex" | "antigravity";
+export type RelayEngine = "claude" | "codex" | "antigravity" | "cursor";
 
 /** Every engine the workspace model gateway can hold a config for. */
-export const RELAY_ENGINES: readonly RelayEngine[] = ["claude", "codex", "antigravity"];
+export const RELAY_ENGINES: readonly RelayEngine[] = ["claude", "codex", "antigravity", "cursor"];
 
 export function isRelayEngine(value: string): value is RelayEngine {
   return (RELAY_ENGINES as readonly string[]).includes(value);
@@ -201,15 +201,43 @@ function validateAntigravity(text: string): FragmentValidation {
   return { ok: true };
 }
 
+/** Cursor's endpoint speaks the Cursor backend protocol; its key is stored separately. */
+function validateCursor(text: string): FragmentValidation {
+  let obj: unknown;
+  try { obj = JSON.parse(text); } catch (err) {
+    return { ok: false, error: `invalid JSON: ${(err as Error).message}` };
+  }
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return { ok: false, error: "fragment must be a JSON object" };
+  const top = obj as Record<string, unknown>;
+  for (const key of Object.keys(top)) {
+    if (key !== "base_url" && key !== "default_model") return { ok: false, error: `key not allowed: ${key}` };
+  }
+  if (top.base_url !== undefined) {
+    if (typeof top.base_url !== "string") return { ok: false, error: "base_url must be a string" };
+    const check = validateGatewayUrl(top.base_url);
+    if (!check.ok) return check;
+    const url = new URL(top.base_url);
+    if (url.search || url.hash) return { ok: false, error: "base_url must not contain a query or fragment" };
+  }
+  if (top.default_model !== undefined) {
+    const model = top.default_model;
+    if (typeof model !== "string" || !model || model.length > 200 || /[\s\u0000-\u001f\u007f]/.test(model)) {
+      return { ok: false, error: "default_model must be a model id of 1-200 characters without whitespace" };
+    }
+  }
+  return { ok: true };
+}
+
 export function validateRelayFragment(engine: RelayEngine, text: string): FragmentValidation {
   const trimmed = text.trim();
   if (!trimmed) return { ok: true }; // empty fragment = nothing to merge
   if (engine === "claude") return validateClaude(trimmed);
   if (engine === "antigravity") return validateAntigravity(trimmed);
+  if (engine === "cursor") return validateCursor(trimmed);
   return validateCodex(trimmed);
 }
 
-function parseAntigravityFragment(fragment: string): { base_url?: unknown; default_model?: unknown } | null {
+function parseJsonGatewayFragment(fragment: string): { base_url?: unknown; default_model?: unknown } | null {
   const trimmed = fragment.trim();
   if (!trimmed) return null;
   try {
@@ -222,16 +250,22 @@ function parseAntigravityFragment(fragment: string): { base_url?: unknown; defau
 
 /** The Antigravity engine's configured default model, used when an Agent names none. */
 export function extractAntigravityDefaultModel(fragment: string): string | null {
-  const model = parseAntigravityFragment(fragment)?.default_model;
+  const model = parseJsonGatewayFragment(fragment)?.default_model;
   return typeof model === "string" && model ? model : null;
 }
 
-/** Extract the gateway base_url from a stored fragment (for server-side discovery). */
+/** Cursor's workspace default applies only to an Agent's empty model selection. */
+export function extractCursorDefaultModel(fragment: string): string | null {
+  const model = parseJsonGatewayFragment(fragment)?.default_model;
+  return typeof model === "string" && model.trim() ? model.trim() : null;
+}
+
+/** Extract the configured gateway or Cursor backend URL from a stored fragment. */
 export function extractBaseUrl(engine: RelayEngine, fragment: string): string | null {
   const trimmed = fragment.trim();
   if (!trimmed) return null;
-  if (engine === "antigravity") {
-    const base = parseAntigravityFragment(trimmed)?.base_url;
+  if (engine === "antigravity" || engine === "cursor") {
+    const base = parseJsonGatewayFragment(trimmed)?.base_url;
     return typeof base === "string" && base ? base : null;
   }
   try {

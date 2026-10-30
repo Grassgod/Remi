@@ -43,7 +43,7 @@ export function ExecutionTargetSelect({ wsId, value, onChange, compact = false, 
     return {
       executionGroupId: "", provider,
       label: t(($) => provider === "antigravity" ? $.execution_target.automatic : $.execution_target.model_routing,
-        { provider: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : "Antigravity" }),
+        { provider: provider === "claude" ? "Claude Code" : provider === "codex" ? "Codex" : provider === "cursor" ? "Cursor" : "Antigravity" }),
       members: members.map((runtime) => runtime.id),
       online: members.filter((runtime) => runtime.status === "online").length,
       legacySelected: false,

@@ -248,6 +248,7 @@ function UpdateRow({
 
 interface UpdateSectionProps {
   runtimeId: string;
+  provider: string;
   agentVersion: string | null;
   acpVersion: string | null;
   isOnline: boolean;
@@ -255,6 +256,7 @@ interface UpdateSectionProps {
 
 export function UpdateSection({
   runtimeId,
+  provider,
   agentVersion,
   acpVersion,
   isOnline,
@@ -276,7 +278,7 @@ export function UpdateSection({
       <UpdateRow
         label={t(($) => $.update.agent_label)}
         version={agentVersion}
-        showAction={isOnline && !agentFlow.active}
+        showAction={provider !== "cursor" && isOnline && !agentFlow.active}
         actionLabel={t(($) => $.update.agent_action)}
         onAction={() =>
           agentFlow.run(() =>
@@ -287,7 +289,7 @@ export function UpdateSection({
         retryLabel={t(($) => $.update.retry)}
       />
 
-      <UpdateRow
+      {provider !== "cursor" && <UpdateRow
         label={t(($) => $.update.acp_label)}
         version={acpVersion}
         showAction={isOnline && !acpFlow.active}
@@ -297,7 +299,7 @@ export function UpdateSection({
         }
         flow={acpFlow}
         retryLabel={t(($) => $.update.retry)}
-      />
+      />}
     </div>
   );
 }

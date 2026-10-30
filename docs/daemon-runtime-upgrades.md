@@ -21,6 +21,21 @@ Claude ACP 使用 @anthropic-ai/claude-agent-sdk 内的 CC 执行文件，Codex 
 
 依赖升级不新增发版定时器；夜间发版任务使用同一准备入口。上线机器的依赖更新频率跟随 daemon 发版和升级频率。
 
+## Cursor 固定与升级检查项
+
+Cursor CLI 使用 `runtime-versions.json` 的 `cursor` 块固定版本。维护者通过完整日期与构建标识更新它：
+
+```bash
+bun run release:pin-cursor --version <日期-构建标识> --dry-run
+bun run release:pin-cursor --version <日期-构建标识>
+```
+
+例如版本格式为 `2026.10.22-27dcf5f`。命令从 `downloads.cursor.com/lab/<版本>/<darwin|linux>/<arm64|x64>/agent-cli-package.tar.gz` 下载四个平台的官方压缩包，流式计算 SHA-256 和字节数，只更新 `cursor` 块；`--dry-run` 只返回计算结果。日期早于当前固定版本时拒绝更新。
+
+`release:prepare` 原样保留该固定信息，在临时目录安装并检查 CLI `--version`，再验证 ACP 协议版本与会话恢复能力。校验使用独立的 Cursor 配置和数据目录，移除 Cursor 凭据，不认证、不创建会话、不发 prompt。`release:check` 在普通提交和发版时都检查 Cursor 版本、平台、官方固定地址、SHA-256 与大小；任何候选校验失败都不会写入发版文件。
+
+CLI 升级前的 `remi runtime prepare` 会识别已有的受管 Cursor 安装，包括历史版本，并准备新发布包指定的版本。准备成功后安装脚本才替换 Remi CLI；下载或校验失败时保留已有 CLI。执行任务时使用当前发布快照对应的安装目录。
+
 ## Antigravity 固定与升级检查项
 
 Antigravity 不是 npm 包，`release:prepare` 只原样沿用 `antigravity` 块，`release:check` 在每个提交上校验它的结构（稳定版本号、`dl.google.com` 的 https 地址、64 位十六进制 sha256、正数字节数、已知平台）。升级时由维护者手动执行：

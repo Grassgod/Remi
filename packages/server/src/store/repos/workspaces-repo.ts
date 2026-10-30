@@ -14,6 +14,7 @@ import {
 } from "@multiremi/store/helpers.js";
 import { type StoreContext } from "@multiremi/store/context.js";
 import { activeRequestReadCache, cacheKey } from "@multiremi/store/request-read-cache.js";
+import type { RelayEngine } from "@multiremi/relay/fragment.js";
 import type {
   CreateWorkspaceInput,
   CreateWorkspaceInvitationInput,
@@ -32,7 +33,7 @@ import type {
 
 type Row = Record<string, unknown>;
 
-export type RelayEngine = "claude" | "codex" | "antigravity";
+export type { RelayEngine } from "@multiremi/relay/fragment.js";
 export interface RelayEngineConfig {
   fragment: string;
   authToken: string;
@@ -47,12 +48,14 @@ export interface RelayConfigForDaemon {
   claude: RelayEngineConfig | null;
   codex: RelayEngineConfig | null;
   antigravity: RelayEngineConfig | null;
+  cursor: RelayEngineConfig | null;
   modelDiscovery: boolean;
 }
 export interface RelayConfigForBrowser {
   claude: RelayEngineBrowser | null;
   codex: RelayEngineBrowser | null;
   antigravity: RelayEngineBrowser | null;
+  cursor: RelayEngineBrowser | null;
   modelDiscovery: boolean;
 }
 export interface GatewayModelsSnapshot {
@@ -840,6 +843,7 @@ export class WorkspacesRepo {
       claude: this.relayRow(workspaceId, "claude"),
       codex: this.relayRow(workspaceId, "codex"),
       antigravity: this.relayRow(workspaceId, "antigravity"),
+      cursor: this.relayRow(workspaceId, "cursor"),
       modelDiscovery: this.getRelayModelDiscovery(workspaceId),
     };
   }
@@ -852,6 +856,7 @@ export class WorkspacesRepo {
       claude: mask(this.relayRow(workspaceId, "claude")),
       codex: mask(this.relayRow(workspaceId, "codex")),
       antigravity: mask(this.relayRow(workspaceId, "antigravity")),
+      cursor: mask(this.relayRow(workspaceId, "cursor")),
       modelDiscovery: this.getRelayModelDiscovery(workspaceId),
     };
   }

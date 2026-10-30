@@ -408,6 +408,7 @@ describe("Multiremi API — Go server compatibility endpoints", () => {
         claude: null,
         codex: null,
         antigravity: null,
+        cursor: null,
         model_discovery: false,
       },
     });

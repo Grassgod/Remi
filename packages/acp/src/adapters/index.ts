@@ -2,16 +2,19 @@ export type { AgentAdapter, AskUserQuestionData, AgentSessionOptions } from "@sh
 export { ClaudeAdapter } from "./claude-code/index.js";
 export { CodexAdapter } from "./codex/index.js";
 export { AntigravityAdapter } from "./antigravity.js";
+export { CursorAdapter } from "./cursor.js";
 
 import type { AgentAdapter } from "@shared/contracts/acp-protocol.js";
 import { ClaudeAdapter } from "./claude-code/index.js";
 import { CodexAdapter } from "./codex/index.js";
 import { AntigravityAdapter } from "./antigravity.js";
+import { CursorAdapter } from "./cursor.js";
 
 const registry: Record<string, () => AgentAdapter> = {
   claude: () => new ClaudeAdapter(),
   codex: () => new CodexAdapter(),
   antigravity: () => new AntigravityAdapter(),
+  cursor: () => new CursorAdapter(),
 };
 
 export function createAdapter(agentType: string): AgentAdapter {

@@ -65,14 +65,14 @@ describe("task private /tmp", () => {
     expect(readFileSync(join(second, "log.json"), "utf8")).toBe("second");
   });
 
-  it("maps daemon-served ACP file paths into the same task directory", () => {
+  it("maps daemon-served ACP file paths into the Linux task directory", () => {
     const directory = privateDirectory("mapping");
-    expect(mapPrivateTmpPath("/tmp/log.json", directory)).toBe(join(directory, "log.json"));
-    expect(mapPrivateTmpPath("/tmp/nested/../result.txt", directory)).toBe(join(directory, "result.txt"));
-    expect(mapPrivateTmpPath("/tmp/../etc/hosts", directory)).toBe("/tmp/../etc/hosts");
-    expect(mapPrivateTmpPath("relative.txt", directory)).toBe("relative.txt");
-    expect(privateTmpVisiblePath(join(directory, "nested", "result.txt"), directory)).toBe("/tmp/nested/result.txt");
-    expect(() => privateTmpVisiblePath(join(directory, "..", "outside.txt"), directory))
+    expect(mapPrivateTmpPath("/tmp/log.json", directory, "linux")).toBe(join(directory, "log.json"));
+    expect(mapPrivateTmpPath("/tmp/nested/../result.txt", directory, "linux")).toBe(join(directory, "result.txt"));
+    expect(mapPrivateTmpPath("/tmp/../etc/hosts", directory, "linux")).toBe("/tmp/../etc/hosts");
+    expect(mapPrivateTmpPath("relative.txt", directory, "linux")).toBe("relative.txt");
+    expect(privateTmpVisiblePath(join(directory, "nested", "result.txt"), directory, "linux")).toBe("/tmp/nested/result.txt");
+    expect(() => privateTmpVisiblePath(join(directory, "..", "outside.txt"), directory, "linux"))
       .toThrow("task temporary path escapes its private directory");
   });
 

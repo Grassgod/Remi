@@ -15,6 +15,7 @@ export const SCRUBBED_ENV_PREFIXES = [
   // Provider/connector credentials and endpoints. A developer with real keys
   // exported would otherwise run a different code path than CI does.
   "ANTHROPIC_",
+  "CURSOR_",
   "FEISHU_",
 ] as const;
 
@@ -51,6 +52,7 @@ export const SCRUBBED_ENV_KEYS = [
   "JWT_SECRET",
   "CLAUDE_CONFIG_DIR",
   "CODEX_HOME",
+  "AGENT_CLI_CREDENTIAL_STORE",
   "OPENAI_API_KEY",
   "OPENVIKING_API_KEY",
   "GOOGLE_API_KEY",

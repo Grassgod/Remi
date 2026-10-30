@@ -2412,7 +2412,7 @@ export class RuntimesRepo {
   }
 
   runtimeSupportsAgentModel(runtime: MultiremiRuntime, agent: MultiremiAgent): boolean {
-    if (!agent.model && !agent.thinkingLevel) return true;
+    if (agent.provider !== "cursor" && !agent.model && !agent.thinkingLevel) return true;
     const workspaces = new WorkspacesRepo(this.ctx);
     const catalog = runtimeTargetModelCatalog({
       getRelayModelDiscovery: (id) => workspaces.getRelayModelDiscovery(id),
@@ -2424,7 +2424,7 @@ export class RuntimesRepo {
       getRuntimeExecutionProfile: (id, provider) => this.getRuntimeExecutionProfile(id, provider),
     }, agent.workspaceId, runtime).find(entry => entry.provider === agent.provider);
     const models = catalog?.models ?? [];
-    if (!catalogAllowsModel(catalog, agent.model ?? "")) return false;
+    if (!catalogAllowsModel(catalog, agent.model ?? "", agent.provider)) return false;
     if (agent.model && !models.some(model => model.id === agent.model)
       && ((!agent.runtimeId && (agent.provider === "codex" || runtime.metadata[`${agent.provider}_profiles`] === 1))
         || catalog?.model_catalog_status === "ready" || agent.thinkingLevel

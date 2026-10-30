@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
+import type { FleetModelsResponse } from "@multiremi/core/types";
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { I18nProvider } from "@multiremi/core/i18n/react";
 import enCommon from "../../locales/en/common.json";
@@ -24,10 +25,17 @@ const mockRefetchRelay = vi.hoisted(() => vi.fn());
 const mockUpdateRelay = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockSetDiscovery = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockProbeRelay = vi.hoisted(() => vi.fn());
+const mockWaitForRuntimeModelDiscovery = vi.hoisted(() => vi.fn());
 const mockGetReasoningLevels = vi.hoisted(() => vi.fn());
 const mockPutReasoningLevel = vi.hoisted(() => vi.fn());
 const mockPutContextWindow = vi.hoisted(() => vi.fn());
 const mockRefetchReasoning = vi.hoisted(() => vi.fn());
+const mockRefetchFleet = vi.hoisted(() => vi.fn());
+const fleetRef = vi.hoisted(() => ({
+  current: { providers: [] } as FleetModelsResponse,
+  pending: false,
+  error: null as Error | null,
+}));
 const reasoningRef = vi.hoisted(() => ({
   current: {} as Record<string, unknown>,
   pending: false,
@@ -46,8 +54,12 @@ const workspaceRef = vi.hoisted(() => ({
 }));
 
 vi.mock("@tanstack/react-query", () => ({
+  queryOptions: (options: unknown) => options,
   useQuery: (opts: { queryKey?: unknown[] }) => {
     const key = JSON.stringify(opts?.queryKey ?? []);
+    if (key.includes('"fleet"')) {
+      return { data: fleetRef.current, isPending: fleetRef.pending, isError: fleetRef.error !== null, refetch: mockRefetchFleet };
+    }
     if (key.includes("relay-config")) {
       return {
         data: relayRef.error ? undefined : relayRef.current,
@@ -73,6 +85,10 @@ vi.mock("@tanstack/react-query", () => ({
 }));
 
 vi.mock("@multiremi/core/hooks", () => ({ useWorkspaceId: () => "workspace-1" }));
+vi.mock("@multiremi/core/runtimes", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@multiremi/core/runtimes")>(),
+  waitForRuntimeModelDiscovery: mockWaitForRuntimeModelDiscovery,
+}));
 vi.mock("@multiremi/core/paths", () => ({
   useCurrentWorkspace: () => workspaceRef.current,
 }));
@@ -127,7 +143,12 @@ describe("ModelGatewayTab", () => {
     };
     reasoningRef.pending = false;
     reasoningRef.error = null;
+    fleetRef.current = { providers: [] };
+    fleetRef.pending = false;
+    fleetRef.error = null;
+    mockInvalidateQueries.mockReset().mockResolvedValue(undefined);
     mockPutReasoningLevel.mockReset();
+    mockWaitForRuntimeModelDiscovery.mockReset().mockResolvedValue({ status: "ready", models: [] });
     mockPutContextWindow.mockReset().mockResolvedValue({ deleted: false });
     workspaceRef.current.settings = {};
     mockUpdateWorkspace.mockImplementation(async (_id: string, input: { settings: Record<string, unknown> }) => ({
@@ -141,12 +162,210 @@ describe("ModelGatewayTab", () => {
     expect(screen.getByText("Auto-discover models")).toBeInTheDocument();
     expect(screen.getByText("Claude")).toBeInTheDocument();
     expect(screen.getByText("Codex")).toBeInTheDocument();
+    expect(screen.getByText("Cursor")).toBeInTheDocument();
     expect(screen.getByText("Antigravity")).toBeInTheDocument();
     expect(screen.getByText("Task progress summaries")).toBeInTheDocument();
     expect(screen.getByText("Issue automatic naming")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Automatic naming" })).toBeChecked();
     // claude fragment is pre-filled from server config
     expect(screen.getByDisplayValue(/ANTHROPIC_BASE_URL/)).toBeInTheDocument();
+  });
+
+  it("saves a Cursor key with default settings and can retain or clear the saved key", async () => {
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const section = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    expect(within(section).getByText(enSettings.modelGateway.cursor_hint)).toBeInTheDocument();
+    expect(within(section).getByRole("textbox", { name: /Provider config fragment/ })).toHaveValue("{}");
+    expect(within(section).queryByText(enSettings.modelGateway.reasoning_title)).toBeNull();
+    await user.click(within(section).getByRole("button", { name: "Show example" }));
+    expect(within(section).getByLabelText("Example config fragment").textContent).toBe(JSON.stringify({ base_url: "https://api2.cursor.sh", default_model: "default" }, null, 2));
+    expect(within(section).getByRole("textbox", { name: /Provider config fragment/ })).toHaveValue("{}");
+
+    const key = within(section).getByLabelText("Cursor API key");
+    await user.type(key, "cursor-key");
+    await user.click(within(section).getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(mockUpdateRelay).toHaveBeenLastCalledWith("workspace-1", "cursor", {
+      fragment: "{}", token_op: "set", auth_token: "cursor-key",
+    }));
+    await waitFor(() => expect(key).toHaveValue(""));
+
+    await user.click(within(section).getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(mockUpdateRelay).toHaveBeenLastCalledWith("workspace-1", "cursor", {
+      fragment: "{}", token_op: "keep", auth_token: "",
+    }));
+
+    await user.type(key, "temporary");
+    await user.clear(key);
+    await user.click(within(section).getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(mockUpdateRelay).toHaveBeenLastCalledWith("workspace-1", "cursor", {
+      fragment: "{}", token_op: "clear", auth_token: "",
+    }));
+  });
+
+  it("saves the Cursor default model and Cursor backend address without replacing its key", async () => {
+    relayRef.current = {
+      ...relayRef.current,
+      cursor: { fragment: '{"default_model":"default"}', hasToken: true, revision: 1 },
+    };
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const section = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    const editor = within(section).getByRole("textbox", { name: /Provider config fragment/ });
+    await user.click(within(section).getByRole("button", { name: "Show example" }));
+    expect(editor).toHaveValue(JSON.stringify({ default_model: "default" }, null, 2));
+    const fragment = '{"default_model":"composer-2.5","base_url":"https://api2.cursor.sh"}';
+    await user.clear(editor);
+    await user.paste(fragment);
+    await user.click(within(section).getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() => expect(mockUpdateRelay).toHaveBeenCalledWith("workspace-1", "cursor", {
+      fragment, token_op: "keep", auth_token: "",
+    }));
+  });
+
+  it("requests Cursor models independently of HTTP discovery and follows the refresh to completion", async () => {
+    relayRef.current = { ...relayRef.current, modelDiscovery: false };
+    const requests = [{ runtime_id: "cursor-runtime", request_id: "model-request" }];
+    mockProbeRelay.mockResolvedValue({
+      engine: "cursor", status: "unknown", error: null, models: [], last_success_at: null,
+      discovery_requested: true, discovery_requests: requests,
+    });
+    let finishDiscovery!: (result: { status: "ready"; models: Array<{ id: string; label: string }> }) => void;
+    mockWaitForRuntimeModelDiscovery.mockImplementation(() => new Promise((resolve) => { finishDiscovery = resolve; }));
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const section = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    const refresh = within(section).getByRole("button", { name: "Probe now" });
+    expect(refresh).toBeEnabled();
+    await user.click(refresh);
+
+    await waitFor(() => expect(mockProbeRelay).toHaveBeenCalledWith("workspace-1", "cursor"));
+    expect(await within(section).findByRole("status")).toHaveTextContent(enSettings.modelGateway.cursor_discovery_requested);
+    expect(within(section).getByRole("button", { name: "Probing…" })).toBeDisabled();
+    expect(mockWaitForRuntimeModelDiscovery).toHaveBeenCalledWith(requests, { signal: expect.any(AbortSignal) });
+    expect(within(section).queryByText(/gateway declares/)).toBeNull();
+
+    await act(async () => { finishDiscovery({ status: "ready", models: [{ id: "default", label: "Auto" }] }); });
+    expect(within(section).getByRole("status")).toHaveTextContent("1 model");
+    expect(within(section).getByRole("button", { name: "Probe now" })).toBeEnabled();
+    expect(mockInvalidateQueries).toHaveBeenCalledWith({ queryKey: ["runtimes", "models", "fleet", "workspace-1"] });
+    expect(mockInvalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["relay-reasoning-levels", "workspace-1", "cursor"] });
+  });
+
+  it.each(["failed", "timeout"] as const)("replaces a pending Cursor refresh with its %s result", async (reason) => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "cursor", status: "ready", error: null, models: [{ id: "cached", label: "Cached" }], last_success_at: null,
+      discovery_requested: true, discovery_requests: [{ runtime_id: "cursor-runtime", request_id: "model-request" }],
+    });
+    mockWaitForRuntimeModelDiscovery.mockResolvedValue({ status: "error", reason });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const section = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    await user.click(within(section).getByRole("button", { name: "Probe now" }));
+
+    expect(await within(section).findByRole("alert")).toHaveTextContent(reason === "timeout"
+      ? enSettings.modelGateway.cursor_discovery_timeout : enSettings.modelGateway.cursor_discovery_failed);
+    expect(within(section).queryByRole("status")).toBeNull();
+    expect(within(section).getByRole("button", { name: "Probe now" })).toBeEnabled();
+  });
+
+  it("cancels discovery when the gateway view closes", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "cursor", status: "unknown", error: null, models: [], last_success_at: null,
+      discovery_requested: true, discovery_requests: [{ runtime_id: "cursor-runtime", request_id: "model-request" }],
+    });
+    mockWaitForRuntimeModelDiscovery.mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    const view = render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const section = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    await user.click(within(section).getByRole("button", { name: "Probe now" }));
+    await waitFor(() => expect(mockWaitForRuntimeModelDiscovery).toHaveBeenCalled());
+    const signal = mockWaitForRuntimeModelDiscovery.mock.calls[0]![1].signal as AbortSignal;
+    expect(signal.aborted).toBe(false);
+    view.unmount();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("shows a missing Cursor Runtime as a discovery error", async () => {
+    mockProbeRelay.mockResolvedValue({
+      engine: "cursor", status: "error", error: "No online Cursor Runtime is available for model discovery",
+      models: [], last_success_at: null, discovery_requested: false,
+    });
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const section = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    await user.click(within(section).getByRole("button", { name: "Probe now" }));
+
+    expect(await within(section).findByRole("alert")).toHaveTextContent("No online Cursor Runtime");
+    expect(within(section).queryByRole("status")).toBeNull();
+  });
+
+  it("shows native Cursor reasoning levels and defaults without manual declarations", () => {
+    fleetRef.current = { providers: [{
+      provider: "cursor", model_catalog_status: "ready", online_runtime_count: 1,
+      default_model: "native-reasoner",
+      default_thinking: { status: "supported", default_level: "maximum", supported_levels: [{ value: "maximum", label: "Maximum" }, { value: "low", label: "Low" }] },
+      models: [
+        { id: "default", label: "Auto", thinking: { status: "unsupported", supported_levels: [] } },
+        { id: "native-reasoner", label: "Native reasoner", default: true, thinking: {
+          status: "supported", default_level: "maximum",
+          supported_levels: [{ value: "maximum", label: "Maximum" }, { value: "low", label: "Low" }],
+        } },
+        { id: "grok-4.7", label: "Grok 4.7", thinking: { status: "unknown", supported_levels: [] } },
+        { id: "failed-model", label: "Failed model", thinking: { status: "error", supported_levels: [], error: "sensitive upstream output" } },
+      ],
+    }] };
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const capabilities = screen.getByRole("region", { name: enSettings.modelGateway.cursor_models_title });
+    const rows = within(capabilities).getAllByRole("listitem");
+    expect(rows).toHaveLength(4);
+    expect(within(rows[0]!).getByText("Auto")).toBeInTheDocument();
+    expect(within(rows[0]!).queryByText(enSettings.modelGateway.cursor_default_model)).toBeNull();
+    expect(within(rows[1]!).getByText(enSettings.modelGateway.cursor_default_model)).toBeInTheDocument();
+    expect(within(rows[0]!).getByText("unsupported")).toBeInTheDocument();
+    expect(rows[0]).toHaveTextContent("Default level: Not reported");
+    expect(within(rows[1]!).getByText("supported")).toBeInTheDocument();
+    expect(within(rows[1]!).getByText("Low (low)")).toBeInTheDocument();
+    expect(rows[1]).toHaveTextContent("Default level: Maximum (maximum)");
+    expect(within(rows[2]!).getByText("unknown")).toBeInTheDocument();
+    expect(within(rows[3]!).getByText("load failed")).toBeInTheDocument();
+    expect(within(capabilities).queryByText("sensitive upstream output")).toBeNull();
+    expect(within(capabilities).queryByRole("button", { name: "Configure" })).toBeNull();
+    expect(within(capabilities).queryByRole("checkbox")).toBeNull();
+    expect(within(capabilities).getByText(enSettings.modelGateway.cursor_models_description)).toBeInTheDocument();
+    expect(mockPutReasoningLevel).not.toHaveBeenCalled();
+  });
+
+  it("shows Cursor catalog loading, unknown, empty, and offline states", () => {
+    fleetRef.pending = true;
+    const view = render(<ModelGatewayTab />, { wrapper: Wrapper });
+    expect(screen.getByLabelText(enSettings.modelGateway.cursor_models_loading)).toBeInTheDocument();
+    fleetRef.pending = false;
+    fleetRef.current = { providers: [{ provider: "cursor", online_runtime_count: 1, model_catalog_status: "unknown", models: [] }] };
+    view.rerender(<ModelGatewayTab />);
+    expect(screen.getByText(enSettings.modelGateway.cursor_models_pending)).toBeInTheDocument();
+    expect(screen.getByText(enSettings.modelGateway.cursor_models_empty)).toBeInTheDocument();
+    fleetRef.current = { providers: [{ provider: "cursor", online_runtime_count: 0, model_catalog_status: "ready", models: [] }] };
+    view.rerender(<ModelGatewayTab />);
+    expect(screen.getByText(enSettings.modelGateway.cursor_models_offline)).toBeInTheDocument();
+    expect(screen.queryByText(enSettings.modelGateway.cursor_models_pending)).toBeNull();
+  });
+
+  it.each(["request", "runtime"] as const)("shows a safe Cursor catalog failure for a %s error", async (source) => {
+    if (source === "request") fleetRef.error = new Error("private upstream details");
+    fleetRef.current = { providers: [{
+      provider: "cursor", online_runtime_count: 1, model_catalog_status: source === "runtime" ? "error" : "ready",
+      models: [{ id: "cached-model", label: "Cached model" }],
+    }] };
+    const user = userEvent.setup();
+    render(<ModelGatewayTab />, { wrapper: Wrapper });
+    const capabilities = screen.getByRole("region", { name: enSettings.modelGateway.cursor_models_title });
+    expect(within(capabilities).getByRole("alert")).toHaveTextContent(enSettings.modelGateway.cursor_models_load_failed);
+    expect(within(capabilities).queryByText("Cached model")).toBeNull();
+    expect(within(capabilities).queryByText("private upstream details")).toBeNull();
+    await user.click(within(capabilities).getByRole("button", { name: "Retry" }));
+    expect(mockRefetchFleet).toHaveBeenCalledOnce();
   });
 
   it("shows the Antigravity section with its own placeholder and hint but no reasoning levels", () => {
@@ -458,13 +677,16 @@ describe("ModelGatewayTab", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("gateway HTTP 502");
   });
 
-  it("disables probing while auto-discovery is off", () => {
+  it("disables HTTP gateway probing while auto-discovery is off", () => {
     relayRef.current = { ...relayRef.current, modelDiscovery: false };
     render(<ModelGatewayTab />, { wrapper: Wrapper });
 
-    for (const button of screen.getAllByRole("button", { name: "Probe now" })) {
-      expect(button).toBeDisabled();
+    for (const engine of ["Claude", "Codex", "Antigravity"]) {
+      const section = screen.getByRole("heading", { name: new RegExp(engine) }).closest("section")!;
+      expect(within(section).getByRole("button", { name: "Probe now" })).toBeDisabled();
     }
+    const cursor = screen.getByRole("heading", { name: "Cursor" }).closest("section")!;
+    expect(within(cursor).getByRole("button", { name: "Probe now" })).toBeEnabled();
   });
 
   it.each([false, true])("shows only Claude context switches and saves the new state (enabled=%s)", async enabled => {

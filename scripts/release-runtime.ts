@@ -6,8 +6,8 @@ import { join, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import releaseSnapshot from "../packages/acp/src/runtime-versions.json";
 import {
-  BRIDGE_PACKAGE, RUNTIME_PIN, antigravityPinProblem, compareVersions, isStableVersion, validRuntimeVersions, versionsAtLeast,
-  type AntigravityArtifact, type AntigravityPin, type AntigravityPlatformKey, type RuntimeProvider, type RuntimeVersions,
+  BRIDGE_PACKAGE, CURSOR_PLATFORM_KEYS, RUNTIME_PIN, antigravityPinProblem, cursorPinProblem, compareVersions, isCursorVersion, isStableVersion, validRuntimeVersions, versionsAtLeast,
+  type AntigravityArtifact, type AntigravityPin, type AntigravityPlatformKey, type CursorArtifact, type CursorPin, type CursorPlatformKey, type RuntimeProvider, type RuntimeVersions,
 } from "../packages/acp/src/runtime-versions.js";
 
 export const SNAPSHOT_PATH = "packages/acp/src/runtime-versions.json";
@@ -19,6 +19,8 @@ export interface RuntimeSnapshot {
   codex: RuntimeVersions;
   /** Google's Antigravity ACP server: pinned by hand with `pin-antigravity`, carried by `prepare`. */
   antigravity: AntigravityPin;
+  /** Cursor's official CLI archives, pinned with `pin-cursor` and carried by `prepare`. */
+  cursor: CursorPin;
 }
 const ROOT = resolve(import.meta.dir, "..");
 
@@ -63,12 +65,18 @@ export function checkReleaseSnapshot(version: string, snapshot: RuntimeSnapshot)
     throw new Error("Release dependencies were not prepared for this version. Run bun run release:prepare --version <next> before committing the release.");
   }
   checkAntigravityPin(snapshot.antigravity);
+  checkCursorPin(snapshot.cursor);
 }
 
 /** Structural check of the Antigravity block; it changes only through `pin-antigravity`. */
 export function checkAntigravityPin(pin: unknown): void {
   const problem = antigravityPinProblem(pin);
   if (problem) throw new Error(`Invalid Antigravity pin (${problem}). Run bun run release:pin-antigravity --version <server>.`);
+}
+
+export function checkCursorPin(pin: unknown): void {
+  const problem = cursorPinProblem(pin);
+  if (problem) throw new Error(`Invalid Cursor pin (${problem}). Run bun run release:pin-cursor --version <date-hash>.`);
 }
 
 /** The public ACP registry; it lists only each agent's latest release and no checksums. */
@@ -135,11 +143,43 @@ export async function pinAntigravity(root: string, version: string, options: {
   return pin;
 }
 
+/** Hash Cursor's fixed official archives and update only its release pin. */
+export async function pinCursor(root: string, version: string, options: {
+  dryRun?: boolean;
+  fetch?: RegistryFetch;
+  log?: (message: string) => void;
+} = {}): Promise<CursorPin> {
+  if (!isCursorVersion(version)) throw new Error("--version requires a Cursor date-hash version, such as 2026.10.22-27dcf5f");
+  const snapshotPath = join(root, SNAPSHOT_PATH);
+  const original = readFileSync(snapshotPath, "utf8");
+  const snapshot = JSON.parse(original) as RuntimeSnapshot;
+  if (isCursorVersion(snapshot.cursor?.version) && version.slice(0, 10) < snapshot.cursor.version.slice(0, 10)) {
+    throw new Error(`Refusing to downgrade Cursor from ${snapshot.cursor.version} to ${version}`);
+  }
+  const artifacts: Partial<Record<CursorPlatformKey, CursorArtifact>> = {};
+  for (const platform of CURSOR_PLATFORM_KEYS) {
+    const [os, arch] = platform.split("-");
+    const url = `https://downloads.cursor.com/lab/${version}/${os}/${arch}/agent-cli-package.tar.gz`;
+    options.log?.(`Hashing ${url}`);
+    artifacts[platform] = { url, ...await archiveDigest(options.fetch ?? fetch, url) };
+  }
+  const pin: CursorPin = { version, artifacts };
+  checkCursorPin(pin);
+  if (options.dryRun) return pin;
+  if (readFileSync(snapshotPath, "utf8") !== original) throw new Error("Release files changed during pinning; refusing to overwrite them");
+  writeFileSync(snapshotPath, JSON.stringify({ ...snapshot, cursor: pin }, null, 2) + "\n");
+  return pin;
+}
+
 /** Verify in a disposable home so release preparation cannot change local daemons. */
 export async function verifyReleaseRuntimes(snapshot: RuntimeSnapshot): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), "remi-release-runtime-"));
-  const env = { ...process.env, REMI_HOME: home, REMI_CLAUDE_AGENT_ACP_EXECUTABLE: join(ROOT, "bin/remi-claude-agent-acp") };
-  for (const key of ["REMI_CLAUDE_CODE_EXECUTABLE", "CLAUDE_CODE_EXECUTABLE", "CODEX_PATH", "REMI_CODEX_AGENT_ACP_EXECUTABLE", "REMI_CLAUDE_AGENT_ACP_DIR"]) {
+  const env = {
+    ...process.env, REMI_HOME: home, REMI_CLAUDE_AGENT_ACP_EXECUTABLE: join(ROOT, "bin/remi-claude-agent-acp"),
+    CURSOR_CONFIG_DIR: join(home, "cursor-config"), CURSOR_DATA_DIR: join(home, "cursor-data"),
+  };
+  for (const key of ["REMI_CLAUDE_CODE_EXECUTABLE", "CLAUDE_CODE_EXECUTABLE", "CODEX_PATH", "REMI_CODEX_AGENT_ACP_EXECUTABLE", "REMI_CLAUDE_AGENT_ACP_DIR",
+    "REMI_CURSOR_AGENT_EXECUTABLE", "CURSOR_API_KEY", "CURSOR_AUTH_TOKEN", "CURSOR_API_ENDPOINT"]) {
     delete (env as Record<string, string | undefined>)[key];
   }
   try {
@@ -169,8 +209,9 @@ export async function prepareRelease(root: string, version: string, options: {
   const versions = await (options.latest ?? ((current) => latestRuntimeVersions(fetch, current)))(floor);
   const snapshot: RuntimeSnapshot = {
     schema: 1, preparedFor: version, checkedAt: (options.now ?? (() => new Date()))().toISOString(), ...versions,
-    // Not an npm package: carried unchanged until someone runs pin-antigravity.
+    // Archive pins change only through their explicit pin commands.
     antigravity: floor.antigravity,
+    cursor: floor.cursor,
   };
   checkReleaseSnapshot(version, snapshot);
   await (options.verify ?? verifyReleaseRuntimes)(snapshot);
@@ -203,8 +244,9 @@ export function checkRelease(root: string, options: { baseRef?: string; tag?: st
   if (!options.baseRef || !/^[a-f0-9]{40}$/.test(options.baseRef) || /^0+$/.test(options.baseRef)) {
     throw new Error("A valid base commit SHA is required for release preparation checks");
   }
-  // Every commit keeps a well-formed Antigravity pin, release or not.
+  // Every commit keeps well-formed archive pins, release or not.
   checkAntigravityPin(snapshot.antigravity);
+  checkCursorPin(snapshot.cursor);
   const base = JSON.parse(execFileSync("git", ["show", `${options.baseRef}:package.json`], { cwd: root, encoding: "utf8" }));
   if (base.version !== pkg.version) {
     if (compareVersions(pkg.version, base.version) <= 0) throw new Error("Release version must increase");
@@ -220,7 +262,7 @@ if (import.meta.main) {
       args: process.argv.slice(2), allowPositionals: true,
       options: { version: { type: "string" }, "dry-run": { type: "boolean" }, "base-ref": { type: "string" }, tag: { type: "string" } },
     });
-    if (positionals.length !== 1) throw new Error("Expected prepare, pin-antigravity or check");
+    if (positionals.length !== 1) throw new Error("Expected prepare, pin-antigravity, pin-cursor or check");
     if (positionals[0] === "prepare") {
       const version = values.version;
       if (!isStableVersion(version)) throw new Error("--version requires a stable SemVer, without v");
@@ -231,12 +273,15 @@ if (import.meta.main) {
     } else if (positionals[0] === "pin-antigravity") {
       const pin = await pinAntigravity(ROOT, values.version ?? "", { dryRun: values["dry-run"], log: (message) => console.error(message) });
       console.log(JSON.stringify({ written: !values["dry-run"], antigravity: pin }, null, 2));
+    } else if (positionals[0] === "pin-cursor") {
+      const pin = await pinCursor(ROOT, values.version ?? "", { dryRun: values["dry-run"], log: (message) => console.error(message) });
+      console.log(JSON.stringify({ written: !values["dry-run"], cursor: pin }, null, 2));
     } else if (positionals[0] === "check") {
       const versionChanged = checkRelease(ROOT, { baseRef: values["base-ref"], tag: values.tag });
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version_changed=${versionChanged}\n`);
       console.log("Release dependency preparation check passed");
     } else {
-      throw new Error("Expected prepare, pin-antigravity or check");
+      throw new Error("Expected prepare, pin-antigravity, pin-cursor or check");
     }
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));

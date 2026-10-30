@@ -1152,7 +1152,7 @@ export class MultiremiDaemon {
       );
     }
     this.runtimeModelDiscoveryEnabled = options.inProcessRuntimeModelDiscoveryEnabled === true
-      || (!options.providerFactory && ["claude", "codex", "antigravity"].includes(options.provider ?? "claude"));
+      || (!options.providerFactory && ["claude", "codex", "antigravity", "cursor"].includes(options.provider ?? "claude"));
     const workspacesRoot = configuredMultiremiWorkspacesRoot(options.workspacesRoot);
     const storageMachine = resolveStorageMachineOptions();
     const runtimeName = options.runtimeName ?? process.env.MULTIREMI_RUNTIME_NAME ?? `${hostname()}-${Bun.env.USER ?? "local"}-bun-runtime`;
@@ -2674,13 +2674,13 @@ export class MultiremiDaemon {
   }> {
     const provider = this.options.provider;
     if (provider === "antigravity") return this.antigravityModelProbeOptions();
-    if (provider !== "claude" && provider !== "codex") {
+    if (provider !== "claude" && provider !== "codex" && provider !== "cursor") {
       return { options: { agentType: provider, cwd: homedir() } };
     }
     const workspaceId = this.options.workspaceId ?? "local";
     const workspaceRelay = await this.effectiveWorkspaceRelay(workspaceId);
     const relayAuthoritative = workspaceRelay !== undefined;
-    const relay = provider === "claude" ? workspaceRelay?.claude : workspaceRelay?.codex;
+    const relay = workspaceRelay?.[provider];
     const owner = `${this.options.daemonId ?? this.options.runtimeName}:${provider}`;
     const root = join(
       probeRoot(this.options.workspacesRoot),
@@ -2722,11 +2722,14 @@ export class MultiremiDaemon {
       options: {
         agentType: provider,
         cwd: root,
+        ...(provider === "cursor" ? { providerHome: providerHome.home } : {}),
         env: {
           ...providerEnv,
           ...(provider === "claude"
             ? { CLAUDE_CONFIG_DIR: providerHome.home }
-            : { CODEX_HOME: providerHome.home }),
+            : provider === "cursor"
+              ? { CURSOR_CONFIG_DIR: providerHome.home, CURSOR_DATA_DIR: providerHome.home }
+              : { CODEX_HOME: providerHome.home }),
         },
       },
     };
@@ -3659,7 +3662,9 @@ export class MultiremiDaemon {
           ? workspaceRelay?.codex
           : task.agent?.provider === "antigravity"
             ? workspaceRelay?.antigravity ?? null
-            : null;
+            : task.agent?.provider === "cursor"
+              ? workspaceRelay?.cursor ?? null
+              : null;
       if (relay?.auth_token) failureCredentials.push(relay.auth_token);
       if (task.authToken) failureCredentials.push(task.authToken);
       if (task.agent?.provider === "antigravity") {
@@ -4666,7 +4671,7 @@ export class MultiremiDaemon {
     this.assertWorkspaceRootOwner();
     const agent = task.agent;
     if (!agent) throw new Error(`Task ${task.id} has no agent`);
-    if (!["claude", "codex", "antigravity"].includes(agent.provider)) {
+    if (!["claude", "codex", "antigravity", "cursor"].includes(agent.provider)) {
       throw new Error(`Unsupported Bun Multiremi provider: ${agent.provider}`);
     }
 
@@ -4707,6 +4712,9 @@ export class MultiremiDaemon {
     }
     const wikiMaterialized = preparedWorkspace.wikiMaterialized ?? false;
     await this.restoreReclaimedWorkspace(task, resolvedWorkDir);
+    if (agent.provider === "cursor" && providerHome && !task.runtimeWorkspaceId) {
+      localInstructions = runtimeWorkspaceContext(task, providerHome, workspaceDir)?.instructions ?? null;
+    }
     this.assertWorkspaceRootOwner();
     if (task.chatMessageAttachments?.length) {
       task.chatMessageAttachments = await materializeChatAttachments(
@@ -4727,7 +4735,8 @@ export class MultiremiDaemon {
       // directory, or the provider home when the working directory is the user's own (a runtime workspace or a
       // Project's local_directory).
       const userFolder = Boolean(task.runtimeWorkspaceId) || (resolvedWorkDir.localDirectory && workDir === workspaceDir);
-      if (!userFolder) installedSkillDirs = syncAgentSkills(agentSkillRoot(workDir, agent.provider), task);
+      if (agent.provider === "cursor" && providerHome) installedSkillDirs = syncAgentSkills(providerHomeSkillRoot(providerHome.home, agent.provider), task);
+      else if (!userFolder) installedSkillDirs = syncAgentSkills(agentSkillRoot(workDir, agent.provider), task);
       else if (providerHome) installedSkillDirs = syncAgentSkills(providerHomeSkillRoot(providerHome.home, agent.provider), task);
       else if (agent.skills?.length) log.warn(`Task ${task.id}: no provider home for skills; the user's folder is left as it is`);
       writeProjectResourceContext(contextDir, task);
@@ -4855,6 +4864,7 @@ export class MultiremiDaemon {
         pluginPaths: config.pluginPaths,
         pluginFingerprint: config.pluginFingerprint,
         codexHome: config.codexHome,
+        ...(agent.provider === "cursor" && providerHome ? { providerHome: providerHome.home } : {}),
         ...(antigravity ? { gatewayShim: antigravity.run, providerHome: providerHome!.home } : {}),
         // Honoured only by adapters that declare them (PR 5 §1.1, §2.3).
         nativeSubagentSessions: this.options.nativeSubagents,

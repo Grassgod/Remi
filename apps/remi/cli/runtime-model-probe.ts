@@ -6,7 +6,7 @@ export async function run(args: string[]): Promise<void> {
   const input = await Bun.stdin.text();
   if (input.length > 1024 * 1024) throw new Error("Runtime model probe input too large");
   const options = JSON.parse(input) as AcpProviderOptions;
-  if (!["claude", "codex", "antigravity"].includes(options.agentType ?? "")) {
+  if (!["claude", "codex", "antigravity", "cursor"].includes(options.agentType ?? "")) {
     throw new Error("Unsupported runtime model provider");
   }
   const provider = createRuntimeProvider({ ...options, inheritProcessGroup: true });

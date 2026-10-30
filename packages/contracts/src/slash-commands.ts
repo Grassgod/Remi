@@ -20,7 +20,7 @@
  * 2.2.2, Antigravity 1.4.0); the reasons are in ADR 0025 decision 8.
  */
 
-export type SlashCommandProvider = "claude" | "codex" | "antigravity";
+export type SlashCommandProvider = "claude" | "codex" | "antigravity" | "cursor";
 
 export interface LeadingSlashCommand {
   /** The command name without the slash, in lower case: `compact`, `mcp:server:prompt`, `$deploy-prod`. */
@@ -61,6 +61,11 @@ export const BLOCKED_SLASH_COMMANDS: Readonly<Record<SlashCommandProvider, reado
   ],
   codex: ["logout", "status"],
   antigravity: ["logout", "usage"],
+  cursor: [
+    "login", "logout", "model", "models", "max-mode", "config", "bedrock",
+    "run-everything", "auto-run", "sandbox", "update", "plugin",
+    "clear", "new", "new-chat", "newchat", "resume", "fork", "rewind", "quit", "exit",
+  ],
 };
 
 /** Commands the Chat menu does not offer; typed by hand, they still reach the agent. */
@@ -72,6 +77,7 @@ export const HIDDEN_SLASH_COMMANDS: Readonly<Record<SlashCommandProvider, readon
   ],
   codex: ["plan", "goal", "rename", "mcp"],
   antigravity: ["plan"],
+  cursor: ["plan", "ask", "debug", "goal", "rename", "mcp", "about", "logs", "open", "cursor"],
 };
 
 const PROVIDERS = Object.keys(BLOCKED_SLASH_COMMANDS) as SlashCommandProvider[];

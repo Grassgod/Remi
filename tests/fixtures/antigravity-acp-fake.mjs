@@ -103,15 +103,13 @@ async function prompt(id, params) {
     send({ id, result: { stopReason: "end_turn" } });
     // A backgrounded command reusing $AGY_LLM_GATEWAY_URL after the turn: shortly
     // after, or at the latest when Remi stops this process at the run's end.
-    let fired = false;
-    const lateCall = async () => {
-      if (fired) return;
-      fired = true;
+    let lateCallPromise;
+    const lateCall = () => lateCallPromise ??= (async () => {
       const response = await fetch(`${GATEWAY}/v1beta/models/${current}:streamGenerateContent?alt=sse`, {
         method: "POST", headers: harnessHeaders, body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "late call" }] }] }),
       }).catch(() => null);
       record({ kind: "late_call", status: response?.status ?? 0 });
-    };
+    })();
     setTimeout(lateCall, 30);
     process.once("SIGTERM", () => { void lateCall().finally(() => process.exit(0)); });
     return;

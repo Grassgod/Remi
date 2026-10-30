@@ -21,7 +21,7 @@ import {
   type SlashCommandProvider,
 } from "@multiremi/contracts/slash-commands.js";
 
-const PROVIDERS: SlashCommandProvider[] = ["claude", "codex", "antigravity"];
+const PROVIDERS: SlashCommandProvider[] = ["claude", "codex", "antigravity", "cursor"];
 
 /**
  * Whether a bridge would read a command at the start of `text`: codex-acp trims
@@ -85,6 +85,11 @@ describe("block and hide lists", () => {
     expect(slashCommandHandling("claude", "rename")).toBe("hide");
     expect(slashCommandHandling("claude", "compact")).toBeNull();
     expect(slashCommandHandling("codex", "review")).toBeNull();
+    expect(slashCommandHandling("cursor", "/login")).toBe("block");
+    expect(slashCommandHandling("cursor", "/bedrock")).toBe("block");
+    expect(slashCommandHandling("cursor", "/model")).toBe("block");
+    expect(slashCommandHandling("cursor", "/plan")).toBe("hide");
+    expect(slashCommandHandling("cursor", "/compact")).toBeNull();
     // A `$` name is a skill mention, which no bridge runs as a command.
     expect(slashCommandHandling("codex", "$logout")).toBeNull();
   });

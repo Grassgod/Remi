@@ -14,9 +14,9 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function renderSelection(component: React.ReactNode) {
+function renderSelection(component: React.ReactNode, provider = "codex") {
   listFleetModels.mockResolvedValue({ providers: [{
-    provider: "codex", online_runtime_count: 1,
+    provider, online_runtime_count: 1,
     models: [{ id: "supported-model", label: "Supported model", default: true }],
   }] });
   return render(
@@ -29,6 +29,15 @@ function renderSelection(component: React.ReactNode) {
 }
 
 describe.each([ModelDropdown, ModelPicker])("$name model selection", (Component) => {
+  it("selects a model reported by a Cursor Runtime", async () => {
+    const onChange = vi.fn();
+    renderSelection(<Component wsId="ws-1" provider="cursor" value="" onChange={onChange} />, "cursor");
+
+    fireEvent.click(screen.getByRole("button"));
+    fireEvent.click(await screen.findByRole("button", { name: /Supported model/ }));
+
+    expect(onChange).toHaveBeenCalledWith("supported-model");
+  });
   it.each([
     { name: "model routing", target: {}, query: {} },
     { name: "group", target: { executionGroupId: "group-1" }, query: { execution_group_id: "group-1" } },

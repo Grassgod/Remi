@@ -13,7 +13,7 @@ vi.mock("@multiremi/core/api", () => ({ api: { listExecutionGroups: async () => 
   if (state.error) throw new Error("unavailable");
   if (state.emptyGroup) return { groups: [{ id: "a", name: "Saved group", provider: "codex", runtime_ids: [], online_runtime_count: 0 }] };
   if (state.shared) return { groups: [{ id: "shared", name: "Shared Codex", provider: "codex", runtime_ids: state.runtimes.map((runtime) => runtime.id), online_runtime_count: 2 }] };
-  return { groups: state.runtimes.flatMap((runtime) => (runtime.provider === "any" ? ["claude", "codex"] : [runtime.provider]).map((provider) => ({ id: runtime.id, name: `Machine ${runtime.id} / ${provider === "codex" ? "Codex" : provider === "claude" ? "Claude Code" : "Antigravity"}`, provider, runtime_ids: [runtime.id], online_runtime_count: runtime.status === "online" ? 1 : 0 }))) };
+  return { groups: state.runtimes.flatMap((runtime) => (runtime.provider === "any" ? ["claude", "codex"] : [runtime.provider]).map((provider) => ({ id: runtime.id, name: `Machine ${runtime.id} / ${provider === "codex" ? "Codex" : provider === "claude" ? "Claude Code" : provider === "cursor" ? "Cursor" : "Antigravity"}`, provider, runtime_ids: [runtime.id], online_runtime_count: runtime.status === "online" ? 1 : 0 }))) };
 }, listRuntimes: async () => {
   if (state.error) throw new Error("unavailable");
   return state.runtimes;
@@ -30,6 +30,15 @@ function show(node: ReactNode) {
 }
 afterEach(() => { cleanup(); state.runtimes = []; state.error = false; state.emptyGroup = false; state.shared = false; });
 describe("ExecutionTargetSelect", () => {
+  it("selects Cursor through either model routing or a fixed execution group", async () => {
+    state.runtimes = [runtime("cursor-machine", "cursor")];
+    const onChange = vi.fn();
+    show(<ExecutionTargetSelect wsId="ws" value={{ executionGroupId: "", provider: "claude" }} onChange={onChange} />);
+    fireEvent.click(await screen.findByRole("button", { name: /Machine cursor-machine \/ Cursor/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ executionGroupId: "cursor-machine", provider: "cursor" });
+    fireEvent.click(screen.getByRole("button", { name: /Model routing · Cursor/ }));
+    expect(onChange).toHaveBeenLastCalledWith({ executionGroupId: "", provider: "cursor" });
+  });
   it("retains Antigravity automatic and execution-group targets", async () => {
     state.runtimes = [runtime("agy", "antigravity")];
     const onChange = vi.fn();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Activity, AlertCircle, Eye, EyeOff, Plus, Radar, Save, SlidersHorizontal, Sparkles, Waypoints } from "lucide-react";
@@ -23,7 +23,7 @@ import {
 import { useAuthStore } from "@multiremi/core/auth";
 import { useWorkspaceId } from "@multiremi/core/hooks";
 import { useCurrentWorkspace } from "@multiremi/core/paths";
-import { runtimeModelsKeys } from "@multiremi/core/runtimes";
+import { runtimeModelsKeys, waitForRuntimeModelDiscovery } from "@multiremi/core/runtimes";
 import { memberListOptions, workspaceKeys } from "@multiremi/core/workspace/queries";
 import { api } from "@multiremi/core/api";
 import type {
@@ -39,6 +39,7 @@ import { useT } from "../../i18n";
 import { ProviderLogo } from "../../runtimes/components/provider-logo";
 import { ClaudeMark, OpenAIMark } from "./engine-marks";
 import { formatRelayFragment } from "./relay-fragment-format";
+import { CursorModelCapabilities } from "./cursor-model-capabilities";
 
 type Engine = RelayEngine;
 type ReasoningEngine = RelayReasoningEngine;
@@ -60,25 +61,28 @@ interface IssueAutoTitleSettings {
 const ENGINE_EXAMPLE: Record<Engine, string> = {
   claude: '{\n  "env": {\n    "ANTHROPIC_BASE_URL": "https://…"\n  }\n}',
   codex: 'model_provider = "OpenAI"\n\n[model_providers.OpenAI]\nbase_url = "https://…/v1"\nwire_api = "responses"\nrequires_openai_auth = true',
+  cursor: '{\n  "base_url": "https://api2.cursor.sh",\n  "default_model": "default"\n}',
   antigravity: '{\n  "base_url": "https://…",\n  "default_model": "gemini-…"\n}',
 };
 
 const ENGINE_FORMAT: Record<Engine, "JSON" | "TOML"> = {
   claude: "JSON",
   codex: "TOML",
+  cursor: "JSON",
   antigravity: "JSON",
 };
 
 const ENGINE_TITLE: Record<Engine, string> = {
   claude: "Claude",
   codex: "Codex",
+  cursor: "Cursor",
   antigravity: "Antigravity",
 };
 
 function EngineMark({ engine }: { engine: Engine }) {
   if (engine === "claude") return <ClaudeMark className="h-4 w-4" />;
   if (engine === "codex") return <OpenAIMark className="h-4 w-4" />;
-  return <ProviderLogo provider="antigravity" className="h-4 w-4" />;
+  return <ProviderLogo provider={engine} className="h-4 w-4" />;
 }
 
 const relayKeys = {
@@ -188,6 +192,12 @@ export function ModelGatewayTab() {
             config={config.codex ?? null}
             wsId={wsId}
             discoveryEnabled={config.modelDiscovery === true}
+          />
+          <EngineSection
+            engine="cursor"
+            config={config.cursor ?? null}
+            wsId={wsId}
+            discoveryEnabled={true}
           />
           <EngineSection
             engine="antigravity"
@@ -513,7 +523,7 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
 }) {
   const { t } = useT("settings");
   const qc = useQueryClient();
-  const [fragment, setFragment] = useState(() => formatRelayFragment(engine, config?.fragment ?? ""));
+  const [fragment, setFragment] = useState(() => formatRelayFragment(engine, config?.fragment ?? (engine === "cursor" ? "{}" : "")));
   const [showExample, setShowExample] = useState(false);
   const [token, setToken] = useState("");
   const [tokenDirty, setTokenDirty] = useState(false);
@@ -521,10 +531,17 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
   const [saving, setSaving] = useState(false);
   const [probing, setProbing] = useState(false);
   const [probe, setProbe] = useState<RelayEngineProbe | null>(null);
+  const probeAbort = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    setProbe(null);
+    setProbing(false);
+    return () => { probeAbort.current?.abort(); };
+  }, [wsId, engine]);
 
   // Re-seed the editor when the server value arrives/changes and the user hasn't started editing.
   useEffect(() => {
-    setFragment(formatRelayFragment(engine, config?.fragment ?? ""));
+    setFragment(formatRelayFragment(engine, config?.fragment ?? (engine === "cursor" ? "{}" : "")));
   }, [engine, config?.fragment]);
 
   const hasToken = config?.hasToken === true;
@@ -535,8 +552,8 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
       const tokenOp = tokenDirty ? (token ? "set" : "clear") : "keep";
       await api.updateRelayConfig(wsId, engine, { fragment, token_op: tokenOp, auth_token: token });
       await qc.invalidateQueries({ queryKey: relayKeys.config(wsId) });
-      // The save awaited gateway discovery, so the fleet catalog is fresh — refetch the
-      // model dropdown so it reflects the new gateway without a manual page refresh.
+      // Refresh the available catalog after saving. Runtime-discovered models
+      // also refresh when their daemon reports a new catalog.
       await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
       setTokenDirty(false);
       setToken("");
@@ -566,30 +583,48 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
     }
   }
 
-  // Probing discovers the gateway's models and effort metadata in place of the
-  // hourly stale-refresh, so the fleet model dropdown must refetch afterwards.
+  // Gateway probes refresh immediately; Cursor queues a Runtime refresh whose
+  // result also invalidates the fleet catalog through daemon events.
   async function runProbe() {
+    probeAbort.current?.abort();
+    const controller = new AbortController();
+    probeAbort.current = controller;
     setProbing(true);
     setProbe(null);
     try {
       const result = await api.probeRelayEngine(wsId, engine);
-      setProbe(result);
+      if (controller.signal.aborted) return;
+      setProbe(result.discovery_requested ? { ...result, error: null } : result);
+      if (engine === "cursor" && result.discovery_requested) {
+        const discovery = await waitForRuntimeModelDiscovery(result.discovery_requests ?? [], { signal: controller.signal });
+        if (controller.signal.aborted) return;
+        setProbe(discovery.status === "ready"
+          ? { ...result, status: "ready", models: discovery.models.map((model) => ({ ...model })), error: null, discovery_requested: false }
+          : { ...result, status: "error", discovery_requested: false, error: discovery.reason === "timeout"
+            ? t(($) => $.modelGateway.cursor_discovery_timeout)
+            : t(($) => $.modelGateway.cursor_discovery_failed) });
+      }
       await qc.invalidateQueries({ queryKey: runtimeModelsKeys.fleet(wsId) });
       // A fresh snapshot can list models that were never there before, so the
       // per-model reasoning-level rows reload too. Manual declarations survive
-      // the probe on the server side. Antigravity has no such rows.
-      if (engine !== "antigravity") {
+      // the probe on the server side.
+      if (engine === "claude" || engine === "codex") {
         await qc.invalidateQueries({ queryKey: relayKeys.reasoningLevels(wsId, engine) });
       }
     } catch (e) {
+      if (controller.signal.aborted) return;
       toast.error(e instanceof Error ? e.message : t(($) => $.modelGateway.probe_failed));
     } finally {
-      setProbing(false);
+      if (!controller.signal.aborted) setProbing(false);
     }
   }
 
   const probeSummary = (() => {
     if (!probe) return null;
+    if (engine === "cursor") {
+      if (probe.discovery_requested) return t(($) => $.modelGateway.cursor_discovery_requested);
+      return probe.error ? null : t(($) => $.modelGateway.probe_models, { count: probe.models.length });
+    }
     const total = probe.models.length;
     const supported = probe.models.filter(
       (model) => (model.thinking?.supported_levels.length ?? 0) > 0,
@@ -651,10 +686,13 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
             />
           </div>
           <div>
-            <Label className="text-xs text-muted-foreground">{t(($) => $.modelGateway.token_label)}</Label>
+            <Label htmlFor={`relay-token-${engine}`} className="text-xs text-muted-foreground">
+              {engine === "cursor" ? t(($) => $.modelGateway.cursor_token_label) : t(($) => $.modelGateway.token_label)}
+            </Label>
             <div className="mt-1 flex gap-2">
               <div className="relative flex-1">
                 <Input
+                  id={`relay-token-${engine}`}
                   type={revealed ? "text" : "password"}
                   value={tokenDirty || revealed ? token : ""}
                   placeholder={hasToken ? "••••••••••••••••" : ""}
@@ -678,7 +716,9 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
                 ? t(($) => $.modelGateway.claude_hint)
                 : engine === "codex"
                   ? t(($) => $.modelGateway.codex_hint)
-                  : t(($) => $.modelGateway.antigravity_hint)}
+                  : engine === "cursor"
+                    ? t(($) => $.modelGateway.cursor_hint)
+                    : t(($) => $.modelGateway.antigravity_hint)}
             </p>
           </div>
           {probe?.error ? (
@@ -706,9 +746,8 @@ function EngineSection({ engine, config, wsId, discoveryEnabled }: {
           </div>
         </CardContent>
       </Card>
-      {/* The Antigravity gateway path has no reasoning selector, so there is
-          nothing an administrator could declare for its models. */}
-      {engine !== "antigravity" ? <ReasoningLevelsSection engine={engine} wsId={wsId} /> : null}
+      {(engine === "claude" || engine === "codex") ? <ReasoningLevelsSection engine={engine} wsId={wsId} /> : null}
+      {engine === "cursor" ? <CursorModelCapabilities wsId={wsId} /> : null}
     </section>
   );
 }
