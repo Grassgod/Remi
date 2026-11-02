@@ -1248,15 +1248,14 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
     const validation = validateRelayFragment(engine, fragment);
     if (!validation.ok) return c.json({ error: validation.error }, 400);
     const tokenOp = body.token_op === "set" || body.token_op === "clear" ? body.token_op : "keep";
-    // A token must always ship with its gateway URL so the daemon never pairs the
-    // central token with a stale local base_url. If the config will carry a token,
-    // the fragment must define the gateway base_url.
+    // Gateway tokens require their URL. A Cursor key authenticates to Cursor's
+    // official backend when the optional Cursor endpoint is omitted.
     const willHaveToken = tokenOp === "set"
       ? Boolean(body.auth_token)
       : tokenOp === "keep"
         ? Boolean(store.getRelayConfigForDaemon(workspaceId)[engine]?.authToken)
         : false;
-    if (willHaveToken && !extractBaseUrl(engine, fragment)) {
+    if (engine !== "cursor" && willHaveToken && !extractBaseUrl(engine, fragment)) {
       return c.json({ error: "fragment must define the gateway base_url when a token is set" }, 400);
     }
     store.upsertRelayConfig(workspaceId, engine, {
@@ -1404,7 +1403,7 @@ export function registerWorkspaceRoutes(app: Hono, deps: RouterDeps): void {
  * would route and then be rejected by the engine; say so instead of "invalid".
  */
 function reasoningEngineError(engine: string): string {
-  return engine === "antigravity" ? "reasoning levels are not supported for antigravity" : "invalid engine";
+  return engine === "antigravity" || engine === "cursor" ? `reasoning levels are not supported for ${engine}` : "invalid engine";
 }
 
 function hasOwn(value: unknown, key: string): boolean {

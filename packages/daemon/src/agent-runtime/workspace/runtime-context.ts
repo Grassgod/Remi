@@ -46,10 +46,15 @@ export function runtimeWorkspaceContext(
   workDir: string,
 ): { instructions: string; env: Record<string, string> } | null {
   const workspace = task.runtimeWorkspace;
-  if (!workspace) return null;
-  const root = realpathSync(workspace.rootPath);
+  // Cursor's ACP rule loader uses its process directory, while its tools use
+  // the session directory. Carry project context into the private launch home.
+  if (!workspace && providerHome.provider !== "cursor") return null;
+  const root = realpathSync(workspace?.rootPath ?? workDir);
   const cwd = containedPath(root, workDir);
   const sections: string[] = [];
+  if (providerHome.provider === "cursor") {
+    sections.push("Before working inside a project subdirectory, read its AGENTS.md, CLAUDE.md and relevant .cursor/rules files. More specific instructions apply to that directory.");
+  }
   const seen = new Set<string>();
   const instructionNames = providerHome.provider === "codex"
     ? ["AGENTS.override.md", "AGENTS.md", "AGENT.md"] : providerHome.provider === "antigravity"
@@ -80,6 +85,28 @@ export function runtimeWorkspaceContext(
       sections.push(`- Skill ${JSON.stringify(name)}: ${JSON.stringify(description)}. Read ${JSON.stringify(source)}; resolve supporting files beside that file.`);
     }
   };
+  const addCursorRules = (directory: string) => {
+    if (!existsSync(directory)) return;
+    const canonical = containedPath(root, directory);
+    const entries = readdirSync(canonical, { withFileTypes: true });
+    for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+      const file = join(canonical, entry.name);
+      if (entry.isDirectory()) { addCursorRules(file); continue; }
+      if (!/\.mdc?$/.test(entry.name)) continue;
+      const source = containedPath(root, file);
+      if (seen.has(source)) continue;
+      seen.add(source);
+      const content = readText(source);
+      const frontmatter = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+      const metadata = frontmatter ? parseYaml(frontmatter[1]!, { maxAliasCount: 0 }) : {};
+      if (metadata?.alwaysApply === true) {
+        sections.push(`\n## Project rule: ${source}\n${content}`);
+      } else {
+        const description = typeof metadata?.description === "string" ? metadata.description : entry.name;
+        sections.push(`- Project rule ${JSON.stringify(source)}: ${JSON.stringify(description)}${metadata?.globs ? `; applies to ${JSON.stringify(metadata.globs)}` : ""}. Read this file when relevant.`);
+      }
+    }
+  };
 
   // The workspace's own skills: providers find only the working directory's, so the catalog names the rest.
   // The Agent's skills are installed where the provider finds them itself (`syncAgentSkills`).
@@ -91,12 +118,16 @@ export function runtimeWorkspaceContext(
     if (dirname(directory) === directory) throw new LocalDirectoryError("Runtime workspace cwd escapes root");
   }
   for (const directory of ancestors) {
-    const file = instructionNames.find(name => existsSync(join(directory, name)));
-    if (file) addInstructions(join(directory, file), root);
+    const files = providerHome.provider === "cursor"
+      ? instructionNames.filter(name => existsSync(join(directory, name)))
+      : [instructionNames.find(name => existsSync(join(directory, name)))].filter((name): name is string => Boolean(name));
+    for (const file of files) addInstructions(join(directory, file), root);
     addSkills(join(directory, ".agents", "skills"), root);
-    if (providerHome.provider === "claude") addSkills(join(directory, ".claude", "skills"), root);
+    if (providerHome.provider === "claude" || providerHome.provider === "cursor") addSkills(join(directory, ".claude", "skills"), root);
+    if (providerHome.provider === "cursor") addSkills(join(directory, ".cursor", "skills"), root);
+    if (providerHome.provider === "cursor") addCursorRules(join(directory, ".cursor", "rules"));
   }
-  for (const source of workspace.contextPaths) {
+  for (const source of workspace?.contextPaths ?? []) {
     const path = containedPath(root, resolve(root, source));
     if (statSync(path).isDirectory()) addSkills(path, root);
     else addInstructions(path, root);
@@ -105,7 +136,7 @@ export function runtimeWorkspaceContext(
   if (Buffer.byteLength(content) > MAX_CONTEXT_BYTES) {
     throw new LocalDirectoryError("Runtime workspace local context exceeds 24 KiB; reduce instruction files or the skill catalog");
   }
-  return { instructions: content, env: runtimeWorkspaceEnv(task, root, providerHome.provider) };
+  return { instructions: content, env: workspace ? runtimeWorkspaceEnv(task, root, providerHome.provider) : {} };
 }
 
 /** What Remi's notes may use of `AGENTS.md` next to `local`. */
@@ -114,7 +145,7 @@ export function remiInstructionsBudget(local: string | null | undefined): number
   return Math.min(REMI_INSTRUCTIONS_MAX_BYTES, PROVIDER_INSTRUCTIONS_MAX_BYTES - marker - (local ? Buffer.byteLength(local) + 1 : 0));
 }
 
-/** The session's `AGENTS.md`, in its provider home (`CLAUDE_CONFIG_DIR`, `CODEX_HOME` or `GEMINI_HOME`). */
+/** The session's `AGENTS.md`, in the provider's private configuration/launch directory. */
 export function providerInstructionsPath(providerHome: IssueSessionProviderHome): string {
   return join(providerHome.home, "AGENTS.md");
 }
@@ -183,6 +214,7 @@ function runtimeWorkspaceEnv(task: AgentTask, root: string, provider: IssueSessi
   const antigravity = provider === "antigravity";
   for (const key of Object.keys(env)) {
     if (/^(MULTIREMI_|CODEX_HOME$|CLAUDE_CONFIG_DIR$|OPENAI_|ANTHROPIC_)/i.test(key)
+      || (provider === "cursor" && /^(CURSOR_|AGENT_CLI_CREDENTIAL_STORE$)/i.test(key))
       || (antigravity && /^(GEMINI_HOME$|GEMINI_API_KEY$|AGY_|GOOGLE_|ANTIGRAVITY_)/i.test(key))) {
       throw new LocalDirectoryError(`Runtime workspace env file cannot override ${key}`);
     }

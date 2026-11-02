@@ -93,6 +93,7 @@ export function writeProjectResourceContext(workDir: string, task: AgentTask): v
  * sees skills materialized under `<workDir>/.agents/skills`.
  */
 export function agentSkillRoot(workDir: string, provider: string | undefined): string {
+  if (provider === "cursor") return join(workDir, ".cursor", "skills");
   return provider === "codex" || provider === "antigravity"
     ? join(workDir, ".agents", "skills")
     : join(workDir, ".claude", "skills");
@@ -105,6 +106,7 @@ export function agentSkillRoot(workDir: string, provider: string | undefined): s
  * `$CODEX_HOME/skills`; Antigravity keeps the `.agents/skills` it has always used.
  */
 export function providerHomeSkillRoot(home: string, provider: string | undefined): string {
+  if (provider === "cursor") return join(home, ".cursor", "skills");
   return provider === "antigravity" ? join(home, ".agents", "skills") : join(home, "skills");
 }
 

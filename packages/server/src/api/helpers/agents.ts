@@ -1,5 +1,5 @@
 import { createLogger } from "@shared/logger.js";
-import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
+import { workspaceRuntimeModelCatalog, catalogAllowsModel, commonThinkingCapabilities, cursorExecutionModel, withCursorDefaultModel, modelThinkingState, providerDeclaresReasoningLevels, runtimeTargetModelCatalog } from "@multiremi/store/runtime-model-catalog.js";
 import { GATEWAY_REASONING_LEVELS, manualThinkingResponse } from "@multiremi/store/runtime-model-catalog.js";
 import type { FleetModelThinkingResponse, FleetModelThinkingSource } from "@multiremi/store/runtime-model-catalog.js";
 import type { RelayEngine } from "@multiremi/store/store.js";
@@ -113,7 +113,7 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
       ...(thinkingSource ? { thinking_source: thinkingSource } : {}),
     }];
   });
-  return [{ provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
+  const catalog: FleetProviderModelsResponse = { provider: group.provider, models, online_runtime_count: runtimes.filter((runtime) => runtime.status === "online").length,
     ...(providers.some((entry) => entry?.model_catalog_status === "unknown")
       ? { model_catalog_status: "unknown" as const }
       : providers.some((entry) => entry?.model_catalog_status === "error")
@@ -123,7 +123,8 @@ export function executionGroupModelCatalog(store: MultiremiStore, workspaceId: s
     ...(providers.some((entry) => entry?.default_thinking) ? { default_thinking: commonThinkingCapabilities(providers.map((entry) =>
       entry?.default_thinking ?? { supported_levels: modelThinkingLevels(entry?.models ?? [], "") })),
     } : {}),
-  }];
+  };
+  return [group.provider === "cursor" ? withCursorDefaultModel(catalog, cursorExecutionModel(store, workspaceId)) : catalog];
 }
 
 export function executionGroupRequestOwner(c: Context, store: MultiremiStore, workspaceId: string): string | Response {
@@ -469,12 +470,12 @@ function validateAgentModelSelection(
   }
   const catalog = input.executionGroupId && !input.runtimeId ? groupCatalog : agentSelectionCatalog(c, store, input);
   const models = catalog?.models ?? [];
-  if (!catalogAllowsModel(catalog, input.model)) {
+  if (!catalogAllowsModel(catalog, input.model, input.provider)) {
     return c.json({
       code: catalog?.model_catalog_status === "unknown" ? "model_execution_catalog_unknown" : "model_not_in_execution_catalog",
       error: catalog?.model_catalog_status === "unknown"
-        ? `model "${input.model}" cannot be selected while the Codex execution catalog is unknown or loading`
-        : `model "${input.model}" is not in the available Codex execution catalog and cannot be executed`,
+        ? `model "${input.model}" cannot be selected while the ${input.provider} execution catalog is unknown or loading`
+        : `model "${input.model}" is not in the available ${input.provider} execution catalog and cannot be executed`,
     }, 400);
   }
   // Unmanaged/custom connections retain their own model selection behavior.
@@ -527,7 +528,7 @@ function validateAgentFallbackSelection(
   if (!input.fallbackModel || input.preserveSavedSelection) return null;
   const profile = input.runtimeId ? store.getRuntimeExecutionProfile(input.runtimeId, input.provider) : null;
   const catalog = agentSelectionCatalog(c, store, input);
-  const effectiveModel = input.model || profile?.model || catalog?.models.find((model) => model.default)?.id;
+  const effectiveModel = input.model || profile?.model || catalog?.default_model || catalog?.models.find((model) => model.default)?.id;
   if (effectiveModel === input.fallbackModel) {
     return c.json({ error: "fallback_model must be different from the primary model" }, 400);
   }
@@ -537,7 +538,7 @@ function validateAgentFallbackSelection(
       error: `fallback_model "${input.fallbackModel}" is not supported by the selected Runtime connection`,
     }, 400);
   }
-  if (!catalogAllowsModel(catalog, input.fallbackModel)
+  if (!catalogAllowsModel(catalog, input.fallbackModel, input.provider)
     || (input.executionGroupId && !input.runtimeId && !catalog?.models.some((model) => model.id === input.fallbackModel))) {
     return c.json({
       code: catalog?.model_catalog_status === "unknown" ? "model_execution_catalog_unknown" : "model_not_in_execution_catalog",

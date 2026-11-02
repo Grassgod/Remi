@@ -1,7 +1,7 @@
 import type { MultiremiRuntime, MultiremiRuntimeModel, MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
 import { runtimeConnectionModels } from "@multiremi/contracts/runtime-connection";
 import { commonThinkingLevels, modelThinkingLevels } from "@multiremi/contracts/model-thinking.js";
-import { extractAntigravityDefaultModel, RELAY_ENGINES } from "@multiremi/relay/fragment.js";
+import { extractAntigravityDefaultModel, extractCursorDefaultModel, RELAY_ENGINES } from "@multiremi/relay/fragment.js";
 import type { GatewayModelReasoningDecl, MultiremiStore, RelayEngine } from "./store.js";
 
 /** Minimal data source shared by API catalogs and dispatch capability checks. */
@@ -23,6 +23,7 @@ export const GATEWAY_REASONING_LEVELS: Record<RelayEngine, readonly string[]> = 
   // The Antigravity server's gateway path offers no `thought_level` selector, so
   // there is no level an administrator could declare that the engine would honour.
   antigravity: [],
+  cursor: [],
 };
 
 /** Display labels for the declared enum, matching the CLIs' own spelling. */
@@ -55,7 +56,7 @@ export function isGatewayReasoningLevel(engine: RelayEngine, value: unknown): va
  */
 export type FleetModelThinkingSource = "gateway" | "runtime" | "manual" | "family" | "none";
 
-export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex", "antigravity"]);
+export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex", "antigravity", "cursor"]);
 
 /**
  * Union of the online runtimes' model catalogs, grouped by provider — the
@@ -70,7 +71,7 @@ export const MULTIREMI_DAEMON_PROVIDERS = new Set(["claude", "codex", "antigravi
  */
 // Maps a model's vendor (as the daemon reports it) to the engine that runs it,
 // for the rare "any" runtime that carries a model catalog but no fixed engine.
-const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude" };
+const MODEL_VENDOR_TO_ENGINE: Record<string, string> = { openai: "codex", anthropic: "claude", cursor: "cursor" };
 
 export interface FleetModelThinkingLevelResponse {
   value: string;
@@ -107,7 +108,28 @@ export interface FleetProviderModelsResponse {
   /** Runtime-side load outcome, independent of the control-plane snapshot. */
   runtime_catalog_status?: "ready" | "error";
   runtime_catalog_error?: string;
+  /** Concrete model selected when the Agent inherits the workspace default. */
+  default_model?: string;
   default_thinking?: FleetModelThinkingResponse;
+}
+
+export function cursorExecutionModel(
+  store: Pick<RuntimeModelCatalogSource, "getRelayConfigForDaemon">,
+  workspaceId: string,
+  model?: string | null,
+): string {
+  return model?.trim() || extractCursorDefaultModel(store.getRelayConfigForDaemon(workspaceId).cursor?.fragment ?? "") || "default";
+}
+
+/** Defaults annotate native membership; they never add executable model IDs. */
+export function withCursorDefaultModel(catalog: FleetProviderModelsResponse, model: string): FleetProviderModelsResponse {
+  return {
+    ...catalog,
+    default_model: model,
+    models: catalog.models.map(entry => ({ ...entry, default: entry.id === model })),
+    default_thinking: catalog.models.find(entry => entry.id === model)?.thinking
+      ?? { status: "unknown", supported_levels: [] },
+  };
 }
 
 /**
@@ -244,7 +266,7 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
       const engine = runtime.provider !== "any" ? runtime.provider : MODEL_VENDOR_TO_ENGINE[model.provider ?? ""];
       if (!engine) continue;
       const entry = bucket(engine);
-      if (model.providerDefault) continue;
+      if (model.providerDefault && engine !== "cursor") continue;
       const existing = entry.models.get(model.id);
       // A fleet is a union of usable targets. Prefer a successful report; the
       // claim path still checks the selected runtime's own capabilities.
@@ -277,6 +299,11 @@ export function fleetModelsResponse(runtimes: MultiremiRuntime[], callerOwnerId:
       provider,
       online_runtime_count: entry.online,
       models: [...entry.models.values()].map(runtimeModelCompatibilityResponse),
+      ...(provider === "cursor" ? {
+        model_catalog_status: entry.catalogStatuses.length && entry.catalogStatuses.every(status => status === "error")
+          ? "error" as const : entry.models.size || entry.catalogStatuses.some(status => status === "ready")
+            ? "ready" as const : "unknown" as const,
+      } : {}),
       ...(entry.catalogStatuses.length && entry.catalogStatuses.every(status => status === "error")
         ? { runtime_catalog_status: "error" as const, runtime_catalog_error: entry.catalogError }
         : entry.catalogStatuses.some(status => status === "ready") ? { runtime_catalog_status: "ready" as const } : {}),
@@ -415,6 +442,10 @@ export function overlayGatewayModels(
   providers: FleetProviderModelsResponse[],
   options: { preserveCustomProfileModels?: boolean; requireRuntimeMembership?: boolean } = {},
 ): FleetProviderModelsResponse[] {
+  if (providers.some(entry => entry.provider === "cursor")) {
+    const cursorDefault = cursorExecutionModel(store, workspaceId);
+    providers = providers.map(entry => entry.provider === "cursor" ? withCursorDefaultModel(entry, cursorDefault) : entry);
+  }
   // An administrator's declaration is a statement about the engine, not probe
   // output, so it is applied to whatever this function produced — before the
   // discovery check and after the snapshot overlay. It has to hold when a probe
@@ -445,6 +476,8 @@ export function overlayGatewayModels(
   const byEngine = new Map<string, FleetProviderModelsResponse>();
   for (const provider of providers) byEngine.set(provider.provider, provider);
   for (const engine of RELAY_ENGINES) {
+    // Cursor's authenticated ACP selector owns model discovery and availability.
+    if (engine === "cursor") continue;
     const engineConfig = config[engine];
     // No live gateway credential → don't surface any (possibly stale) snapshot.
     if (!engineConfig || !engineConfig.authToken) continue;
@@ -654,10 +687,13 @@ export function runtimeTargetModelCatalog(
   });
 }
 
-/** Explicit Codex selections must be executable, regardless of effort overrides. */
-export function catalogAllowsModel(catalog: FleetProviderModelsResponse | undefined, modelId: string): boolean {
+/** Native model selections must be executable, regardless of effort overrides. */
+export function catalogAllowsModel(catalog: FleetProviderModelsResponse | undefined, modelId: string, provider = catalog?.provider): boolean {
+  if (provider === "cursor" && !modelId) modelId = catalog?.default_model ?? "default";
   if (!modelId) return true;
   const model = catalog?.models.find(model => model.id === modelId);
+  if (provider === "cursor") return Boolean(model) && catalog?.runtime_catalog_status !== "error" && catalog?.model_catalog_status !== "error"
+    && model?.execution_status !== "unavailable" && model?.execution_status !== "unknown";
   if (model?.execution_status === "available") return true;
   if (model?.execution_status === "unavailable" || model?.execution_status === "unknown") return false;
   if (catalog?.model_catalog_status === "unknown") return false;

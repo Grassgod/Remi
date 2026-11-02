@@ -517,7 +517,7 @@ function hasIssueWorkspaceProviderHistory(task: AgentTask): boolean {
     ?? "";
   const agentId = task.agent?.id?.trim() ?? "";
   const provider = task.agent?.provider;
-  return Boolean(issueId && issueSessionId && agentId && (provider === "claude" || provider === "codex"));
+  return Boolean(issueId && issueSessionId && agentId && (provider === "claude" || provider === "codex" || provider === "cursor"));
 }
 
 interface PromptAttachment {

@@ -1,13 +1,87 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { RuntimesEndpoints } from "../api/endpoints/runtimes";
 import type { HttpClient } from "../api/http";
 import { QueryClient } from "@tanstack/react-query";
 import type { RuntimeModel } from "../types";
 const listFleetModels = vi.hoisted(() => vi.fn());
-vi.mock("../api", () => ({ api: { listFleetModels } }));
-import { executionTargetModelsOptions, fleetModelsOptions, isFallbackModelUnavailable, isModelExecutionUnknown, isModelUnavailable, runtimeModelsKeys } from "./models";
+const getListModelsResult = vi.hoisted(() => vi.fn());
+vi.mock("../api", () => ({ api: { listFleetModels, getListModelsResult } }));
+import { executionTargetModelsOptions, fleetModelsOptions, isFallbackModelUnavailable, isModelCatalogRestricted, isModelExecutionUnknown, isModelUnavailable, runtimeModelsKeys, waitForRuntimeModelDiscovery } from "./models";
+
+describe("existing Runtime model discovery requests", () => {
+  afterEach(() => { vi.useRealTimers(); getListModelsResult.mockReset(); });
+
+  it("waits for completion and merges the models from each requested Runtime", async () => {
+    vi.useFakeTimers();
+    getListModelsResult
+      .mockResolvedValueOnce({ status: "completed", models: [{ id: "default", label: "Auto" }] })
+      .mockResolvedValueOnce({ status: "running" })
+      .mockResolvedValueOnce({ status: "completed", models: [{ id: "default", label: "Auto" }, { id: "composer", label: "Composer" }] });
+    const pending = waitForRuntimeModelDiscovery([
+      { runtime_id: "first", request_id: "request-first" },
+      { runtime_id: "second", request_id: "request-second" },
+    ]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(await pending).toEqual({ status: "ready", models: [{ id: "default", label: "Auto" }, { id: "composer", label: "Composer" }] });
+    expect(getListModelsResult.mock.calls).toEqual([
+      ["first", "request-first", expect.any(AbortSignal)],
+      ["second", "request-second", expect.any(AbortSignal)],
+      ["second", "request-second", expect.any(AbortSignal)],
+    ]);
+  });
+
+  it("reports failure without forwarding raw Runtime output", async () => {
+    getListModelsResult.mockResolvedValue({ status: "failed", error: "CURSOR_API_KEY=secret-value" });
+    expect(await waitForRuntimeModelDiscovery([{ runtime_id: "rt", request_id: "req" }]))
+      .toEqual({ status: "error", reason: "failed" });
+  });
+
+  it("finishes a stalled request with a timeout", async () => {
+    vi.useFakeTimers();
+    getListModelsResult.mockResolvedValue({ status: "pending" });
+    const pending = waitForRuntimeModelDiscovery([{ runtime_id: "rt", request_id: "req" }], {
+      timeoutMs: 1_000, pollIntervalMs: 500,
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toEqual({ status: "error", reason: "timeout" });
+  });
+
+  it("stops polling when the consuming view is disposed", async () => {
+    vi.useFakeTimers();
+    getListModelsResult.mockResolvedValue({ status: "pending" });
+    const controller = new AbortController();
+    const pending = waitForRuntimeModelDiscovery([{ runtime_id: "rt", request_id: "req" }], { signal: controller.signal });
+    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await vi.advanceTimersByTimeAsync(0);
+    controller.abort();
+    await rejected;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(getListModelsResult).toHaveBeenCalledTimes(1);
+  });
+
+  it("aborts an in-flight status request at the discovery deadline", async () => {
+    vi.useFakeTimers();
+    getListModelsResult.mockImplementation((_runtimeId, _requestId, signal: AbortSignal) => new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    }));
+    const pending = waitForRuntimeModelDiscovery([{ runtime_id: "rt", request_id: "req" }], { timeoutMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await pending).toEqual({ status: "error", reason: "timeout" });
+    expect(getListModelsResult).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("execution target model catalog", () => {
+  it("restricts Cursor to its Runtime catalog while permitting the default model", () => {
+    const models: RuntimeModel[] = [{ id: "default", label: "Auto", execution_status: "available" }];
+    expect(isModelCatalogRestricted("cursor", [], undefined)).toBe(true);
+    expect(isModelUnavailable("cursor", "default", models, "ready")).toBe(false);
+    expect(isModelUnavailable("cursor", "gateway-only", models, "ready")).toBe(true);
+    expect(isModelUnavailable("cursor", "default", models, "error")).toBe(true);
+    expect(isModelUnavailable("cursor", "", [], "unknown")).toBe(false);
+    expect(isModelExecutionUnknown("cursor", "default", [], "unknown")).toBe(true);
+    expect(isFallbackModelUnavailable("cursor", "gateway-only", models, "ready")).toBe(true);
+  });
   it("requires fallback selection to be executable in the target's authoritative catalog", () => {
     const models: RuntimeModel[] = [
       { id: "ready", label: "Ready", execution_status: "available" },
@@ -64,6 +138,21 @@ describe("execution target model catalog", () => {
       }
     },
   );
+
+  it("refreshes an unknown Cursor catalog before reusing its cached model list", async () => {
+    const pending = { providers: [{ provider: "cursor", model_catalog_status: "unknown", models: [] }] };
+    const ready = { providers: [{ provider: "cursor", model_catalog_status: "ready", models: [{ id: "default", label: "Auto" }] }] };
+    listFleetModels.mockReset().mockResolvedValueOnce(pending).mockResolvedValue(ready);
+    const client = new QueryClient();
+    try {
+      expect(await client.fetchQuery(fleetModelsOptions("ws-cursor"))).toEqual(pending);
+      expect(await client.fetchQuery(fleetModelsOptions("ws-cursor"))).toEqual(ready);
+      expect(await client.fetchQuery(fleetModelsOptions("ws-cursor"))).toEqual(ready);
+      expect(listFleetModels).toHaveBeenCalledTimes(2);
+    } finally {
+      client.clear();
+    }
+  });
 
   it("isolates group models by workspace, group and agent owner context", () => {
     const first = executionTargetModelsOptions("ws", null, "team", "agent-a");

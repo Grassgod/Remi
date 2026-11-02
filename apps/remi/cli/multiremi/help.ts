@@ -85,7 +85,7 @@ Commands:
   wiki diff              Show local Wiki changes against the base snapshot
   wiki push              Three-way merge and write local Wiki changes back
   project knowledge status|backfill|verify|retry-failed [project-id]
-  seed                   Create the default agent (--provider claude|codex|antigravity)
+  seed                   Create the default agent (--provider claude|codex|antigravity|cursor)
   version                Print Multiremi version
   help                   Show this help
 
@@ -106,7 +106,7 @@ Options:
   --output-dir <dir>     Directory for attachment download
   --ref <branch-or-sha>  Branch or commit for repo checkout (memory/wiki commands
                          use --ref <type>:<value> as a citation; see below)
-  --provider <name>      Limit daemon to one provider: claude, codex or antigravity (default: auto-detect)
+  --provider <name>      Limit daemon to one provider: claude, codex, antigravity or cursor (default: auto-detect)
   --accept-antigravity-terms  Accept Google's Antigravity terms for its first download (setup/daemon start)
   --workspace <id>       Workspace id (default: local)
   --responsible-member <id>  Deprecated no-op on issue create/update: Issues no longer designate a human
@@ -148,7 +148,7 @@ Agent edit options:
   --description <text>   Change or clear the description
   --instructions <text>  Change or clear instructions
   --avatar-url <url>     Change or clear the avatar URL
-  --provider <name>      Change engine: claude, codex or antigravity
+  --provider <name>      Change engine: claude, codex, antigravity or cursor
   --model <model>        Change or clear the model override
   --thinking-level <v>   Change or clear the reasoning override
   --visibility <value>   Set private or workspace visibility

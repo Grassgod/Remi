@@ -63,7 +63,6 @@ import {
   EMPTY_CLOUD_RUNTIME_NODE,
   EMPTY_CLOUD_RUNTIME_NODE_LIST,
   EMPTY_FLEET_MODELS,
-  EMPTY_RELAY_CONFIG,
   EMPTY_RUNTIME_DIRECTORY_SCAN_REQUEST,
   EMPTY_RUNTIME_PROVISION_LIST,
   EMPTY_RUNTIME_PROVISION_STATES,
@@ -79,6 +78,7 @@ import {
   type RelayReasoningEngine,
   type RelayEngineProbe,
   RelayEngineProbeSchema,
+  RuntimeModelListRequestSchema,
   type RelayReasoningLevelSaveResult,
   RelayReasoningLevelSaveResultSchema,
   type RelayReasoningLevelsResponse,
@@ -174,7 +174,7 @@ export class RuntimesEndpoints {
   // (hasToken boolean); the fragment is non-secret and returned in full.
   async getRelayConfig(workspaceId: string): Promise<RelayConfigResponse> {
     const raw = await this.http.fetch<unknown>(`/api/workspaces/${workspaceId}/relay-config`);
-    return parseWithFallback(raw, RelayConfigResponseSchema, EMPTY_RELAY_CONFIG, {
+    return parseStrictResponse(raw, RelayConfigResponseSchema, {
       endpoint: "GET /api/workspaces/:id/relay-config",
     });
   }
@@ -188,7 +188,7 @@ export class RuntimesEndpoints {
       method: "PUT",
       body: JSON.stringify(data),
     });
-    return parseWithFallback(raw, RelayConfigResponseSchema, EMPTY_RELAY_CONFIG, {
+    return parseStrictResponse(raw, RelayConfigResponseSchema, {
       endpoint: "PUT /api/workspaces/:id/relay-config/:engine",
     });
   }
@@ -201,9 +201,9 @@ export class RuntimesEndpoints {
     return typeof raw?.token === "string" ? raw.token : "";
   }
 
-  // Explicit "probe now": run gateway discovery once and answer with the fresh
-  // snapshot. Strictly parsed — the caller reports the model/effort counts as
-  // fact, so a drifted body must surface as a contract error, not "0 models".
+  // Gateway probes return a refreshed snapshot. Cursor queues discovery on an
+  // online Runtime and returns its cached catalog with discovery_requested.
+  // Strict parsing keeps malformed model lists from appearing as zero models.
   async probeRelayEngine(workspaceId: string, engine: RelayEngine): Promise<RelayEngineProbe> {
     const raw = await this.http.fetch<unknown>(
       `/api/workspaces/${workspaceId}/relay-config/${engine}/probe`,
@@ -219,7 +219,7 @@ export class RuntimesEndpoints {
   // a per-model upsert where `levels: []` clears the declaration. Both parse
   // strictly: the editor renders these rows as enforcement facts, so a drifted
   // shape must surface as a contract error instead of "not declared".
-  // Antigravity has no reasoning selector, so the server refuses these routes for it.
+  // These administrator declarations are available for Claude and Codex.
   async getRelayReasoningLevels(
     workspaceId: string,
     engine: RelayReasoningEngine,
@@ -760,14 +760,17 @@ export class RuntimesEndpoints {
   }
 
   async initiateListModels(runtimeId: string): Promise<RuntimeModelListRequest> {
-    return this.http.fetch(`/api/runtimes/${runtimeId}/models`, { method: "POST" });
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${runtimeId}/models`, { method: "POST" });
+    return parseStrictResponse(raw, RuntimeModelListRequestSchema, { endpoint: "POST /api/runtimes/:id/models" });
   }
 
   async getListModelsResult(
     runtimeId: string,
     requestId: string,
+    signal?: AbortSignal,
   ): Promise<RuntimeModelListRequest> {
-    return this.http.fetch(`/api/runtimes/${runtimeId}/models/${requestId}`);
+    const raw = await this.http.fetch<unknown>(`/api/runtimes/${runtimeId}/models/${requestId}`, signal ? { signal } : undefined);
+    return parseStrictResponse(raw, RuntimeModelListRequestSchema, { endpoint: "GET /api/runtimes/:id/models/:requestId" });
   }
 
   async initiateListLocalSkills(

@@ -21,6 +21,7 @@ export function taskExecutionTarget(
     thinking_level?: string | null;
   } | null | undefined,
   task: {
+    provider?: string | null;
     executionModel?: string | null;
     execution_model?: string | null;
     executionThinkingLevel?: string | null;
@@ -36,7 +37,8 @@ export function taskExecutionTarget(
   // may not support it, which leaves the task with no Runtime able to claim it
   // and it waits forever instead of recovering. A null level means "whatever
   // the model's own default is", which is exactly what a switched task needs.
-  const runsAgentModel = executionModel == null || executionModel === agentModel;
+  const frozenCursorSelection = task?.provider === "cursor" && executionModel != null;
+  const runsAgentModel = !frozenCursorSelection && (executionModel == null || executionModel === agentModel);
   return {
     model: executionModel ?? agentModel,
     thinkingLevel: explicitLevel

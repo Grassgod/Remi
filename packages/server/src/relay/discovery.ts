@@ -1,13 +1,15 @@
 import { validCodexNativeCatalog } from "@multiremi/contracts/codex-model-catalog.js";
 import { createLogger } from "@shared/logger.js";
 import type { GatewayModelsSnapshot, MultiremiStore, RelayEngine } from "@multiremi/store/store.js";
-import type { MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
+import type { MultiremiRuntime, MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
 import { extractBaseUrl, RELAY_ENGINES, validateGatewayUrl } from "@multiremi/relay/fragment.js";
 import { publicRelayHttpRequest } from "@multiremi/relay/http.js";
+import { fleetModelsResponse } from "@multiremi/store/runtime-model-catalog.js";
 
 const log = createLogger("relay-discovery");
 
-const MODEL_PATH: Record<RelayEngine, string> = {
+type HttpRelayEngine = Exclude<RelayEngine, "cursor">;
+const MODEL_PATH: Record<HttpRelayEngine, string> = {
   claude: "/v1/models",
   codex: "/models",
   antigravity: "/v1beta/models?pageSize=1000",
@@ -160,7 +162,7 @@ async function fetchAntigravityModels(base: string, token: string, httpGet: Http
 }
 
 async function fetchGatewayModels(
-  engine: RelayEngine,
+  engine: HttpRelayEngine,
   base: string,
   token: string,
   httpGet: HttpGet,
@@ -221,6 +223,9 @@ export async function discoverGatewayModels(
   engine: RelayEngine,
   httpGet: HttpGet = defaultHttpGet,
 ): Promise<void> {
+  // Cursor user keys belong to its agent backend. Only the Runtime's native
+  // selector can discover its models; never send these keys to a model-list API.
+  if (engine === "cursor") return;
   const config = store.getRelayConfigForDaemon(workspaceId);
   const engineConfig = config[engine];
   if (!config.modelDiscovery || !engineConfig) return;
@@ -269,6 +274,9 @@ export interface GatewayProbeSnapshot {
   error: string | null;
   models: GatewayProbeModelResponse[];
   last_success_at: string | null;
+  /** Cursor refreshes asynchronously through the Runtime model-list request queue. */
+  discovery_requested?: boolean;
+  discovery_requests?: Array<{ runtime_id: string; request_id: string }>;
 }
 
 /** Browser wire shape for one probed model; mirrors the fleet catalog naming. */
@@ -304,6 +312,9 @@ export function gatewayProbeSnapshot(
   workspaceId: string,
   engine: RelayEngine,
 ): GatewayProbeSnapshot {
+  if (engine === "cursor") {
+    return cursorProbeSnapshot(cursorRuntimes(store, workspaceId));
+  }
   const snapshot = store.getGatewayModels(workspaceId, engine);
   return {
     engine,
@@ -315,6 +326,23 @@ export function gatewayProbeSnapshot(
       ...(model.thinking ? { thinking: thinkingProbeResponse(model.thinking) } : {}),
     })),
     last_success_at: snapshot?.lastSuccessAt ?? null,
+  };
+}
+
+function cursorRuntimes(store: MultiremiStore, workspaceId: string) {
+  return store.listRuntimesForWorkspace(workspaceId)
+    .filter(runtime => runtime.provider === "cursor" && runtime.status === "online");
+}
+
+function cursorProbeSnapshot(runtimes: MultiremiRuntime[]): GatewayProbeSnapshot {
+  const catalog = fleetModelsResponse(runtimes.map(runtime => ({ ...runtime, visibility: "public" })), "local")
+    .find(provider => provider.provider === "cursor");
+  return {
+    engine: "cursor",
+    status: catalog?.model_catalog_status ?? "unknown",
+    error: catalog?.runtime_catalog_error ?? null,
+    models: (catalog?.models ?? []).map(({ id, label, thinking }) => ({ id, label, ...(thinking ? { thinking } : {}) })),
+    last_success_at: null,
   };
 }
 
@@ -332,6 +360,17 @@ export async function probeGatewayModels(
   engine: RelayEngine,
   options: { httpGet?: HttpGet; timeoutMs?: number } = {},
 ): Promise<GatewayProbeSnapshot> {
+  if (engine === "cursor") {
+    const runtimes = cursorRuntimes(store, workspaceId);
+    const snapshot = cursorProbeSnapshot(runtimes);
+    if (!runtimes.length) return {
+      ...snapshot, status: "error", error: "No online Cursor Runtime is available for model discovery", discovery_requested: false, discovery_requests: [],
+    };
+    const discovery_requests = runtimes.map(runtime => ({
+      runtime_id: runtime.id, request_id: store.createRuntimeModelListRequest(runtime.id).id,
+    }));
+    return { ...snapshot, discovery_requested: true, discovery_requests };
+  }
   const { httpGet = defaultHttpGet, timeoutMs = PROBE_TIMEOUT_MS } = options;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {

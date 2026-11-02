@@ -722,6 +722,7 @@ function DiagnosticsCard({
             </div>
             <UpdateSection
               runtimeId={runtime.id}
+              provider={runtime.provider}
               agentVersion={agentVersion}
               acpVersion={acpVersion}
               isOnline={health === "online"}

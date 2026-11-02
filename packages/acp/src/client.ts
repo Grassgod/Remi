@@ -9,6 +9,7 @@ function createLogger(_: string) { return _log; }
 import { resolveAcpProcessLaunch } from "./launch.js";
 import { isolateProcessTmp, mapPrivateTmpPath } from "./private-tmp.js";
 import { AcpRpcError, airMetadata } from "./session-failure.js";
+import { CURSOR_CANCELLED, cursorPlanForm, cursorPlanResult, cursorQuestionForm, cursorQuestionResult } from "./cursor-interactions.js";
 
 import type {
   JsonRpcRequest,
@@ -30,6 +31,7 @@ import type {
   SetSessionModeParams,
   SetSessionConfigOptionParams,
   SetSessionConfigOptionResult,
+  SessionConfigOption,
   CancelParams,
   CancelRequestParams,
   ResumeSessionParams,
@@ -112,6 +114,29 @@ type PendingRequest = {
   resolve: (result: unknown) => void;
   reject: (error: Error) => void;
 };
+
+export interface CursorAvailableModel {
+  value: string;
+  name: string;
+  configOptions: SessionConfigOption[];
+}
+
+function isCursorAvailableModel(value: unknown): value is CursorAvailableModel {
+  if (!value || typeof value !== "object") return false;
+  const model = value as Record<string, unknown>;
+  return typeof model.value === "string" && model.value.length > 0 && typeof model.name === "string"
+    && Array.isArray(model.configOptions) && model.configOptions.every((raw: unknown) => {
+      if (!raw || typeof raw !== "object") return false;
+      const option = raw as Record<string, unknown>;
+      return typeof option.id === "string" && typeof option.name === "string" && option.type === "select"
+        && typeof option.currentValue === "string" && typeof option.category === "string"
+        && Array.isArray(option.options) && option.options.every((item: unknown) => {
+          if (!item || typeof item !== "object") return false;
+          const choice = item as Record<string, unknown>;
+          return typeof choice.value === "string" && typeof choice.name === "string";
+        });
+    });
+}
 
 const slog = createLogger("acp-client");
 const ACP_PROCESS_STOP_GRACE_MS = 1_000;
@@ -496,6 +521,29 @@ export class AcpClient {
   }
 
   private async _handleServerRequest(msg: JsonRpcRequest): Promise<void> {
+    if (this._options.agentType === "cursor" && (msg.method === "cursor/ask_question" || msg.method === "cursor/create_plan")) {
+      this._inflightServerRequests.set(msg.id, () => this._settleServerRequest(msg.id, CURSOR_CANCELLED));
+      try {
+        const sessionId = this._serverSessionId;
+        const handler = this._options.onElicitationRequest;
+        if (!sessionId || !handler) {
+          this._settleServerRequest(msg.id, CURSOR_CANCELLED);
+          return;
+        }
+        if (msg.method === "cursor/ask_question") {
+          const params = msg.params as Parameters<typeof cursorQuestionForm>[1];
+          const result = await handler(cursorQuestionForm(sessionId, params));
+          this._settleServerRequest(msg.id, cursorQuestionResult(params, result));
+        } else {
+          const params = msg.params as Parameters<typeof cursorPlanForm>[1];
+          const result = await handler(cursorPlanForm(sessionId, params));
+          this._settleServerRequest(msg.id, cursorPlanResult(result));
+        }
+      } catch {
+        this._settleServerRequest(msg.id, CURSOR_CANCELLED);
+      }
+      return;
+    }
     if (msg.method === "session/request_permission") {
       const params = msg.params as RequestPermissionParams;
       const toolName = params.toolCall?._meta?.claudeCode?.toolName ?? params.toolCall?.title ?? "unknown";
@@ -618,6 +666,7 @@ export class AcpClient {
         // a session's current effort, which can survive a model switch.
         _meta: {
           terminal_output: true,
+          ...(this._options.agentType === "cursor" ? { parameterizedModelPicker: true } : {}),
           ...(this._options.agentType === "codex"
             ? { jetbrains: { air: air(["recommendedValue", "sessionFailure"]) } }
             : { "subagent-transcript": true, jetbrains: { air: air(["sessionFailure"]) } }),
@@ -713,6 +762,18 @@ export class AcpClient {
     return this._request<SetSessionConfigOptionResult>("session/set_config_option", params);
   }
 
+  /** Cursor's native catalog includes each model's default parameter options without selecting it. */
+  async listCursorModels(): Promise<CursorAvailableModel[]> {
+    const result = await this._request<unknown>("cursor/list_available_models", {});
+    if (!result || typeof result !== "object" || !Array.isArray((result as Record<string, unknown>).models)) {
+      throw new Error("Cursor returned invalid model capabilities");
+    }
+    const models = (result as { models: unknown[] }).models;
+    if (!models.length) throw new Error("Cursor did not advertise any models");
+    if (!models.every(isCursorAvailableModel)) throw new Error("Cursor returned invalid model capabilities");
+    return models;
+  }
+
   async cancel(sessionId: string): Promise<void> {
     const params: CancelParams = { sessionId };
     this._notify("session/cancel", params);
@@ -768,6 +829,10 @@ export class AcpClient {
   }
 
   async closeSession(sessionId: string): Promise<void> {
+    if (this._options.agentType === "cursor" && !this._initializeResult?.agentCapabilities?.sessionCapabilities?.close) {
+      if (this._serverSessionId === sessionId) this._serverSessionId = null;
+      return;
+    }
     const params: CloseSessionParams = { sessionId };
     await this._request("session/close", params);
     if (this._serverSessionId === sessionId) this._serverSessionId = null;

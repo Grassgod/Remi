@@ -23,10 +23,10 @@ const AUTH_TOKEN = "timeline-pagination-test-token";
 const AUTH_HEADERS = { Authorization: `Bearer ${AUTH_TOKEN}` };
 
 function setCommentTime(db: Database, id: string, createdAt: string): void {
-  db.run(
-    "UPDATE multiremi_issue_comments SET created_at = ?, updated_at = ? WHERE id = ?",
-    [createdAt, createdAt, id],
-  );
+  const result = db.query(
+    "UPDATE multiremi_conversation_log SET created_at = ?, updated_at = ? WHERE id = ?",
+  ).run(createdAt, createdAt, id);
+  expect(result.changes).toBe(1);
 }
 
 describe("issue timeline reverse pagination", () => {
@@ -98,7 +98,7 @@ describe("issue timeline reverse pagination", () => {
     expect(new Set(allIds).size).toBe(allIds.length);
   });
 
-  it("uses conversation sequence when entries share created_at and handles exact page division", async () => {
+  it("uses ID order when entries share created_at and handles exact page division", async () => {
     const { store, db } = createStore();
     const app = createMultiremiApp({ store, authToken: AUTH_TOKEN });
     const issue = createResponsibleTestIssue(store, { title: "Cursor ties", workspaceId: "local" });
@@ -108,7 +108,7 @@ describe("issue timeline reverse pagination", () => {
       body: `tie-${index}`,
     }));
     for (const comment of comments) setCommentTime(db, comment.id, "2026-09-05T01:00:00.000Z");
-    const ascendingIds = comments.map((comment) => comment.id);
+    const ascendingIds = comments.map((comment) => comment.id).sort();
 
     const first = await (await app.request(
       `/api/issues/${issue.id}/timeline?issue_session_id=${session.id}&limit=2`,

@@ -47,12 +47,12 @@ export interface IssueSessionProviderHome {
   storageRoot: string;
   /** Workspace-visible lineage root for one provider lane generation. */
   root: string;
-  /** Actual CLAUDE_CONFIG_DIR/CODEX_HOME. Native history is written here. */
+  /** Provider configuration and native history; Cursor also launches from here. */
   home: string;
   sessionId: string;
   agentId: string;
   generation: number;
-  provider: "claude" | "codex" | "antigravity";
+  provider: "claude" | "codex" | "antigravity" | "cursor";
   /** Codex execution identity. Different Plugin sets must never share a Home. */
   executionFingerprint?: string;
 }
@@ -122,7 +122,7 @@ export function resolveTaskProviderHome(
 ): IssueSessionProviderHome | null {
   const lane = laneForTask(task);
   const provider = task.agent?.provider;
-  if (!lane || (provider !== "claude" && provider !== "codex" && provider !== "antigravity")) return null;
+  if (!lane || (provider !== "claude" && provider !== "codex" && provider !== "antigravity" && provider !== "cursor")) return null;
   const storageRoot = resolve(workspacesRoot);
   const generationRoot = laneGenerationDirectory(storageRoot, lane);
   const execution = provider === "codex" || (provider === "claude" && task.claudeProfile) ? providerExecutionIdentity(task) : null;
@@ -283,6 +283,22 @@ export async function prepareIssueSessionProviderHome(
   // The lineage root may be genuine while its home child has been replaced by
   // a link. Validate the whole path before reading its marker or reconciling.
   await ensureOwnedDirectory(resolvedHome.storageRoot, resolvedHome.home, "Provider Home");
+  if (resolvedHome.provider === "cursor") {
+    // Cursor keeps native sessions under CURSOR_DATA_DIR and reads Remi's
+    // instructions/skills from this private launch directory. Credentials stay
+    // in the child environment and its in-memory credential store.
+    const configPath = join(resolvedHome.home, "cli-config.json");
+    const configText = await readTextFileForReconcile(configPath);
+    const config = configText === null ? {} : parseJsonObject(configText, configPath);
+    // Remi owns the installed version. Preserve Cursor's native model settings
+    // while preventing its updater from replacing the pinned executable.
+    await writePrivateFileIfChanged(configPath, `${JSON.stringify({ ...config, channel: "static" }, null, 2)}\n`);
+    await writePrivateFileIfChanged(join(resolvedHome.root, "meta.json"), JSON.stringify({
+      schemaVersion: 1, provider: "cursor", sessionId: resolvedHome.sessionId,
+      agentId: resolvedHome.agentId, generation: resolvedHome.generation, providerHome: "home",
+    }) + "\n");
+    return {};
+  }
   if (resolvedHome.provider === "antigravity") {
     // GEMINI_HOME: the server's native transcripts plus Remi task context. It
     // never holds credentials (gateway auth goes through the daemon shim); its
@@ -744,6 +760,17 @@ export async function loadIssueSessionProviderEnv(
   options: IssueSessionProviderEnvOptions = {},
 ): Promise<Record<string, string>> {
   if (resolvedHome.provider === "antigravity") return {};
+  if (resolvedHome.provider === "cursor") {
+    const authoritative = options.relayFragment !== undefined || options.relayAuthToken !== undefined;
+    const fragment = options.relayFragment?.trim() ? JSON.parse(options.relayFragment) as { base_url?: string } : {};
+    const apiKey = authoritative ? options.relayAuthToken?.trim() ?? "" : process.env.CURSOR_API_KEY?.trim() ?? "";
+    return {
+      CURSOR_API_KEY: apiKey,
+      CURSOR_AUTH_TOKEN: "",
+      CURSOR_API_ENDPOINT: (authoritative ? fragment.base_url?.trim() : process.env.CURSOR_API_ENDPOINT?.trim()) || "https://api2.cursor.sh",
+      ...(apiKey ? { AGENT_CLI_CREDENTIAL_STORE: "memory" } : {}),
+    };
+  }
   if (resolvedHome.provider === "claude") {
     const relayAuthoritative = options.relayFragment !== undefined
       || options.relayAuthToken !== undefined;

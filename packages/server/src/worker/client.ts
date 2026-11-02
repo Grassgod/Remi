@@ -101,6 +101,7 @@ export interface MultiremiRelayWire {
   codex: MultiremiRelayEngineWire | null;
   /** Antigravity gateway: JSON `{base_url, default_model}` plus the gateway key. Absent from servers that predate the engine. */
   antigravity?: MultiremiRelayEngineWire | null;
+  cursor?: MultiremiRelayEngineWire | null;
   model_discovery?: boolean;
 }
 

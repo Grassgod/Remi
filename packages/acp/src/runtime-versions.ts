@@ -10,7 +10,7 @@ export const BRIDGE_PACKAGE = {
   claude: "@agentclientprotocol/claude-agent-acp",
   codex: "@agentclientprotocol/codex-acp",
 } as const;
-/** Providers whose runtime is an npm bundle. Antigravity is a per-machine download, pinned separately. */
+/** Providers whose runtime is an npm bundle. Native archives are pinned separately. */
 export type RuntimeProvider = keyof typeof BRIDGE_PIN;
 export interface RuntimeVersions { acp: string; sdk: string; executable: string }
 
@@ -40,6 +40,48 @@ export interface AntigravityPin {
 
 /** The Google Antigravity ACP server this release was tested with (`release:pin-antigravity`). */
 export const ANTIGRAVITY_PIN: AntigravityPin = snapshot.antigravity as AntigravityPin;
+
+export const CURSOR_PLATFORM_KEYS = ["darwin-arm64", "darwin-x64", "linux-x64", "linux-arm64"] as const;
+export type CursorPlatformKey = typeof CURSOR_PLATFORM_KEYS[number];
+export interface CursorArtifact {
+  /** Official Cursor archive, downloaded directly on the runtime machine. */
+  url: string;
+  /** Recorded from the official archive during release preparation. */
+  sha256: string;
+  bytes: number;
+}
+export interface CursorPin {
+  version: string;
+  artifacts: Partial<Record<CursorPlatformKey, CursorArtifact>>;
+}
+export const CURSOR_PIN: CursorPin = snapshot.cursor as CursorPin;
+
+export function isCursorVersion(value: unknown): value is string {
+  if (typeof value !== "string" || !/^\d{4}\.\d{2}\.\d{2}-[a-f0-9]{7,40}$/.test(value)) return false;
+  const date = value.slice(0, 10).replaceAll(".", "-");
+  const timestamp = Date.parse(`${date}T00:00:00Z`);
+  return Number.isFinite(timestamp) && new Date(timestamp).toISOString().startsWith(date);
+}
+
+export function cursorPinProblem(value: unknown): string | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "cursor pin is missing";
+  const pin = value as Record<string, unknown>;
+  if (!isCursorVersion(pin.version)) return "cursor.version must be a dated Cursor build version";
+  if (!pin.artifacts || typeof pin.artifacts !== "object" || Array.isArray(pin.artifacts)) return "cursor.artifacts is missing";
+  const artifacts = pin.artifacts as Record<string, unknown>;
+  if (!Object.keys(artifacts).length) return "cursor.artifacts is empty";
+  for (const [platform, raw] of Object.entries(artifacts)) {
+    if (!(CURSOR_PLATFORM_KEYS as readonly string[]).includes(platform)) return `cursor: unknown platform ${platform}`;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return `cursor.${platform} must be an object`;
+    const artifact = raw as Record<string, unknown>;
+    const [os, arch] = platform.split("-");
+    const expected = `https://downloads.cursor.com/lab/${pin.version}/${os}/${arch}/agent-cli-package.tar.gz`;
+    if (artifact.url !== expected) return `cursor.${platform}.url must be the official ${pin.version} archive`;
+    if (typeof artifact.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(artifact.sha256)) return `cursor.${platform}.sha256 must be 64 lowercase hex characters`;
+    if (!Number.isSafeInteger(artifact.bytes) || (artifact.bytes as number) <= 0) return `cursor.${platform}.bytes must be a positive integer`;
+  }
+  return null;
+}
 
 /** Why `value` is not a valid Antigravity pin, or null when it is. */
 export function antigravityPinProblem(value: unknown): string | null {

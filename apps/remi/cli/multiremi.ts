@@ -81,6 +81,7 @@ import {
   daemonAlive,
   daemonSupervisorReady,
   isSupportedDaemonProvider,
+  prepareCursorDaemonRuntime,
   requestDaemonShutdown,
   resolveHealthyDaemonProviders,
   sleep,
@@ -283,6 +284,10 @@ async function setup(options: CliOptions, programName: string): Promise<boolean>
     : [...SUPPORTED_DAEMON_PROVIDERS]).filter((provider): provider is ProvisionProvider => provider === "claude" || provider === "codex");
   ensureAcpBridges(provisionTargets, (m) => console.log(`  ${m}`));
   await ensureExplicitAntigravity(options, next.provider);
+  await prepareCursorDaemonRuntime({
+    provider: next.provider && isSupportedDaemonProvider(next.provider) ? next.provider : null,
+    serverUrl: next.server_url, workspaceId: next.workspace_id, token: next.token,
+  });
   if (!next.token) {
     console.log("Token is not set. Run:");
     console.log("  remi login --token <YOUR_TOKEN>");
@@ -411,6 +416,11 @@ export async function resolveWorkerDaemons(
   ensureAcpBridges((requestedProvider ? [requestedProvider] : [...SUPPORTED_DAEMON_PROVIDERS])
     .filter((provider): provider is ProvisionProvider => provider === "claude" || provider === "codex"));
   await ensureExplicitAntigravity(options, requestedProvider);
+  await prepareCursorDaemonRuntime({
+    provider: requestedProvider, serverUrl,
+    workspaceId: configuredWorkerWorkspaceId(options, config) ?? "local",
+    token: stringOpt(options.token, process.env.MULTIREMI_TOKEN) ?? config.token,
+  });
   const providers = await resolveHealthyDaemonProviders(requestedProvider);
   if (providers.length === 0) return [];
 

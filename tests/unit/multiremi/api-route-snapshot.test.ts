@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   captureApiSnapshot,
   GOLDEN_PATH,
@@ -105,15 +107,14 @@ describe("api route golden snapshot", () => {
     expect(scrub("cwd=/root, home=/root;")).toBe("cwd=<home>, home=<home>;");
   });
 
-  // Rules must be longest-needle-first, not declaration-ordered: on a box whose
-  // $TMPDIR is /tmp, a $HOME of /tmp/alice is nested under it, and the shorter
-  // rule winning would leave the machine-specific username behind.
+  // The home prefix is nested under the temporary directory. The longest
+  // match must win so the shorter prefix cannot leave the username behind.
   it("applies the longest matching path prefix", () => {
-    const identity = { hostname: "unknown", username: "unknown", homedir: "/tmp/alice" };
+    const identity = { hostname: "unknown", username: "unknown", homedir: join(tmpdir(), "alice") };
 
-    expect(scrubString("/tmp/alice/private", identity)).toBe("<home>/private");
-    expect(scrubString("/tmp/other/private", identity)).toBe("<tmp>/other/private");
-    expect(scrubString("/tmp/alice", identity)).toBe("<home>");
+    expect(scrubString(join(identity.homedir, "private"), identity)).toBe(join("<home>", "private"));
+    expect(scrubString(join(tmpdir(), "other", "private"), identity)).toBe(join("<tmp>", "other", "private"));
+    expect(scrubString(identity.homedir, identity)).toBe("<home>");
   });
 
   // A replacement token must not become a delimiter for the next rule, or one

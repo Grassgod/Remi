@@ -7,8 +7,10 @@
 import { accessSync, constants } from "node:fs";
 import { delimiter, join } from "node:path";
 import { createRuntimeProvider, installedAntigravity } from "@acp/index.js";
+import { cursorHealthProblem, ensureCursorAgent, installedUserCursorAgentExecutable } from "@acp/cursor-install.js";
+import { MultiremiDaemonClient, type MultiremiRelayWire } from "@multiremi/worker/client.js";
 
-export const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex", "antigravity"] as const;
+export const SUPPORTED_DAEMON_PROVIDERS = ["claude", "codex", "antigravity", "cursor"] as const;
 
 export type SupportedDaemonProvider = typeof SUPPORTED_DAEMON_PROVIDERS[number];
 
@@ -127,6 +129,7 @@ export function detectMultiremiProviders(options: {
   canExecute?: (path: string) => boolean;
   /** Antigravity is opt-in: a candidate only when the release's pinned server is installed. */
   antigravityInstalled?: () => boolean;
+  cursorInstalled?: () => boolean;
 } = {}): SupportedDaemonProvider[] {
   const pathEnv = options.pathEnv ?? process.env.PATH ?? "";
   const canExecute = options.canExecute ?? isExecutable;
@@ -135,13 +138,49 @@ export function detectMultiremiProviders(options: {
   return SUPPORTED_DAEMON_PROVIDERS.filter((provider) => {
     // Never `agy` on PATH: that CLI integration is retired.
     if (provider === "antigravity") return (options.antigravityInstalled ?? (() => installedAntigravity() !== null))();
+    if (provider === "cursor" && (options.cursorInstalled
+      ? options.cursorInstalled()
+      : options.pathEnv === undefined && options.canExecute === undefined
+        && (cursorHealthProblem() === null || installedUserCursorAgentExecutable() !== null))) return true;
     const commands = provider === "claude"
       ? ["remi-claude-agent-acp", "claude-agent-acp", "claude"]
-      : ["codex-acp", "codex"];
+      : provider === "cursor" ? ["cursor-agent"] : ["codex-acp", "codex"];
     return paths.some((dir) => commands.some((command) => {
       return extensions.some((extension) => canExecute(join(dir, `${command}${extension}`)));
     }));
   });
+}
+
+/** Prepare Cursor before provider health checks and Runtime registration. */
+export async function prepareCursorDaemonRuntime(
+  input: { provider: SupportedDaemonProvider | null; serverUrl: string; workspaceId: string; token?: string | null },
+  deps: {
+    detectProviders?: () => readonly string[];
+    readRelay?: () => Promise<MultiremiRelayWire | undefined>;
+    ensureCursor?: () => Promise<unknown>;
+    log?: (message: string) => void;
+  } = {},
+): Promise<boolean> {
+  if (input.provider && input.provider !== "cursor") return false;
+  const log = deps.log ?? ((message: string) => console.error(`[runtime] ${message}`));
+  let selected = input.provider === "cursor" || (deps.detectProviders ?? detectMultiremiProviders)().includes("cursor");
+  if (!selected) {
+    try {
+      // This bootstrap endpoint is available before any Runtime exists. Its
+      // relay response already enforces the workspace administrator boundary.
+      const relay = deps.readRelay
+        ? await deps.readRelay()
+        : (await new MultiremiDaemonClient(input.serverUrl, input.token, { requestTimeoutMs: 10_000 })
+          .getWorkspaceRepos(input.workspaceId)).relay;
+      selected = Boolean(relay?.cursor?.auth_token?.trim());
+    } catch {
+      log("Could not read workspace Cursor configuration; continuing with locally available providers.");
+    }
+  }
+  if (!selected) return false;
+  if (deps.ensureCursor) await deps.ensureCursor();
+  else await ensureCursorAgent({ log });
+  return true;
 }
 
 export async function resolveHealthyDaemonProviders(explicitProvider: SupportedDaemonProvider | null): Promise<SupportedDaemonProvider[]> {

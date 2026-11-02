@@ -860,7 +860,13 @@ describe("MultiremiTaskReportOutbox", () => {
     const backup = `${sourcePath}.migrated-v2`;
     const preserved = readFileSync(backup);
     await first.close();
+    // Restore the complete closed SQLite file set to model a crash before rename.
     copyFileSync(backup, sourcePath);
+    for (const suffix of ["-wal", "-shm"]) {
+      if (existsSync(`${backup}${suffix}`)) {
+        copyFileSync(`${backup}${suffix}`, `${sourcePath}${suffix}`);
+      }
+    }
     const delivered: string[] = [];
     const restarted = track(new MultiremiTaskReportOutbox({ path, canSend: () => false,
       deliver: async record => { delivered.push(record.taskId); } }));

@@ -20,8 +20,9 @@
 
 1. **两部分。** 每个尝试由 [buildTaskPromptArtifact](../../packages/daemon/src/agent-runtime/prompts/ephemeral.ts) 产出两样东西：`instructions` 是会话里不变的内容，写进 provider 自己的指令文件；`prompt` 是本轮新输入，也是唯一发给 provider 的文字。Chat 和 Issue 都不再区分 bootstrap 与 delta。provider 会话是新开还是续接只作为事实记录在 prompt 记录的 `mode` 里，不改变内容。
 
-2. **指令文件。** daemon 在每次启动 provider 之前写会话 provider home 里的 `AGENTS.md`：Claude 是 `CLAUDE_CONFIG_DIR`，Codex 是 `CODEX_HOME`，Antigravity 是 `GEMINI_HOME`。
+2. **指令文件。** daemon 在每次启动 provider 之前写会话 provider home 里的 `AGENTS.md`：Claude 是 `CLAUDE_CONFIG_DIR`，Codex 是 `CODEX_HOME`，Antigravity 是 `GEMINI_HOME`，Cursor 使用同一私有目录作为 `CURSOR_CONFIG_DIR`、`CURSOR_DATA_DIR` 和进程启动目录。
    - Claude 只读配置目录里的 `CLAUDE.md`，单独放 `AGENTS.md` 会被忽略，因此再写一个只有 `@AGENTS.md` 的 `CLAUDE.md`。Antigravity server 不读这个文件，由 adapter 在新建、加载、续接会话时把它追加到系统提示词。
+   - Cursor ACP 从进程启动目录加载指令和 Skill，文件与 shell 工具使用 `session/new` / `session/load` 的实际执行目录。daemon 在工作区准备完成后读取该目录的项目指令和规则，再写入私有 `AGENTS.md`；具体规则加载方式与限制见 [Cursor Runtime](../cursor.md)。
    - 只写 daemon 自己的 provider home，从不写用户的工作目录或本地项目目录。文件先写临时文件再改名替换，内容没变就不写。第一行是 Remi 的标记注释；内容为空时只删除带这个标记的文件，不碰别人的文件；遇到软链接或硬链接一律拒绝写入。
    - 全文上限 48 KiB：Runtime 工作区本地上下文仍限 24 KiB，Remi 的部分最多 32 KiB。超出时先截短用户自己写的部分（Agent instructions、工作区提示词、Issue 描述、Project 说明等），每段截短处写明读取全文的命令。
    - 实测（claude-agent-acp 0.91.0 / Claude Code 2.1.301，codex-acp 2.2.2 / codex 0.163.0）：Claude 在一个进程内固定使用启动时读到的指令，在新进程续接时读到修改。Remi 每轮新开进程续接，所以下一轮就能看到。Codex 每轮都重新读 `$CODEX_HOME/AGENTS.md`，同一进程内和续接后都会读。PR 6 驻留的进程不重读，因此驻留接手的启动指纹包含这份文件的哈希，文件变了就换新进程。
@@ -56,6 +57,7 @@
      - daemon 自己的执行目录：Claude 用 `.claude/skills`，Codex 用 `.agents/skills`。
      - 工作目录是用户自己的文件夹时（Runtime 工作区、Project 的 `local_directory`），Skill 写到 provider home：Claude 的 `CLAUDE_CONFIG_DIR/skills`，Codex 的 `CODEX_HOME/skills`，清单也在那里，用户文件夹里不出现任何 Skill 文件。离线核对：codex 0.163 的 app-server `skills/list` 把 `CODEX_HOME/skills` 里 Remi 写的 Skill 列为 user scope、已启用、无错误。
      - Antigravity 保持原来的 `.agents/skills`。
+     - Cursor 的 Agent Skill 始终写入私有 provider home 的 `.cursor/skills`，供其启动目录扫描；Cursor CLI 还会读取机器上的个人 Skill，其原生加载器没有关闭整个个人目录的配置。
    - 每个 Skill 整体重写；Agent 不再拥有的 Skill 按清单 `.remi-skills.json` 删除。只写入、只删除 Remi 创建并记入清单的目录：目录里原有的同名 Skill（provider 自带、agent 或用户自己的）原样保留，Remi 的同名 Skill 不装。
    - [ADR 0025](0025-chat-slash-commands.md) 决策 7 修订：Remi 生成的 `SKILL.md` 的 `name` 写目录名而不是平台上的显示名，`/目录名`（Codex 是 `$目录名`）就能调用；名字含非 ASCII 字符的 Skill 目录名带上名字的短哈希，原名写在 `description` 开头。
    - Codex 0.163 总会加载用户的 `$HOME/.agents/skills`，没有关闭整个目录的开关。因此会话 `config.toml` 每次启动都按路径为其中每个 Skill 写 `[[skills.config]] enabled = false`，`HOME` 不变。

@@ -264,21 +264,33 @@ const ModelThinkingSchema = z.object({
   default_level: z.string().optional(),
 });
 
+const RuntimeModelSchema = z.object({
+  id: z.string(),
+  label: z.string().default(""),
+  provider: z.string().optional(),
+  default: z.boolean().optional(),
+  execution_status: z.enum(["available", "unavailable", "unknown"]).catch("unknown").optional(),
+  thinking: ModelThinkingSchema.optional(),
+}).loose();
+
+export const RuntimeModelListRequestSchema = z.object({
+  id: z.string().min(1),
+  runtime_id: z.string().min(1),
+  status: z.enum(["pending", "running", "completed", "failed", "timeout"]),
+  models: z.array(RuntimeModelSchema).default([]),
+  supported: z.boolean().default(true),
+  error: z.string().nullable().optional().transform((value) => value ?? undefined),
+  created_at: z.string().default(""),
+  updated_at: z.string().default(""),
+}).loose();
+
 const FleetProviderModelsSchema = z.object({
   provider: z.string(),
   model_catalog_status: z.enum(["ready", "error", "unknown"]).catch("unknown").optional(),
   online_runtime_count: z.number().default(0),
+  default_model: z.string().optional(),
   default_thinking: ModelThinkingSchema.optional(),
-  models: z.array(
-    z.object({
-      id: z.string(),
-      label: z.string().default(""),
-      provider: z.string().optional(),
-      default: z.boolean().optional(),
-      execution_status: z.enum(["available", "unavailable", "unknown"]).catch("unknown").optional(),
-      thinking: ModelThinkingSchema.optional(),
-    }).loose(),
-  ).default([]),
+  models: z.array(RuntimeModelSchema).default([]),
 }).loose();
 
 export const FleetModelsResponseSchema = z.object({
@@ -292,9 +304,9 @@ export const EMPTY_FLEET_MODELS: FleetModelsResponse = { providers: [] };
 // ---------------------------------------------------------------------------
 
 /** Every engine the workspace model gateway holds a config for. */
-export type RelayEngine = "claude" | "codex" | "antigravity";
+export type RelayEngine = "claude" | "codex" | "cursor" | "antigravity";
 /** Engines whose gateway models accept administrator-declared reasoning levels. */
-export type RelayReasoningEngine = Exclude<RelayEngine, "antigravity">;
+export type RelayReasoningEngine = Exclude<RelayEngine, "antigravity" | "cursor">;
 
 const RelayEngineConfigSchema = z.object({
   fragment: z.string().default(""),
@@ -305,6 +317,7 @@ const RelayEngineConfigSchema = z.object({
 export const RelayConfigResponseSchema = z.object({
   claude: RelayEngineConfigSchema.default(null),
   codex: RelayEngineConfigSchema.default(null),
+  cursor: RelayEngineConfigSchema.default(null),
   // Older servers omit the engine; it then reads as unconfigured.
   antigravity: RelayEngineConfigSchema.default(null),
   modelDiscovery: z.boolean().default(false),
@@ -314,12 +327,12 @@ export type RelayConfigResponse = z.infer<typeof RelayConfigResponseSchema>;
 
 export type RelayEngineConfig = z.infer<typeof RelayEngineConfigSchema>;
 
-export const EMPTY_RELAY_CONFIG: RelayConfigResponse = { claude: null, codex: null, antigravity: null, modelDiscovery: false };
+export const EMPTY_RELAY_CONFIG: RelayConfigResponse = { claude: null, codex: null, cursor: null, antigravity: null, modelDiscovery: false };
 
 // Explicit gateway probe (`POST /api/workspaces/:id/relay-config/:engine/probe`).
-// The server answers with the snapshot it just refreshed: `status` is `error`
-// when the last attempt failed (models may still carry the last success),
-// `ready` when a success was recorded and `unknown` when nothing has run yet.
+// Gateway probes return refreshed snapshots; Cursor acknowledges an asynchronous
+// Runtime refresh and returns its current catalog. Models may retain the last
+// successful result when status is error.
 const RelayProbeModelSchema = z.object({
   id: z.string(),
   label: z.string().default(""),
@@ -332,6 +345,11 @@ export const RelayEngineProbeSchema = z.object({
   error: z.string().nullable().default(null),
   models: z.array(RelayProbeModelSchema).default([]),
   last_success_at: z.string().nullable().default(null),
+  discovery_requested: z.boolean().optional(),
+  discovery_requests: z.array(z.object({
+    runtime_id: z.string().min(1),
+    request_id: z.string().min(1),
+  })).optional(),
 }).loose();
 
 export type RelayEngineProbeModel = z.infer<typeof RelayProbeModelSchema>;

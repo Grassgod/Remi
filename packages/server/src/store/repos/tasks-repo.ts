@@ -17,6 +17,7 @@ import { taskUsageProjection } from "@multiremi/store/usage-projection.js";
 import { assertQuestionCardToken, hashQuestionCardToken, QuestionCardTokenError, type QuestionCardCredential } from "@multiremi/store/question-card-token.js";
 import type { DaemonTaskCompletionFields } from "@multiremi/contracts/daemon-protocol.js";
 import { agentAtTaskTarget, taskExecutionScope, taskExecutionTarget, RELAY_EXECUTION_SCOPE_PREFIX } from "@multiremi/contracts/task-execution.js";
+import { cursorExecutionModel } from "@multiremi/store/runtime-model-catalog.js";
 import type { EnvelopeWake } from "@multiremi/contracts/inbox.js";
 import type { EnvelopeDelivery } from "./inbox-repo.js";
 import { envelopeSummary } from "../envelope-body.js";
@@ -126,6 +127,7 @@ import type {
 } from "@multiremi/contracts/types.js";
 
 import { RuntimeWorkspacesRepo, RuntimeWorkspaceError } from "./runtime-workspaces-repo.js";
+import { WorkspacesRepo } from "./workspaces-repo.js";
 import { lockIssueRowWithinTransaction } from "../issue-row-lock.js";
 import { recordLaneSlashCommandsWithinTransaction } from "../slash-commands.js";
 
@@ -219,7 +221,7 @@ const TRANSIENT_RETRY_MAX_HONOURED_MS = 30 * 60 * 1000;
  * the store honoured would route and freeze the fallback model and then hand
  * the daemon the Agent's primary one. See @shared/contracts/task-execution.js.
  */
-type TaskExecutionTargetFields = Pick<MultiremiTask, "executionModel" | "executionThinkingLevel">;
+type TaskExecutionTargetFields = Pick<MultiremiTask, "provider" | "executionModel" | "executionThinkingLevel">;
 
 /** Key identifying one (Agent, model, effort) execution target for claim
  *  exclusion. Distinct tasks of one Agent may target different models. */
@@ -272,7 +274,7 @@ function effectiveTaskModelSql(): string {
  *  the JS resolver a recovered task would be excluded from every Runtime. */
 function effectiveTaskThinkingSql(): string {
   return `CASE WHEN NULLIF(t.execution_model, '') IS NOT NULL
-                 AND NULLIF(t.execution_model, '') <> COALESCE(NULLIF(a.model, ''), '')
+                 AND (t.provider = 'cursor' OR NULLIF(t.execution_model, '') <> COALESCE(NULLIF(a.model, ''), ''))
           THEN COALESCE(NULLIF(t.execution_thinking_level, ''), '')
           ELSE COALESCE(NULLIF(t.execution_thinking_level, ''), NULLIF(a.thinking_level, ''), '')
          END`;
@@ -1269,7 +1271,7 @@ export class TasksRepo {
     const rows = this.ctx.db.query(
       `SELECT id, agent_id, runtime_id, issue_id, issue_session_id, chat_session_id,
               runtime_workspace_id, holds_workspace, workspace_id, work_dir, created_at, wait_reason,
-              attempt, execution_fingerprint,
+              attempt, execution_fingerprint, provider,
               execution_model, execution_thinking_level
          FROM multiremi_turn_execution_records
         WHERE status = 'queued' AND created_at <= ?`,
@@ -1279,7 +1281,7 @@ export class TasksRepo {
       runtime_workspace_id: string | null; holds_workspace: unknown;
       workspace_id: string | null; work_dir: string | null;
       created_at: string; wait_reason: string | null;
-      attempt: unknown; execution_fingerprint: string | null;
+      attempt: unknown; execution_fingerprint: string | null; provider: string | null;
       execution_model: string | null; execution_thinking_level: string | null;
     }>;
     const result = { updated: 0, alerted: 0 };
@@ -1328,12 +1330,13 @@ export class TasksRepo {
         // actually run on, and refusal there is a capability wait, not a
         // placement conflict.
         const decisionKey = JSON.stringify([
-          row.agent_id, row.runtime_id ?? "", row.execution_model ?? "", row.execution_thinking_level ?? "",
+          row.agent_id, row.runtime_id ?? "", row.provider ?? "", row.execution_model ?? "", row.execution_thinking_level ?? "",
         ]);
         let decision = decisions.get(decisionKey);
         if (!decision) {
           const agent = this.ctx.agents().getAgent(row.agent_id);
           const target = agent ? taskExecutionTarget(agent, {
+            provider: row.provider,
             executionModel: row.execution_model,
             executionThinkingLevel: row.execution_thinking_level,
           }) : { model: null, thinkingLevel: null };
@@ -1375,7 +1378,7 @@ export class TasksRepo {
       if (claimable.length > 0) {
         // Model capability is only meaningful for machines that could claim it.
         const decisionKey = JSON.stringify([
-          row.agent_id,
+          row.agent_id, row.provider ?? "",
           claimable.map((verdict) => verdict.runtimeId).sort(),
           row.execution_model ?? "", row.execution_thinking_level ?? "",
         ]);
@@ -1383,6 +1386,7 @@ export class TasksRepo {
         if (!decision) {
           const agent = this.ctx.agents().getAgent(row.agent_id);
           const target = agent ? taskExecutionTarget(agent, {
+            provider: row.provider,
             executionModel: row.execution_model,
             executionThinkingLevel: row.execution_thinking_level,
           }) : { model: null, thinkingLevel: null };
@@ -3224,7 +3228,7 @@ export class TasksRepo {
          JOIN multiremi_turn_execution_records t ON t.agent_id = a.id
          WHERE a.workspace_id = ? AND t.status IN ('queued', 'dispatched')
            AND t.codex_profile IS NULL AND t.claude_profile IS NULL
-           AND (a.execution_group_id IS NOT NULL
+           AND (a.provider = 'cursor' OR a.execution_group_id IS NOT NULL
              OR NULLIF(a.model, '') IS NOT NULL OR NULLIF(a.thinking_level, '') IS NOT NULL
              OR NULLIF(t.execution_model, '') IS NOT NULL OR NULLIF(t.execution_thinking_level, '') IS NOT NULL)`,
       ).all(lockedRuntime.workspaceId ?? "local") as Array<{
@@ -3454,6 +3458,10 @@ export class TasksRepo {
     }
 
     const pluginSnapshot = this.ctx.agentPlugins().resolveAgentPluginSnapshot(currentAgent.id);
+    const cursorTarget = provider === "cursor" ? taskExecutionTarget(currentAgent, task) : null;
+    const executionModel = cursorTarget
+      ? cursorExecutionModel(new WorkspacesRepo(this.ctx), currentAgent.workspaceId, cursorTarget.model) : task.executionModel;
+    const executionThinkingLevel = cursorTarget ? cursorTarget.thinkingLevel : task.executionThinkingLevel;
     const runtimeProfile = this.runtimeProfileForAgent(runtime.id, currentAgent, task);
     const chat = task.chatSessionId && !task.issueId ? this.ctx.chat().getChatSession(task.chatSessionId) : null;
     const executionFingerprint = this.chatExecutionFingerprint(withRuntimeProfileFingerprint(
@@ -3517,6 +3525,7 @@ export class TasksRepo {
     }
     runTurnExecutionMutation(this.ctx.db, `UPDATE multiremi_turn_execution_records
        SET provider = ?, plugin_snapshot = ?, execution_fingerprint = ?, codex_profile = ?, claude_profile = ?,
+           execution_model = ?, execution_thinking_level = ?,
            session_id = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN session_id ELSE NULL END,
            work_dir = CASE WHEN ? = 1 THEN ? WHEN ? = 1 THEN work_dir ELSE NULL END,
            issue_session_generation = CASE WHEN ? = 1 THEN ? ELSE issue_session_generation END,
@@ -3528,6 +3537,8 @@ export class TasksRepo {
         executionFingerprint,
         provider === "codex" && runtimeProfile ? toJson(runtimeProfile) : null,
         provider === "claude" && runtimeProfile ? toJson(runtimeProfile) : null,
+        executionModel,
+        executionThinkingLevel,
         issueSessionId ? 1 : 0,
         issueProviderSessionId,
         keepProviderSession ? 1 : 0,
@@ -3565,6 +3576,8 @@ export class TasksRepo {
       provider: current.provider,
       pluginSnapshot: current.pluginSnapshot,
       executionFingerprint: current.executionFingerprint,
+      executionModel: current.executionModel,
+      executionThinkingLevel: current.executionThinkingLevel,
       codexProfile: current.codexProfile,
       claudeProfile: current.claudeProfile,
       sessionId: current.sessionId,

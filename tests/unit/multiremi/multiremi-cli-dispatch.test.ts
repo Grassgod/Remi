@@ -194,6 +194,17 @@ describe("remi CLI dispatcher", () => {
 });
 
 describe("remi CLI provider detection", () => {
+  it("detects the installed Cursor Agent CLI", () => {
+    expect(detectMultiremiProviders({
+      pathEnv: "/mock/bin", canExecute: path => path === join("/mock/bin", "cursor-agent"), antigravityInstalled: () => false,
+    })).toEqual(["cursor"]);
+    expect(detectMultiremiProviders({
+      pathEnv: "/mock/bin", canExecute: path => path === join("/mock/bin", "agent"), antigravityInstalled: () => false,
+    })).toEqual([]);
+    expect(detectMultiremiProviders({
+      pathEnv: "", canExecute: () => false, antigravityInstalled: () => false, cursorInstalled: () => true,
+    })).toEqual(["cursor"]);
+  });
   it("detects Antigravity only through the pinned install, never the retired agy CLI", () => {
     expect(detectMultiremiProviders({
       pathEnv: "/mock/bin", canExecute: path => path === join("/mock/bin", "agy"), antigravityInstalled: () => false,

@@ -337,7 +337,7 @@ for (const backend of backends) {
 
         // 55 ended tasks: the newest 50 stay.
         const ended = Array.from({ length: 55 }, (_, index) => laneTask(world, { task_id: `done-${String(index).padStart(2, "0")}`,
-          status: "completed", ended_at: new Date(Date.UTC(2026, 9, 16, 2, index)).toISOString() }));
+          status: "completed", ended_at: new Date(now - (60 - index) * 60_000).toISOString() }));
         for (let index = 0; index < ended.length; index += 25) snapshotFor(world, 10 + index, ended.slice(index, index + 25));
         const kept = (opened.db.query(`SELECT task_id FROM multiremi_background_tasks WHERE session_id = ?
           AND status = 'completed' ORDER BY task_id`).all(world.chatId) as Array<{ task_id: string }>).map((row) => row.task_id);
