@@ -9,7 +9,6 @@ import { delimiter, join } from "node:path";
 import { acquireInstallLock } from "./runtime-bundle.js";
 import { CURSOR_PIN, CURSOR_PLATFORM_KEYS, cursorPinProblem, isCursorVersion, type CursorArtifact, type CursorPin, type CursorPlatformKey } from "./runtime-versions.js";
 
-export const CURSOR_INSTALL_URL = "https://cursor.com/docs/cli/installation";
 export const CURSOR_PREPARE_COMMAND = "remi runtime prepare --provider cursor";
 export const CURSOR_MANIFEST = "install.json";
 const EXECUTABLES = ["cursor-agent", "node"] as const;

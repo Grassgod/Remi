@@ -1,7 +1,7 @@
 import { validCodexNativeCatalog } from "@multiremi/contracts/codex-model-catalog.js";
 import { createLogger } from "@shared/logger.js";
 import type { GatewayModelsSnapshot, MultiremiStore, RelayEngine } from "@multiremi/store/store.js";
-import type { MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
+import type { MultiremiRuntime, MultiremiRuntimeModelThinking } from "@multiremi/contracts/types.js";
 import { extractBaseUrl, RELAY_ENGINES, validateGatewayUrl } from "@multiremi/relay/fragment.js";
 import { publicRelayHttpRequest } from "@multiremi/relay/http.js";
 import { fleetModelsResponse } from "@multiremi/store/runtime-model-catalog.js";
@@ -313,16 +313,7 @@ export function gatewayProbeSnapshot(
   engine: RelayEngine,
 ): GatewayProbeSnapshot {
   if (engine === "cursor") {
-    const runtimes = cursorRuntimes(store, workspaceId);
-    const catalog = fleetModelsResponse(runtimes.map(runtime => ({ ...runtime, visibility: "public" })), "local")
-      .find(provider => provider.provider === "cursor");
-    return {
-      engine,
-      status: catalog?.model_catalog_status ?? "unknown",
-      error: catalog?.runtime_catalog_error ?? null,
-      models: (catalog?.models ?? []).map(({ id, label, thinking }) => ({ id, label, ...(thinking ? { thinking } : {}) })),
-      last_success_at: null,
-    };
+    return cursorProbeSnapshot(cursorRuntimes(store, workspaceId));
   }
   const snapshot = store.getGatewayModels(workspaceId, engine);
   return {
@@ -339,8 +330,20 @@ export function gatewayProbeSnapshot(
 }
 
 function cursorRuntimes(store: MultiremiStore, workspaceId: string) {
-  return store.listRuntimes().filter(runtime => (runtime.workspaceId ?? "local") === workspaceId
-    && runtime.provider === "cursor" && runtime.status === "online");
+  return store.listRuntimesForWorkspace(workspaceId)
+    .filter(runtime => runtime.provider === "cursor" && runtime.status === "online");
+}
+
+function cursorProbeSnapshot(runtimes: MultiremiRuntime[]): GatewayProbeSnapshot {
+  const catalog = fleetModelsResponse(runtimes.map(runtime => ({ ...runtime, visibility: "public" })), "local")
+    .find(provider => provider.provider === "cursor");
+  return {
+    engine: "cursor",
+    status: catalog?.model_catalog_status ?? "unknown",
+    error: catalog?.runtime_catalog_error ?? null,
+    models: (catalog?.models ?? []).map(({ id, label, thinking }) => ({ id, label, ...(thinking ? { thinking } : {}) })),
+    last_success_at: null,
+  };
 }
 
 const PROBE_TIMEOUT_MS = 8_000;
@@ -359,7 +362,7 @@ export async function probeGatewayModels(
 ): Promise<GatewayProbeSnapshot> {
   if (engine === "cursor") {
     const runtimes = cursorRuntimes(store, workspaceId);
-    const snapshot = gatewayProbeSnapshot(store, workspaceId, engine);
+    const snapshot = cursorProbeSnapshot(runtimes);
     if (!runtimes.length) return {
       ...snapshot, status: "error", error: "No online Cursor Runtime is available for model discovery", discovery_requested: false, discovery_requests: [],
     };

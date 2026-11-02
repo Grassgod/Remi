@@ -3,8 +3,11 @@ import { createMultiremiApp } from "@multiremi/api.js";
 import { discoverGatewayModels, gatewayProbeSnapshot, probeGatewayModels } from "@multiremi/relay/discovery.js";
 import { extractBaseUrl, validateRelayFragment } from "@multiremi/relay/fragment.js";
 import { catalogAllowsModel, fleetModelsResponse, overlayGatewayModels } from "@multiremi/store/runtime-model-catalog.js";
+import { MultiremiStore } from "@multiremi/store.js";
 import type { MultiremiRuntimeModel } from "@multiremi/contracts/types.js";
-import { createLocalStore, resetMultiremiTestEnv } from "./helpers.js";
+import { hotspotProbe, instrumentHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-pr2-fixture.js";
+import { openHotspotDatabase } from "../../fixtures/multiremi/first-screen-hotspots-database.js";
+import { createLocalStore, db, resetMultiremiTestEnv } from "./helpers.js";
 
 afterEach(resetMultiremiTestEnv);
 
@@ -94,20 +97,70 @@ describe("Cursor native model discovery", () => {
 
   it("queues native discovery with HTTP discovery disabled and publishes the refreshed catalog", async () => {
     const store = createLocalStore();
-    const runtime = store.registerRuntime({ name: "Cursor", provider: "cursor", workspaceId: "local", models: [model("old-model")] });
+    const runtime = store.registerRuntime({ name: "Cursor", provider: "cursor", workspaceId: "local", models: [model("old-model"), model("shared")] });
+    const second = store.registerRuntime({
+      name: "Private Cursor", provider: "cursor", workspaceId: "local", ownerId: "other-owner", visibility: "private",
+      models: [model("second-model"), { ...model("shared"), thinking: {
+        status: "supported", defaultLevel: "high", supportedLevels: [{ value: "high", label: "High" }],
+      } }],
+    });
     const other = store.registerRuntime({ name: "Claude", provider: "claude", workspaceId: "local" });
+    const offline = store.registerRuntime({ name: "Offline Cursor", provider: "cursor", workspaceId: "local", models: [model("offline-model")] });
+    db!.run("UPDATE multiremi_runtimes SET last_heartbeat_at = ? WHERE id = ?", ["2020-01-01T00:00:00.000Z", offline.id]);
+    const foreignWorkspace = store.createWorkspace({ name: "Other workspace", slug: "cursor-other" });
+    const foreign = store.registerRuntime({ name: "Foreign Cursor", provider: "cursor", workspaceId: foreignWorkspace.id, models: [model("foreign-model")] });
     const events: string[] = [];
     store.onWorkspaceEvent(event => events.push(event.type));
     const result = await probeGatewayModels(store, "local", "cursor", { httpGet: async () => { throw new Error("must not fetch"); } });
     expect(result).toMatchObject({ engine: "cursor", status: "ready", discovery_requested: true, error: null });
-    expect(result.models.map(entry => entry.id)).toEqual(["old-model"]);
-    expect(store.claimRuntimeModelListRequest(other.id)).toBeNull();
+    expect(result.models.map(entry => entry.id).sort()).toEqual(["old-model", "second-model", "shared"]);
+    expect(result.models.find(entry => entry.id === "shared")?.thinking).toMatchObject({
+      status: "supported", default_level: "high", supported_levels: [{ value: "high", label: "High" }],
+    });
+    for (const excluded of [other, offline, foreign]) {
+      expect(store.claimRuntimeModelListRequest(excluded.id)).toBeNull();
+    }
     const request = store.claimRuntimeModelListRequest(runtime.id)!;
+    const secondRequest = store.claimRuntimeModelListRequest(second.id)!;
     expect(request).not.toBeNull();
-    expect(result.discovery_requests).toEqual([{ runtime_id: runtime.id, request_id: request.id }]);
+    expect(secondRequest).not.toBeNull();
+    expect(result.discovery_requests).toHaveLength(2);
+    expect(result.discovery_requests).toContainEqual({ runtime_id: runtime.id, request_id: request.id });
+    expect(result.discovery_requests).toContainEqual({ runtime_id: second.id, request_id: secondRequest.id });
     store.reportRuntimeModelListResult(runtime.id, request.id, { status: "completed", models: [model("new-model")] });
     expect(events).toContain("daemon:models_updated");
-    expect(gatewayProbeSnapshot(store, "local", "cursor").models.map(entry => entry.id)).toEqual(["new-model"]);
+    expect(gatewayProbeSnapshot(store, "local", "cursor").models.map(entry => entry.id).sort()).toEqual(["new-model", "second-model", "shared"]);
+  });
+
+  it("keeps probe database reads bounded when other workspaces add runtimes and models", async () => {
+    const database = await openHotspotDatabase();
+    const metrics = hotspotProbe();
+    const store = new MultiremiStore(instrumentHotspotDatabase(database.db, metrics));
+    try {
+      store.ensureLocalWorkspace();
+      const runtime = store.registerRuntime({ name: "Cursor", provider: "cursor", workspaceId: "local", models: [model("native-model")] });
+      const foreignWorkspace = store.createWorkspace({ name: "Foreign fleet", slug: "cursor-foreign-fleet" });
+      const measure = async () => {
+        metrics.reset();
+        const result = await probeGatewayModels(store, "local", "cursor");
+        expect(result.models.map(entry => entry.id)).toEqual(["native-model"]);
+        expect(result.discovery_requests?.map(request => request.runtime_id)).toEqual([runtime.id]);
+        expect(metrics.sql.filter(sql => sql.startsWith("WITH selected AS"))).toHaveLength(1);
+        return { statements: metrics.statements, bytes: metrics.bytes };
+      };
+      const baseline = await measure();
+      expect(baseline.statements).toBeGreaterThan(0);
+      expect(baseline.bytes).toBeGreaterThan(0);
+      for (let index = 0; index < 32; index++) {
+        store.registerRuntime({
+          name: `Foreign Cursor ${index}`, provider: "cursor", workspaceId: foreignWorkspace.id,
+          models: [model(`foreign-model-${index}`)],
+        });
+      }
+      expect(await measure()).toEqual(baseline);
+    } finally {
+      await database.dispose();
+    }
   });
 
   it("returns request identifiers that expose a failed refresh through the existing Runtime endpoint", async () => {

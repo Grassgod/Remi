@@ -15,7 +15,7 @@
 // ── Provider ──────────────────────────────────────────────────
 export { createRuntimeProvider } from "./runtime-provider.js";
 export {
-  CURSOR_INSTALL_URL, CURSOR_PREPARE_COMMAND, CursorInstallError, anyCursorInstall, cursorHealthProblem, cursorInstallDir,
+  CURSOR_PREPARE_COMMAND, CursorInstallError, anyCursorInstall, cursorHealthProblem, cursorInstallDir,
   cursorInstallProblem, cursorPlatformKey, cursorRoot, ensureCursorAgent, installedCursor,
   installedUserCursorAgentExecutable, resolveCursorAgentExecutable,
 } from "./cursor-install.js";
